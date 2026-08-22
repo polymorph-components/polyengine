@@ -28,6 +28,32 @@ name: Release
 # embedder bundle, plus SHA256SUMS, so consumers do not need a Rust
 # toolchain. The tag-exists guard makes re-runs no-ops-by-failure rather
 # than duplicate releases.
+#
+# VERSION GUARDS (tools/version-guard/check.ts; unit-tested by `just
+# test-version-guard`). Two of its three modes run here — the third is
+# ci.yml's per-PR early warning:
+#
+#   `publish` (BOTH modes, before the JSR publish) — the protocol identity
+#   guard. @polyengine/protocol is outside the lockstep and is SKIPPED as
+#   already-published whenever its manifest version already exists on JSR;
+#   if the in-tree protocol has moved since that version was published,
+#   this run ships every dependent against the registry's older copy. That
+#   is the #219 tear: protocol/src changed without a manifest bump (its
+#   merge assumed 0.2.0 was unpublished; an automatic prerelease had
+#   published it hours earlier), so runtime@0.4.0-pre.* went out importing
+#   exports protocol@0.2.0 did not have, an import-time failure for
+#   consumers, repaired by #221. The guard compares in-tree protocol to the
+#   published manifest byte for byte, both directions, and fails the run
+#   before anything is published. Here rather than at PR time by
+#   necessity: a PR-time check races publish-on-green-main and loses.
+#
+#   `cut` (RELEASE=true only) — reads the breaking/* labels of every PR
+#   merged since the last cut tag, LIVE from the API (so a label corrected
+#   after the merge still counts, which is why the enforcement point is the
+#   cut), and requires a minor bump when any of them declares a break. It
+#   also emits the release notes' Breaking/Changes sections, spliced into
+#   the notes below. Prerelease notes are unchanged: a prerelease is one
+#   commit, not a window.
 
 on:
   workflow_dispatch:
@@ -103,6 +129,35 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE: ${{ inputs.release }}
 
+      - name: protocol identity guard
+        # Both modes, and BEFORE `deno publish` — see the header. If
+        # protocol/deno.json's version is unpublished this passes trivially
+        # (the publish below creates it); if it is already published, the
+        # in-tree protocol must be byte-identical to what is on JSR under
+        # that version, because `deno publish` will skip it and every
+        # dependent published in this run will resolve to the registry's
+        # copy. Exact identity is deliberate: a "meaningful difference"
+        # heuristic is what talks a torn release into shipping (softer
+        # variants are parked in issue #222).
+        run: >-
+          deno run --allow-net=jsr.io --allow-read=.
+          tools/version-guard/check.ts publish
+
+      - name: release window guard and notes
+        # RELEASE=true only. Enumerates the PRs merged since the last cut
+        # tag with their CURRENT labels and fails if a breaking/* label is
+        # not matched by a minor bump; writes the Breaking/Changes sections
+        # to changes.md for the "create release" step below. A prerelease
+        # has no window to enumerate, and its notes stay as they were.
+        if: inputs.release
+        run: >-
+          deno run --allow-net=jsr.io --allow-run --allow-read=. --allow-write=changes.md
+          --allow-env=GITHUB_REPOSITORY,GITHUB_SHA,VERSION
+          tools/version-guard/check.ts cut --out changes.md
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.tag.outputs.version }}
+
       - name: build the release artifacts
         # `just release-artifacts` (root justfile): the standard shim, the
         # size-tuned shim (flags per crates/translator-shim/README.md), the
@@ -153,6 +208,11 @@ jobs:
           RELEASE: ${{ inputs.release }}
 
       - name: create release
+        # RELEASE=true splices the guard's changes.md (Breaking / Changes,
+        # empty sections omitted) between the intro and the artifacts
+        # paragraph. Prerelease notes stay exactly as they were: a
+        # prerelease is a single commit, and the release window it would
+        # describe is the one the next cut will describe in full.
         run: |
           {
             if [ "$RELEASE" = "true" ]; then
@@ -162,6 +222,10 @@ jobs:
               echo "and to npm under the same names (npm-publish.yml, triggered by this release)."
               echo "Still 0.x/unstable, but caret-honest: releases within a minor line stay"
               echo "compatible; breaking changes bump the minor. See README.md §Consuming."
+              if [ -s changes.md ]; then
+                echo
+                cat changes.md
+              fi
             else
               echo "Prerelease \`${TAG}\` at ${GITHUB_SHA}."
               echo

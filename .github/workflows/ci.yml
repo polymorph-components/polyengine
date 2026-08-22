@@ -44,7 +44,19 @@ jobs:
       # lives on the root-justfile recipes it composes. Suite order and
       # arch-conditional lanes (jsc-pinned is x64-only) are all encoded
       # there.
+      #
+      # The env below is the only thing the version guard's `pr` mode needs
+      # (its first step): it reads the PR's LIVE labels and diffs against the
+      # base. All three are empty on push runs, where the guard skips itself —
+      # deliberately, since there is no PR to have labels. Note that label
+      # edits do NOT re-trigger this workflow (no `types:` addition above, on
+      # purpose): the PR pass is an early warning, release.yml's `cut` mode is
+      # the enforcement point, and a re-run picks up corrected labels.
       - run: just gha::core
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
 
   browser:
     runs-on: ubuntu-24.04

@@ -16,7 +16,7 @@ ci: (gha::core) (gha::browser)
 # Includes the consumer smokes CI cannot run (they need the polymorph
 # checkouts; docs/consumers.md).
 # The full pre-commit pass (AGENTS.md "Gates"): everything.
-gates: build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle publish-check test-npm examples test-translate conformance sched-seeds shells browsers smoke-tls smoke-c0
+gates: build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle test-version-guard publish-check test-npm examples test-translate conformance sched-seeds shells browsers smoke-tls smoke-c0
 
 # Fast sanity: builds + native tests + type-checks, no suites.
 check: build test-rust
@@ -109,6 +109,34 @@ test-ct-runner: shim fixtures
 # imports below the entry resolve to the same cached modules.
 test-bundle: shim
     deno test -A tools/release-bundle/
+
+# The release version guard's own unit tests (tools/version-guard/): semver
+# ordering, and every pr/publish/cut check firing and passing against
+# injected fixtures — no network, no `gh`, no repository state, because the
+# guard's effects are injected. The guard itself runs in CI as gha::core's
+# first step (`pr` mode, a no-op outside pull_request runs) and inside
+# release.yml (`publish` and `cut` modes); this recipe is what keeps its
+# decision logic honest before either of those sees it.
+test-version-guard:
+    deno test -A tools/version-guard/
+
+# The release version guard's early-warning pass (tools/version-guard/check.ts
+# `pr`): lockstep agreement, monotonicity against the last cut, breaking/*
+# label ↔ minor-bump agreement in both directions, and the protocol-tear
+# warning (protocol/src moving without a protocol/deno.json bump — the #219
+# incident). Runs first in `gha::core` so a versioning mistake is the first
+# thing a PR hears about, and exits 0 immediately when PR_NUMBER is unset, so
+# push runs and a local `just ci` stay green without GitHub. Labels are read
+# LIVE from the API (never the event payload) — but label edits deliberately
+# do not re-trigger CI, so this is a warning: the enforcement point is
+# release.yml's `cut` mode.
+# Explicit permissions rather than -A: net is jsr.io only. --allow-run is
+# NOT narrowed to `gh,git` — Deno refuses an allowlisted spawn whenever a
+# dynamic-linker variable (LD_LIBRARY_PATH) is set in the environment, which
+# is exactly the shape a nix-ish shell or a CI runner image can have, so the
+# narrow form fails by environment rather than by policy.
+version-guard-pr:
+    deno run --allow-net=jsr.io --allow-run --allow-read=. --allow-env tools/version-guard/check.ts pr
 
 # The JSR publish checks (public-API type check, slow types, export and
 # import analyzability, config validation) — `deno task check` covers

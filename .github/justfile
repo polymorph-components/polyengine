@@ -44,7 +44,12 @@ _step-tolerated recipe:
     fi
 
 # The required per-push/PR matrix job (ci.yml `core`).
+# `version-guard-pr` runs FIRST and costs seconds: a versioning mistake is
+# cheap to hear about before a 40-minute matrix, and the recipe no-ops
+# outside pull_request runs (no PR_NUMBER), so pushes and `just ci` are
+# unaffected. ci.yml supplies PR_NUMBER / PR_BASE_SHA / GH_TOKEN.
 core:
+    @just gha::_step version-guard-pr
     @just gha::_step build
     @just gha::_step test-rust
     @just gha::_step shim
@@ -57,6 +62,7 @@ core:
     @just gha::_step test-sockets-node
     @just gha::_step test-ct-runner
     @just gha::_step test-bundle
+    @just gha::_step test-version-guard
     @just gha::_step publish-check
     @just gha::_step examples
     @just gha::_step test-translate

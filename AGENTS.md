@@ -130,6 +130,43 @@ Standing rules:
   `@polyengine/protocol`
   versions independently; bumping its manifest publishes it for real on
   the next green run.
+- Breaking changes are declared by PR **label**, one per package:
+  `breaking/{runtime,translator,wasi,ct-runner,protocol}`. A label asserts
+  that the PR breaks that package's published surface (caret-incompatible);
+  no label means compatible. The labels are read LIVE from the API wherever
+  they are consulted — never from an event payload — because retroactive
+  edits are expected and load-bearing: noticing at cut time that a merged PR
+  was mislabelled and fixing the label there is a supported workflow, and
+  the cut re-reads the whole window. `tools/version-guard/check.ts`
+  enforces them in three places (`just test-version-guard` covers its
+  logic): `pr` mode in `gha::core` (lockstep agreement, monotonicity,
+  label ↔ minor-bump agreement both ways, protocol-tear warning — an early
+  warning only, since label edits deliberately do not re-trigger CI);
+  `publish` mode in release.yml before every JSR publish (in-tree protocol
+  must be byte-identical to the published version its manifest names —
+  the authoritative guard against the #219 tear, which PR-time checks
+  cannot own because they race publish-on-green-main); and `cut` mode on
+  `release=true`, which turns the window's labels into the minor-bump
+  requirement and renders the release notes.
+- **Cutting a release.** (1) Sanity pass, the step no machine can do:
+  enumerate the window — `gh pr list --search "base:main merged:>=<date of
+  the last cut>"` (or `gh api repos/$R/compare/v<last>...main --jq
+  '.commits[].sha'`) plus `git log v<last>..origin/main --first-parent
+  --oneline` for direct pushes — and read titles and diffs against the
+  labels. Fix labels retroactively NOW; a MISSING breaking label is the one
+  failure mode every mechanical check here is blind to. (2) Verify the
+  manifests against the final label set (breaking ⇒ the lockstep minor must
+  already be ahead of the last cut) and that `RUNTIME_VERSION`
+  (runtime/src/embedder/copy.ts) matches; check protocol's manifest too if
+  protocol moved. (3) Confirm the sha you are cutting has its green
+  `pre-<shorthash>` release — release.yml refuses otherwise, and that
+  refusal is the green-pipeline proof. (4) Dispatch release.yml with
+  `release=true` (`gh workflow run release.yml -f release=true --ref main`).
+  (5) Land the post-cut manifest-bump PR to the next patch immediately: the
+  four lockstep manifests + `RUNTIME_VERSION`. (6) Confirm the
+  npm-publish.yml run release.yml dispatched, and spot-check the dist-tags
+  (`npm view @polyengine/runtime dist-tags`) — `latest` on the cut,
+  `pre` on the prerelease stream.
 - Two registries, one version (protocol rides its own manifest version on
   both — A10). JSR is published inline by release.yml; npm
   is published by npm-publish.yml, triggered by the GitHub release, from
