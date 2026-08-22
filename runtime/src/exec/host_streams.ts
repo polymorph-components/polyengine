@@ -79,8 +79,11 @@ import {
 import {
   abandonSharedFuture,
   BUFFER_MAX_LENGTH,
+  type ByteWindow,
   type ComponentInstanceState,
   CopyResult,
+  type DirectBuffer,
+  type DirectOutcome,
   markHostActivityArm,
   type PayloadChunk,
   sameElemType,
@@ -209,6 +212,68 @@ export class HostBuffer {
       for (let i = 0; i < c.length; i++) out.push(c[i]);
     }
     return out;
+  }
+
+  // --- A21 `ByteWindow` (embedder-api amendment A21, polyengine#128) ---
+  //
+  // A host buffer can be the PEER of a direct session on the other end of a
+  // host↔host rendezvous. Which of the two shapes it takes follows from the
+  // direction it was built for, exactly as `read`/`write` above do:
+  //
+  //   * SOURCE (`values !== null`, a parked `write`): the window is a view of
+  //     the offered chunk itself — the A5 borrow, scoped to the callback. No
+  //     extra copy at all.
+  //   * DESTINATION (`values === null`, a parked/arriving `read(max)`): there
+  //     is no landing zone to view, so the window is a fresh scratch; the
+  //     marked prefix becomes the delivered chunk (ownership passes with it,
+  //     and `taken()` hands a sole chunk through unsliced).
+
+  /** The synthesized destination window, live for one direct invocation. */
+  #scratch: Uint8Array | null = null;
+
+  byteView(n: number): Uint8Array {
+    assert_(n <= this.remain(), "host direct window beyond remaining");
+    if (this.values === null) {
+      // Stable for the whole invocation: `remaining()` re-derives on every
+      // call and the producer's earlier `set()`s must survive that.
+      if (this.#scratch === null || this.#scratch.length !== n) {
+        this.#scratch = new Uint8Array(n);
+      }
+      return this.#scratch;
+    }
+    assert_(
+      this.values instanceof Uint8Array,
+      "host direct window on a non-u8 chunk",
+    );
+    return (this.values as Uint8Array).subarray(
+      this.progress,
+      this.progress + n,
+    );
+  }
+
+  advanceBytes(k: number): void {
+    assert_(
+      k >= 0 && k <= this.remain(),
+      "host direct advance beyond remaining",
+    );
+    if (this.values === null) {
+      // A callback may mark bytes it never actually looked at the window to
+      // write (nonsense, but the runtime must stay total rather than trip an
+      // internal assertion). The acknowledged prefix is then whatever the
+      // synthesized landing zone held — zeroes — which is the faithful
+      // analogue of the guest-peer case, where it would be whatever the
+      // reader's memory already contained.
+      const scratch = this.#scratch ?? new Uint8Array(k);
+      // Delivered as an owned chunk; `write` is the same call the reference
+      // copy would have made, so `remain()`/`taken()` stay consistent.
+      this.write(scratch.subarray(0, k));
+    } else {
+      this.progress += k;
+    }
+  }
+
+  endWindow(): void {
+    this.#scratch = null;
   }
 }
 
@@ -447,6 +512,311 @@ class HostActivity {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Direct-access byte edges (embedder-api amendment A21, 2026-08-22, #128)
+// ---------------------------------------------------------------------------
+//
+// wasmtime `DirectSource`/`DirectDestination`-shaped (`component::concurrent`,
+// 47.0.3). For `stream<u8>` only, a host end may park a *direct session*
+// instead of a chunk: at every rendezvous with a peer operation of nonzero
+// capacity the session's callback runs exactly once, synchronously, inside the
+// rendezvous, against a scoped view of the peer's bytes — so an external
+// buffer mover's own `set()` IS the single canonical-ABI copy.
+//
+// The rendezvous half lives in task/streams.ts (`rendezvousCopy` and the two
+// call sites it collapses to `dst.write(src.read(n))` for every non-direct
+// path). This half owns the session: the callback scope, mark accounting,
+// the verdict cadence, and the promise.
+
+/** The scoped landing zone handed to a `writeDirect` producer (A21, #128). */
+export interface DirectDestination {
+  /**
+   * The reader's still-unfilled bytes. Re-derived on every call (a
+   * `memory.grow` between two rendezvous of one session never yields a stale
+   * view) and shrinking by whatever has been marked so far in THIS
+   * invocation. DEAD once the callback returns.
+   */
+  remaining(): Uint8Array;
+  /**
+   * Acknowledge bytes written into the view. Cumulative within the
+   * invocation; acknowledged only if the callback then returns cleanly.
+   */
+  markWritten(n: number): void;
+}
+
+/** The scoped view handed to a `readDirect` consumer (A21, #128). */
+export interface DirectSource {
+  /**
+   * The writer's unread bytes; read-only by contract. Same scoping and
+   * re-derivation rules as `DirectDestination.remaining`.
+   */
+  remaining(): Uint8Array;
+  /** Acknowledge bytes consumed from the view. See `markWritten`. */
+  markRead(n: number): void;
+}
+
+/** The callback's poll cadence, spelled event-style (A21). */
+export type DirectVerdict = "more" | "done";
+
+/**
+ * Out-parameter of the low-level direct forms: `true` iff the session ended
+ * because the callback itself returned `"done"`, rather than because the peer
+ * dropped / the operation was cancelled / the peer's instance trapped.
+ *
+ * The conventions layer needs the distinction for A7 precision — a session
+ * the producer already completed keeps its resolution even if the peer then
+ * trapped — and `Promise<number>` is the contract's return shape, so it rides
+ * here rather than in the resolved value.
+ */
+export interface DirectSessionInfo {
+  endedByVerdict: boolean;
+}
+
+/**
+ * The `DirectDestination`/`DirectSource` object itself. One per INVOCATION,
+ * not per session: "the object dies when the callback returns" is the
+ * contract's validity window, and every later method call throws a
+ * `TypeError` naming the rule.
+ */
+class DirectScope implements DirectDestination, DirectSource {
+  marked = 0;
+  #live = true;
+
+  constructor(
+    private readonly peer: ByteWindow,
+    /** The peer's actual remaining capacity — never the parked sentinel. */
+    private readonly capacity: number,
+  ) {}
+
+  remaining(): Uint8Array {
+    this.#check();
+    // Re-derived per call: `byteView` is grow-safe for a guest peer, and the
+    // `subarray` accounts for the marks made so far in this invocation.
+    return this.peer.byteView(this.capacity).subarray(this.marked);
+  }
+
+  markWritten(n: number): void {
+    this.#mark(n, "markWritten");
+  }
+
+  markRead(n: number): void {
+    this.#mark(n, "markRead");
+  }
+
+  #mark(n: number, who: string): void {
+    this.#check();
+    if (!Number.isInteger(n) || n < 0) {
+      throw new TypeError(
+        `${who}(${n}): a direct-access mark must be a non-negative integer`,
+      );
+    }
+    if (this.marked + n > this.capacity) {
+      throw new TypeError(
+        `${who}(${n}) would take the invocation's cumulative mark to ` +
+          `${this.marked + n}, past the ${this.capacity} byte(s) the view ` +
+          `held on entry (embedder-api amendment A21)`,
+      );
+    }
+    this.marked += n;
+  }
+
+  #check(): void {
+    if (!this.#live) {
+      throw new TypeError(
+        "this direct-access view is dead: a DirectDestination/DirectSource " +
+          "is scoped to the synchronous callback invocation it was passed " +
+          "to, and retaining one past its return is misuse (embedder-api " +
+          "amendment A21, polyengine#128)",
+      );
+    }
+  }
+
+  /**
+   * End of the invocation: the object is dead, and every later method call
+   * throws. Releasing the peer's synthesized window is the caller's job
+   * (`DirectSession.runDirect`), because it must happen strictly after the
+   * acknowledged marks are applied.
+   */
+  die(): void {
+    this.#live = false;
+  }
+}
+
+/**
+ * A parked direct session, as both halves see it: a `DirectBuffer` to the
+ * rendezvous (task/streams.ts) and a promise to the embedder.
+ *
+ * It presents the ordinary buffer surface so the reference control flow keeps
+ * working unchanged — `remain()` answers a positive SENTINEL while the session
+ * is live, which only ever feeds the rendezvous' `min()` and so resolves to
+ * the peer's real capacity — but `read`/`write` are unreachable: the seam
+ * routes a direct buffer through `runDirect` instead.
+ */
+class DirectSession implements DirectBuffer {
+  readonly direct = true as const;
+  /** Bytes acknowledged across the whole session. */
+  total = 0;
+  /** The callback said `"done"`, or the session failed / was settled. */
+  ended = false;
+  /** `ended` because the callback said so (A7 precision; see `DirectSessionInfo`). */
+  endedByVerdict = false;
+  /** Installed in the shared object's pending slot right now. */
+  pending = false;
+  /** `cancelWrite`/`cancelRead` arrived; stop at the next loop top. */
+  cancelled = false;
+
+  #settle: ((step: "done" | "reissue") => void) | null = null;
+  #reject: ((e: unknown) => void) | null = null;
+
+  constructor(
+    readonly t: ValType | null,
+    private readonly invoke: (scope: DirectScope) => DirectVerdict,
+  ) {}
+
+  // --- buffer surface (definitions.py `Buffer`) ---
+
+  remain(): number {
+    // The sentinel is `Buffer.MAX_LENGTH`, the largest value the rendezvous
+    // can legally see; it never surfaces to the embedder because the scope is
+    // built from `min(peer.remain(), sentinel)`.
+    return this.ended ? 0 : BUFFER_MAX_LENGTH;
+  }
+
+  isZeroLength(): boolean {
+    return false;
+  }
+
+  read(_n: number): PayloadChunk {
+    throw new Error("internal: a direct session must go through the A21 seam");
+  }
+
+  write(_vs: PayloadChunk): void {
+    throw new Error("internal: a direct session must go through the A21 seam");
+  }
+
+  // --- the direct protocol ---
+
+  runDirect(peer: ByteWindow, n: number): DirectOutcome {
+    const scope = new DirectScope(peer, n);
+    try {
+      return this.#runDirect(scope, peer);
+    } finally {
+      // Release any window the peer SYNTHESIZED (a `HostBuffer` destination's
+      // scratch). Strictly after `advanceBytes`, which is what turns the
+      // marked prefix of that scratch into the delivered chunk.
+      peer.endWindow?.();
+    }
+  }
+
+  #runDirect(scope: DirectScope, peer: ByteWindow): DirectOutcome {
+    let verdict: DirectVerdict;
+    try {
+      verdict = this.invoke(scope);
+    } catch (e) {
+      // "A callback that throws rejects the session with that error, and the
+      // invocation's marks are discarded" — so nothing touches `peer`.
+      scope.die();
+      this.#fail(e);
+      return "failed";
+    }
+    scope.die();
+    if (verdict !== "more" && verdict !== "done") {
+      this.#fail(
+        new TypeError(
+          `a direct-access callback must return "more" or "done", got ` +
+            `${JSON.stringify(verdict)} (embedder-api amendment A21)`,
+        ),
+      );
+      return "failed";
+    }
+    const k = scope.marked;
+    if (k === 0) {
+      if (verdict === "done") {
+        // Retraction: the speculative-park correction. The session ends with
+        // its running total and the peer's operation stays parked.
+        this.ended = true;
+        this.endedByVerdict = true;
+        return "retracted";
+      }
+      this.#fail(
+        new TypeError(
+          'a direct-access callback returned "more" without marking any ' +
+            "bytes; a session that has nothing to offer retracts by " +
+            'returning "done" (embedder-api amendment A21, polyengine#128)',
+        ),
+      );
+      return "failed";
+    }
+    // Marks acknowledge ON CLEAN RETURN ONLY: this is the first and only
+    // place the peer's progress moves, and it completes the copy with `k`.
+    peer.advanceBytes(k);
+    this.total += k;
+    if (verdict === "done") {
+      this.ended = true;
+      this.endedByVerdict = true;
+    }
+    return "copied";
+  }
+
+  failDirect(error: Error): void {
+    this.#fail(error);
+  }
+
+  // --- promise plumbing ---
+
+  /** Arm the settle hooks for one issuance of this session. */
+  arm(
+    settle: (step: "done" | "reissue") => void,
+    reject: (e: unknown) => void,
+  ): void {
+    this.#settle = settle;
+    this.#reject = reject;
+  }
+
+  #take(): [
+    ((s: "done" | "reissue") => void) | null,
+    ((e: unknown) => void) | null,
+  ] {
+    const s = this.#settle, r = this.#reject;
+    this.#settle = null;
+    this.#reject = null;
+    return [s, r];
+  }
+
+  #fail(e: unknown): void {
+    this.ended = true;
+    this.pending = false;
+    const [, r] = this.#take();
+    r?.(e);
+  }
+
+  /** The session is over; the driving loop resolves with `total`. */
+  finish(): void {
+    this.ended = true;
+    this.pending = false;
+    const [s] = this.#take();
+    s?.("done");
+  }
+
+  /** This issuance rendezvoused but the session lives; re-issue it. */
+  reissue(): void {
+    this.pending = false;
+    const [s] = this.#take();
+    s?.("reissue");
+  }
+}
+
+/** A21 is `stream<u8>` only; `null` (zero-width) is not u8 either. */
+function requireU8Element(t: ValType | null, who: string): void {
+  if (t === null || despecialize(t).kind !== "u8") {
+    throw new TypeError(
+      `${who} is available on stream<u8> only; this stream's element type ` +
+        `is ${t === null ? "the zero-width payload" : despecialize(t).kind} ` +
+        `(embedder-api amendment A21, polyengine#128)`,
+    );
+  }
+}
+
 /** Host end the embedder WRITES; the guest reads. */
 export interface HostWritableEnd<T> {
   /**
@@ -475,6 +845,27 @@ export interface HostWritableEnd<T> {
    */
   writeAll(values: T[]): Promise<number>;
   /**
+   * Park a **direct session** on this end (`stream<u8>` only — embedder-api
+   * amendment A21, polyengine#128).
+   *
+   * At every rendezvous with a reader of nonzero capacity, `produce` runs
+   * exactly once, synchronously, inside the rendezvous, with a
+   * `DirectDestination` over the reader's unfilled landing zone — guest linear
+   * memory when the peer is a guest, so the producer's own `set()` is the
+   * canonical-ABI copy. `"more"` keeps the session parked for the next
+   * rendezvous; `"done"` ends it. Resolves with the session's total.
+   *
+   * Marks acknowledge on clean return only. `"done"` with zero marked is
+   * *retraction* (the session ends, the reader's operation stays parked, no
+   * event); `"more"` with zero marked, and a throwing callback, reject.
+   *
+   * Participates in the one-in-flight-per-end rule exactly as `write` does.
+   */
+  writeDirect(
+    produce: (dest: DirectDestination) => DirectVerdict,
+    info?: DirectSessionInfo,
+  ): Promise<number>;
+  /**
    * Cancel an in-flight `write`/`writeAll` (definitions.py
    * `SharedStreamImpl.cancel` -> `CopyResult.CANCELLED`). No-op when nothing
    * of ours is parked. Surfaced per the R-fix review's stream advisory 1: the
@@ -502,6 +893,18 @@ export interface HostReadableEnd<T> {
    * array.
    */
   read(max: number): Promise<T[]>;
+  /**
+   * Park a **direct session** on this end (`stream<u8>` only — embedder-api
+   * amendment A21, polyengine#128). The mirror of
+   * `HostWritableEnd.writeDirect`: `consume` receives a `DirectSource` over
+   * the writer's unread bytes (a view of guest memory, or of the offered
+   * host chunk itself) and may take a prefix — a partial take is normal, and
+   * the writer re-offers on its own schedule.
+   */
+  readDirect(
+    consume: (src: DirectSource) => DirectVerdict,
+    info?: DirectSessionInfo,
+  ): Promise<number>;
   /** Cancel an in-flight `read`; see `HostWritableEnd.cancelWrite`. */
   cancelRead(): void;
   drop(): void;
@@ -631,6 +1034,87 @@ function mkStreamEnds<T>(
     if (result === CopyResult.DROPPED) activity.close();
     else activity.notify();
   };
+  /** The live direct session on each end, if any (A21, polyengine#128). */
+  const direct: { read: DirectSession | null; write: DirectSession | null } = {
+    read: null,
+    write: null,
+  };
+  /**
+   * Drive one direct session from park to end (A21).
+   *
+   * Two shapes reach us, and the difference is *which side arrived second*:
+   *
+   *  * the session is the PENDING side — every rendezvous fires `onCopy`, and
+   *    the `"more"` verdict simply declines to `reclaim()`, so the session
+   *    stays in the pending slot for the next peer operation. This is
+   *    `write()`'s "stay parked until the offer is exhausted" mechanism, with
+   *    the callback's verdict in place of `buf.remain() > 0`.
+   *  * the session ARRIVED second — the rendezvous completes it with
+   *    `onCopyDone(COMPLETED)`, so a `"more"` verdict has to re-issue. The
+   *    re-issue rides the loop below (one `await` apart), which is exactly
+   *    `writeAll`'s re-offer shape and therefore inherits its ordering: the
+   *    peer's pending event is delivered and its buffer reclaimed before we
+   *    can rendezvous against it a second time.
+   */
+  const runDirectSession = async (
+    side: "read" | "write",
+    session: DirectSession,
+  ): Promise<number> => {
+    parked[side] = true;
+    direct[side] = session;
+    try {
+      for (;;) {
+        if (session.cancelled) break;
+        const step = await new Promise<"done" | "reissue">((res, rej) => {
+          session.arm(res, rej);
+          session.pending = true;
+          const onCopy = (reclaim: () => void): void => {
+            if (!session.ended) return; // "more": stay parked
+            reclaim();
+            activity.notify();
+            session.finish();
+          };
+          const onCopyDone = (result: CopyResult): void => {
+            session.pending = false;
+            settle(result);
+            // COMPLETED with the session still live == the arriving-side
+            // rendezvous above; anything else (DROPPED, CANCELLED, or the
+            // retraction path through `reset_and_notify_pending`) ends it.
+            if (result === CopyResult.COMPLETED && !session.ended) {
+              session.reissue();
+            } else {
+              session.finish();
+            }
+          };
+          if (side === "write") {
+            shared.write(writeInst, session as never, onCopy, onCopyDone);
+          } else {
+            shared.read(readInst, session as never, onCopy, onCopyDone);
+          }
+          activity.notify();
+          activity.pump();
+        });
+        if (step === "done") break;
+      }
+    } finally {
+      parked[side] = false;
+      direct[side] = null;
+    }
+    return session.total;
+  };
+  /** Shared tail of `cancelWrite`/`cancelRead` for a parked direct session. */
+  const cancelDirect = (session: DirectSession): void => {
+    // A21: cancelling RETRACTS the session — it resolves with its running
+    // total (A8's indistinguishability caveats unchanged). `shared.cancel()`
+    // only when the session actually holds the pending slot: a session caught
+    // between two issuances holds nothing, and `SharedBase.cancel` asserts
+    // that something is pending.
+    session.cancelled = true;
+    if (session.pending) shared.cancel();
+    else session.finish();
+    activity.notify();
+    activity.pump();
+  };
   return {
     writable: {
       write(values: T[]): Promise<number> {
@@ -702,8 +1186,31 @@ function mkStreamEnds<T>(
         }
         return sent;
       },
+      writeDirect(
+        produce: (dest: DirectDestination) => DirectVerdict,
+        info?: DirectSessionInfo,
+      ): Promise<number> {
+        // Same one-in-flight-per-end rule, same wording shape as `write`:
+        // `writeDirect` participates in it exactly as `write` does (A21).
+        if (parked.write) {
+          throw new TypeError(
+            "a write is already in flight on this stream's writable end; " +
+              "await it or cancelWrite() first",
+          );
+        }
+        requireU8Element(shared.t, "writeDirect");
+        const session = new DirectSession(shared.t, (scope) => produce(scope));
+        const p = runDirectSession("write", session);
+        if (info === undefined) return p;
+        return p.then((n) => {
+          info.endedByVerdict = session.endedByVerdict;
+          return n;
+        });
+      },
       cancelWrite() {
         if (!parked.write) return;
+        const session = direct.write;
+        if (session !== null) return cancelDirect(session);
         parked.write = false;
         shared.cancel();
         activity.notify();
@@ -751,6 +1258,25 @@ function mkStreamEnds<T>(
           activity.pump();
         });
       },
+      readDirect(
+        consume: (src: DirectSource) => DirectVerdict,
+        info?: DirectSessionInfo,
+      ): Promise<number> {
+        if (parked.read) {
+          throw new TypeError(
+            "a read is already in flight on this stream's readable end; " +
+              "await it or cancelRead() first",
+          );
+        }
+        requireU8Element(shared.t, "readDirect");
+        const session = new DirectSession(shared.t, (scope) => consume(scope));
+        const p = runDirectSession("read", session);
+        if (info === undefined) return p;
+        return p.then((n) => {
+          info.endedByVerdict = session.endedByVerdict;
+          return n;
+        });
+      },
       cancelRead() {
         // #97, DELIBERATE AND PINNED: cancelling resolves the in-flight
         // `read` promise with whatever the buffer took so far — for a read
@@ -763,6 +1289,8 @@ function mkStreamEnds<T>(
         // already knows which of the two happened. Nothing else can reach
         // this state — a guest cannot cancel the host's read.
         if (!parked.read) return;
+        const session = direct.read;
+        if (session !== null) return cancelDirect(session);
         parked.read = false;
         shared.cancel();
         activity.notify();

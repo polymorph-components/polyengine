@@ -47,6 +47,7 @@
 import { defineBrand, ERROR_CONTEXT } from "@polyengine/protocol";
 import { assert_, Trap, trapIf } from "../cabi/trap.ts";
 import { LiftLowerContext } from "../cabi/context.ts";
+import { bytesOf } from "../cabi/memory.ts";
 import { loadListFromValidRange } from "../cabi/load.ts";
 import { storeListIntoValidRange } from "../cabi/store.ts";
 import { alignment, alignTo, elemSize } from "../cabi/layout.ts";
@@ -169,6 +170,174 @@ export class GuestBuffer {
     }
     this.progress += vs.length;
   }
+
+  // --- A21 direct-access byte edges (embedder-api amendment A21, #128) ---
+  //
+  // `ByteWindow`, implemented for the `stream<u8>` case only. The two methods
+  // together are the copy `read`/`write` would have done, split so that the
+  // *peer's* callback performs it: `byteView` hands out the range, and
+  // `advanceBytes` records the bytes that actually moved. They are role-blind
+  // (destination or source) because `this.ptr` already advances on BOTH
+  // `read` and `write` above, and `elemSize(u8) === 1`.
+
+  /**
+   * A fresh view over the next `n` bytes of this buffer's remaining range.
+   *
+   * Fresh on every call, via `bytesOf` (cabi/memory.ts:195) over the
+   * `LiveMemory` getters — so a `memory.grow` between two rendezvous of one
+   * parked direct session never yields a view onto the detached buffer.
+   */
+  byteView(n: number): Uint8Array {
+    assert_(
+      this.t !== null && despecialize(this.t).kind === "u8",
+      "direct byte window on a non-u8 buffer",
+    );
+    assert_(n <= this.remain(), "direct byte window beyond remaining");
+    const mem = this.cx.opts.memory;
+    assert_(mem !== null, "direct byte window requires a memory");
+    return bytesOf(mem!, this.ptr, n);
+  }
+
+  /**
+   * Advance by `k` WITHOUT copying: the bytes already moved through the view
+   * `byteView` handed out. Called by the seam only after the direct callback
+   * returned cleanly, which is what makes marks acknowledge-on-clean-return.
+   */
+  advanceBytes(k: number): void {
+    assert_(k >= 0 && k <= this.remain(), "direct advance beyond remaining");
+    this.ptr += k; // elemSize(u8) === 1
+    this.progress += k;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The direct-access seam (embedder-api amendment A21, 2026-08-22, #128)
+// ---------------------------------------------------------------------------
+//
+// A21 lets ONE side of a rendezvous be a *direct session*: instead of handing
+// the rendezvous a buffer to copy out of / into, the host parks a callback
+// that runs synchronously inside the rendezvous and performs the canonical
+// copy itself, against a scoped view of the peer's memory.
+//
+// The seam below is the whole of it inside this file. It exists so that the
+// rendezvous keeps mirroring definitions.py `SharedStreamImpl.read`/`.write`
+// (lines 1032/1050) line for line for every non-direct path: when neither
+// side is direct, `rendezvousCopy` IS `dst.write(src.read(n))`, unchanged.
+//
+// Nothing here imports from `exec/`: a direct session is recognised
+// structurally (`direct === true`) and driven through two small optional
+// protocols — `DirectBuffer` (the session) and `ByteWindow` (the peer).
+
+/**
+ * The buffer surface the rendezvous actually uses (definitions.py `Buffer`,
+ * line 918). `GuestBuffer` and the host layer's `HostBuffer` both satisfy it.
+ */
+export interface RendezvousBuffer {
+  remain(): number;
+  isZeroLength(): boolean;
+  read(n: number): PayloadChunk;
+  write(vs: PayloadChunk): void;
+}
+
+/**
+ * A21: the peer half of a direct rendezvous — a buffer that can expose its
+ * remaining range as bytes and be advanced without a copy.
+ *
+ * Implemented by `GuestBuffer` (a view into guest linear memory: the
+ * embedder's own `set()` becomes the one ABI copy) and by `HostBuffer` (a
+ * view of the offered chunk when it is the source; a synthesized scratch that
+ * becomes the delivered chunk when it is the destination).
+ */
+export interface ByteWindow {
+  /**
+   * A view over the next `n` bytes. May be called several times within one
+   * direct invocation (`remaining()` re-derives on every call); an
+   * implementation that *synthesizes* the window must return the same
+   * storage for the whole invocation and release it in `endWindow`.
+   */
+  byteView(n: number): Uint8Array;
+  /** Record `k` bytes as moved. Called only after a clean callback return. */
+  advanceBytes(k: number): void;
+  /** End of one direct invocation; drop any synthesized window. */
+  endWindow?(): void;
+}
+
+/**
+ * A21: the parked direct session, as the rendezvous sees it. It presents the
+ * ordinary buffer surface (so `remain()`/`isZeroLength()` keep the reference
+ * control flow working) but its `read`/`write` are never called — the seam
+ * routes it through `runDirect` instead.
+ */
+export interface DirectBuffer extends RendezvousBuffer {
+  readonly direct: true;
+  /**
+   * Run this session's callback exactly once against the peer's window,
+   * with `n` bytes of capacity. Applies the acknowledged marks to `peer`
+   * itself, and settles the session on failure — the seam only routes the
+   * rendezvous state that follows.
+   */
+  runDirect(peer: ByteWindow, n: number): DirectOutcome;
+  /**
+   * Reject this session out-of-band (the two-direct-sessions rendezvous,
+   * where neither side owns memory).
+   */
+  failDirect(error: Error): void;
+}
+
+/**
+ * What the seam did, and hence how the rendezvous must continue.
+ *
+ *  * `"chunk"` — no direct session was involved: the reference copy ran.
+ *  * `"copied"` — the callback acknowledged ≥ 1 byte; continue exactly as
+ *    after a reference copy (fire the pending side's `on_copy`).
+ *  * `"retracted"` — `"done"` with zero marked. Continue as if the direct
+ *    side's buffer had had `remain() == 0` all along, which is a state
+ *    definitions.py already routes.
+ *  * `"failed"` — misuse or a throwing callback; the session has already
+ *    rejected. No copy, no event, the peer's parked operation survives.
+ *  * `"both-direct"` — neither side owns memory; the ARRIVING side is
+ *    rejected by the caller and the parked side is left undisturbed.
+ */
+export type DirectOutcome = "copied" | "retracted" | "failed";
+export type RendezvousOutcome = DirectOutcome | "chunk" | "both-direct";
+
+function isDirectBuffer(b: RendezvousBuffer): b is DirectBuffer {
+  return (b as { direct?: unknown }).direct === true;
+}
+
+/**
+ * The one copy site, shared by `SharedStreamImpl.read` and `.write`.
+ *
+ * Collapses to definitions.py's `dst_buffer.write(src_buffer.read(n))`
+ * whenever neither side is a direct session — which is every guest↔guest,
+ * guest↔host-chunk and host-chunk↔host-chunk rendezvous, i.e. everything
+ * that existed before A21.
+ */
+function rendezvousCopy(
+  src: RendezvousBuffer,
+  dst: RendezvousBuffer,
+  n: number,
+): RendezvousOutcome {
+  const srcDirect = isDirectBuffer(src);
+  const dstDirect = isDirectBuffer(dst);
+  if (!srcDirect && !dstDirect) {
+    dst.write(src.read(n));
+    return "chunk";
+  }
+  if (srcDirect && dstDirect) return "both-direct";
+  return srcDirect
+    ? src.runDirect(dst as unknown as ByteWindow, n)
+    : (dst as DirectBuffer).runDirect(src as unknown as ByteWindow, n);
+}
+
+/** The A21 rejection for a rendezvous of two direct sessions. */
+function bothDirectError(): TypeError {
+  return new TypeError(
+    "at least one side of a host-to-host rendezvous must use the chunk " +
+      "forms: two direct-access sessions cannot rendezvous with each other " +
+      "because neither side owns the memory the other would write into " +
+      "(embedder-api amendment A21, polyengine#128)",
+  );
 }
 
 /**
@@ -326,7 +495,28 @@ export class SharedStreamImpl implements SharedBase {
       if (this.pendingBuffer.remain() > 0) {
         if (dstBuffer.remain() > 0) {
           const n = Math.min(dstBuffer.remain(), this.pendingBuffer.remain());
-          dstBuffer.write(this.pendingBuffer.read(n));
+          // A21 seam (#128). `"chunk"` is the reference line verbatim.
+          const pendingIsDirect = isDirectBuffer(this.pendingBuffer);
+          const out = rendezvousCopy(this.pendingBuffer, dstBuffer, n);
+          if (out === "both-direct") {
+            // The ARRIVING side (here the reader) is the one refused; the
+            // parked session keeps the pending slot, undisturbed.
+            (dstBuffer as unknown as DirectBuffer).failDirect(
+              bothDirectError(),
+            );
+            return;
+          }
+          if (out === "retracted" || out === "failed") {
+            this.#routeDirectNoCopy(
+              out,
+              pendingIsDirect,
+              inst,
+              dstBuffer,
+              onCopy,
+              onCopyDone,
+            );
+            return;
+          }
           this.pendingOnCopy!(() => this.resetPending());
         }
         onCopyDone(CopyResult.COMPLETED);
@@ -355,7 +545,28 @@ export class SharedStreamImpl implements SharedBase {
       if (this.pendingBuffer.remain() > 0) {
         if (srcBuffer.remain() > 0) {
           const n = Math.min(srcBuffer.remain(), this.pendingBuffer.remain());
-          this.pendingBuffer.write(srcBuffer.read(n));
+          // A21 seam (#128). `"chunk"` is the reference line verbatim.
+          const pendingIsDirect = isDirectBuffer(this.pendingBuffer);
+          const out = rendezvousCopy(srcBuffer, this.pendingBuffer, n);
+          if (out === "both-direct") {
+            // The ARRIVING side (here the writer) is refused; the parked
+            // session keeps the pending slot.
+            (srcBuffer as unknown as DirectBuffer).failDirect(
+              bothDirectError(),
+            );
+            return;
+          }
+          if (out === "retracted" || out === "failed") {
+            this.#routeDirectNoCopy(
+              out,
+              pendingIsDirect,
+              inst,
+              srcBuffer,
+              onCopy,
+              onCopyDone,
+            );
+            return;
+          }
           this.pendingOnCopy!(() => this.resetPending());
         }
         onCopyDone(CopyResult.COMPLETED);
@@ -371,6 +582,48 @@ export class SharedStreamImpl implements SharedBase {
         this.setPending(inst, srcBuffer, onCopy, onCopyDone);
       }
     }
+  }
+
+  /**
+   * A21 (#128): route a rendezvous whose direct session did NOT copy.
+   *
+   * Two outcomes land here, and both share one invariant: the peer's parked
+   * operation survives, no event is delivered, and the stream is not dropped
+   * — a runtime never emits a zero-progress COMPLETED copy, which is
+   * unreachable in definitions.py for a nonzero-capacity operation.
+   *
+   *  * `"retracted"` — `"done"` with zero marked. The session ends and
+   *    resolves with its running total, through the ordinary
+   *    `on_copy_done(COMPLETED)` channel.
+   *  * `"failed"` — misuse or a throwing callback. The session has ALREADY
+   *    rejected (`DirectSession.#fail`), so it must be retired silently:
+   *    its rejection is its notification.
+   *
+   * Which side was the session decides where each goes, and both shapes are
+   * states definitions.py already produces:
+   *
+   *  * PARKED session ⇒ the "the parked side had nothing left" branch
+   *    (definitions.py:1043/1063): retire it and park the arriving
+   *    operation, which gets no event either way.
+   *  * ARRIVING session ⇒ the "arriving buffer of zero capacity" state
+   *    (definitions.py:1041/1057): the pending side is left untouched with
+   *    its `on_copy` unfired, and the arriving side completes.
+   */
+  #routeDirectNoCopy(
+    out: "retracted" | "failed",
+    pendingIsDirect: boolean,
+    inst: unknown,
+    arriving: GuestBuffer,
+    onCopy: OnCopy,
+    onCopyDone: OnCopyDone,
+  ): void {
+    if (pendingIsDirect) {
+      if (out === "retracted") this.resetAndNotifyPending(CopyResult.COMPLETED);
+      else this.resetPending();
+      this.setPending(inst, arriving, onCopy, onCopyDone);
+      return;
+    }
+    if (out === "retracted") onCopyDone(CopyResult.COMPLETED);
   }
 
   #assertSameElemType(b: GuestBuffer): void {

@@ -505,11 +505,27 @@ interface Stream<T> {
   readable(): ReadableStream<Chunk<T>>;    // web-native; Chunk<u8> = Uint8Array, else T[]
   [Symbol.asyncIterator](): AsyncIterator<Chunk<T>>;
   read(max: number): Promise<Chunk<T>>;    // low-level; empty chunk = end
+  readDirect(                              // stream<u8> only — amendment A21
+    consume: (src: DirectSource) => "more" | "done",
+  ): Promise<number>;
   cancelRead(): void;
   drop(): void;                            // [Symbol.dispose] alias
 }
 interface Future<T> extends PromiseLike<T> {  // await it directly
   drop(): void; cancel(): void;
+}
+// Direct-access byte edges (amendment A21, stream<u8> only). The writer-side
+// mirror lives on StreamWriter:
+//   writeDirect(produce: (dest: DirectDestination) => "more" | "done"): Promise<number>
+// Both objects are DEAD once the callback returns — every later method call
+// throws.
+interface DirectDestination {
+  remaining(): Uint8Array;     // scoped view over the reader's unfilled landing zone
+  markWritten(n: number): void; // cumulative within the invocation
+}
+interface DirectSource {
+  remaining(): Uint8Array;     // scoped view of the writer's unread bytes; read-only by contract
+  markRead(n: number): void;
 }
 class ErrorContext { readonly message: string }  // lift-only constructor-wise (C2 amendment); lowering also accepts any branded string-`message` carrier by minting a fresh local context (A20)
 class DroppedError extends Error { … }    // awaiting a dropped future rejects with this
@@ -660,7 +676,7 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
 - Writer-side host ends (`hostStream()`-era API) remain the low-level seam
   underneath; the conventions layer exposes them as
   `Stream.create<T>(): { stream: Stream<T>, writer: StreamWriter<T> }`
-  with `write`/`writeAll`/`cancelWrite`/`close`.
+  with `write`/`writeAll`/`writeDirect`/`cancelWrite`/`close`.
 - **Component faults are loud on stream/future operations** (amendment
   A7). When the component instance holding the peer end traps, its live
   ends are retired: a parked host `read`/`write`/`writeAll`/future-await
@@ -703,6 +719,92 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
   iterator present as clean EOS. The canceller is the same code observing
   the end, so no discriminated signal is warranted; pinned by test. (A
   *peer* fault is never presented this way — that is A7's rule.)
+- **Direct-access byte edges** (amendment A21, 2026-08-22, polyengine#128 —
+  wasmtime `DirectSource`/`DirectDestination`-shaped, `component::concurrent`
+  47.0.3). For `stream<u8>` only, both host ends gain a form whose last hop
+  *is* the single canonical-ABI copy, so external buffer movers (websocket
+  frames, SAB-ring segments, transferred `ArrayBuffer`s) never pay a second
+  copy inside the runtime:
+  - `StreamWriter.writeDirect(produce)` and `Stream.readDirect(consume)`
+    (with the same methods on the low-level `HostWritableEnd`/
+    `HostReadableEnd` seam). Each parks a **direct session**: at every
+    rendezvous with a peer operation of nonzero capacity, the callback runs
+    **exactly once, synchronously, inside the rendezvous** — the guest's
+    copy trampoline, or the host call that arrived second. `produce`
+    receives a `DirectDestination` whose `remaining()` is the reader's
+    unfilled landing zone; `consume` receives a `DirectSource` whose
+    `remaining()` is the writer's unread bytes. When the peer is a guest,
+    that view aliases **guest linear memory**: the embedder's own
+    `set()`/`subarray` copy is the ABI copy. The callback's verdict is
+    wasmtime's poll cadence spelled event-style: `"more"` keeps the session
+    parked for the next rendezvous; `"done"` ends it, resolving the promise
+    with the session's total byte count.
+  - **Scope is the validity window.** The `DirectDestination`/`DirectSource`
+    object dies when the callback returns; every later method call throws a
+    `TypeError` naming the scoping rule. Views are re-derived per
+    `remaining()` call (a `memory.grow` between rendezvous never yields a
+    stale view), and retaining one past the callback is misuse. Inside the
+    callback, calls that can run guest code or operate this stream are
+    forbidden (reentrancy); the one-in-flight-per-end rule (A7) covers the
+    stream's own operations, and `writeDirect`/`readDirect` participate in
+    it exactly as `write`/`read` do.
+  - **Marks acknowledge on clean return only.** `markWritten`/`markRead`
+    accumulate within the invocation (over-marking throws). A callback that
+    returns having marked ≥ 1 byte completes the peer's copy with that
+    count. Returning `"done"` with **zero** marked is *retraction*: the
+    session ends (promise resolves with its running total), the peer's
+    operation stays parked, and no event is delivered — the speculative-park
+    pattern (demand arrived while the producer's ring happened to be empty;
+    re-arm when it fills). Zero marked with `"more"` is misuse: the session
+    rejects with a `TypeError`. A callback that **throws** rejects the
+    session with that error, and the invocation's marks are discarded —
+    bytes physically written past the acknowledged progress are
+    unobservable to the peer. In every outcome the peer's parked operation
+    survives and the stream stays alive (the host still holds its end and
+    may fall back to chunk forms); a runtime never emits a zero-progress
+    COMPLETED copy, which is unreachable in definitions.py for a
+    nonzero-capacity operation and which a guest may lawfully misread as
+    end-of-stream.
+  - **Zero-length-read readiness position** (Concurrency.md "Stream
+    Readiness"): a parked direct session answers a zero-length probe with
+    immediate COMPLETED — the armed session is the readiness claim — and
+    the callback is **not** invoked. A producer that parks speculatively
+    while knowingly empty is stretching that claim; the retraction path
+    above is its correction.
+  - **Host↔host at the same floor.** A direct session rendezvousing with a
+    peer *chunk* end still costs one copy: `produce` against a host
+    `read(max)` writes into a fresh scratch that becomes the delivered
+    chunk (ownership passes with it); `consume` against a parked chunk
+    `write` gets a scoped view of the offered chunk itself (the A5 borrow,
+    scoped to the callback). Two direct sessions cannot rendezvous with
+    each other — neither side owns memory — so the arriving side throws a
+    `TypeError`: at least one side of a host↔host rendezvous uses chunk
+    forms.
+  - **Interplay with the existing rules, all inherited:** a peer trap
+    rejects the session with `PeerTrappedError` carrying the delivered byte
+    count, while a session the callback already completed keeps its result
+    (A7 precision); reader/writer drop resolves the session with its total
+    (the `write`/`writeAll` convention — a resolution the producer's own
+    `"done"` did not cause is the reader-gone signal); `cancelWrite`/
+    `cancelRead` retract a parked session (A8's indistinguishability
+    caveats unchanged); the A15 transfer guard applies to `readDirect` as
+    to `read`; a parked session is retention, so the deadlock-verdict arm
+    stays live. `writeDirect` on an unbound `Stream.create()` writer parks
+    until the lowering site binds the element type, then requires u8;
+    `readDirect` on an unbound or non-u8 stream throws, as `read`'s
+    refusals do.
+  - **What is deliberately absent:** no ownership-transfer variant of the
+    chunk forms — `write`/`writeAll`'s borrowed-until-settled contract (A5)
+    already meets the one-copy floor, and `HostBuffer`'s `taken()` already
+    passes a sole chunk through unsliced; no `list<u8>` intake/output form
+    (same question, tracked separately); no conduit, credit, or realm
+    machinery (the #128 scope ruling: deltic provides the byte edge, not
+    the mover). SAB-backed `Uint8Array`s are legal on the embedder's side
+    of every copy in both directions — the embedder performs the copy, so
+    nothing here can reject them. The #97 `HostBuffer` length bound applies
+    to the buffered path only: a direct session's capacity IS the peer's
+    actual buffer size, already bounded by the guest's own `MAX_LENGTH`
+    trap.
 
 ## Module wiring and instantiation
 

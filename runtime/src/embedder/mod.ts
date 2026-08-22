@@ -86,6 +86,12 @@ export {
 
 export {
   type Chunk,
+  // Direct-access byte edges (amendment A21, polyengine#128): the two scoped
+  // callback objects `StreamWriter.writeDirect` / `Stream.readDirect` hand
+  // out, plus their verdict type.
+  type DirectDestination,
+  type DirectSource,
+  type DirectVerdict,
   type ElemCodec,
   ErrorContext,
   Future,
