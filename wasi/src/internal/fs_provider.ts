@@ -46,13 +46,31 @@
 // from one site. Refusals use the WIT `read-only` error code.
 //
 // Two DISTINCT concerns, deliberately not merged:
-//   * per-descriptor flags (`requireWrite`) -> `bad-descriptor`: this
-//     descriptor was not opened for writing / directory mutation;
 //   * the global grant (`requireWritable`) -> `read-only`: this
-//     filesystem is read-only, whatever the descriptor says.
-// The global check runs FIRST on every mutating leaf, so a read-only
-// package answers `read-only` uniformly rather than leaking descriptor
-// bookkeeping.
+//     filesystem is read-only, whatever the descriptor says. It runs
+//     FIRST on every mutating leaf, so a read-only package answers
+//     `read-only` uniformly rather than leaking descriptor bookkeeping.
+//   * per-descriptor flags, which SPLIT by descriptor kind because the
+//     WIT dictates one half and is silent on the other:
+//       - directories (`requireDirMutate`) -> `read-only`. WIT-mandated:
+//         of `mutate-directory`, "When this flag is unset on a
+//         descriptor, operations using the descriptor which would
+//         create, rename, delete, modify the data or metadata of
+//         filesystem objects, or obtain another handle which would
+//         permit any of those, shall fail with `error-code::read-only`".
+//       - files (`requireFileWrite`) -> `bad-descriptor`. The WIT says
+//         nothing about a file descriptor opened without `write`; POSIX
+//         answers EBADF for a write on a handle not opened for writing,
+//         so we do. `mutate-directory` is NOT accepted here: the WIT
+//         says it "may only be set on directories".
+// The "obtain another handle" fragment is why `open-at` carries an
+// ESCALATION clause: through a directory descriptor without
+// `mutate-directory`, an open asking for `write`/`mutate-directory` (or
+// `create`/`truncate`/`exclusive`) is refused `read-only` — otherwise
+// the handle it mints would launder the missing permission.
+// Path-ops check kind before permission (`requireDir` first), so a
+// path-op through a FILE descriptor reports `not-directory` rather than
+// a bogus `read-only` — wasmtime's `Descriptor::dir()` ordering.
 //
 // PATHS. Guest paths are resolved TEXTUALLY: split on "/", drop "." and
 // empty segments, ".." pops (underflow = `not-permitted`), absolute
@@ -539,8 +557,9 @@ export function makeFilesystem<H>(
   const PREOPEN_FLAGS = flagsValue({ read: true, write: true, mutateDirectory: true });
 
   /** The package-level grant. Refuses with the WIT `read-only` code —
-   * distinct from `requireWrite`'s per-descriptor `bad-descriptor`
-   * (module header). Called FIRST by every mutating leaf. */
+   * distinct from the per-descriptor checks (`requireDirMutate`,
+   * `requireFileWrite`; module header). Called FIRST by every mutating
+   * leaf. */
   const requireWritable = (shape: ErrShape): void => {
     if (!writable) throw shape("read-only");
   };
@@ -666,8 +685,18 @@ export function makeFilesystem<H>(
   const requireRead = (c: Core, shape: ErrShape): void => {
     if (!c.flags.read) throw shape("bad-descriptor");
   };
-  const requireWrite = (c: Core, shape: ErrShape): void => {
-    if (!c.flags.write && !c.flags.mutateDirectory) throw shape("bad-descriptor");
+  /** Per-descriptor write permission on a FILE. WIT-silent; POSIX EBADF
+   * (module header). `mutate-directory` deliberately does NOT satisfy
+   * it: the WIT says that flag "may only be set on directories". */
+  const requireFileWrite = (c: Core, shape: ErrShape): void => {
+    if (!c.flags.write) throw shape("bad-descriptor");
+  };
+  /** Per-descriptor mutation permission on a DIRECTORY. The WIT's
+   * `mutate-directory` doc mandates the code: operations that would
+   * create/rename/delete/modify "shall fail with
+   * `error-code::read-only`". */
+  const requireDirMutate = (c: Core, shape: ErrShape): void => {
+    if (!c.flags.mutateDirectory) throw shape("read-only");
   };
 
   // --- the 0.2 track ---------------------------------------------------------
@@ -707,7 +736,7 @@ export function makeFilesystem<H>(
       return g02(() => {
         requireWritable(err02);
         requireFile(this.core, err02);
-        requireWrite(this.core, err02);
+        requireFileWrite(this.core, err02);
         let cursor = Number(offset);
         if (backend.isSync) {
           return syncWriteStream((chunk) => {
@@ -724,7 +753,7 @@ export function makeFilesystem<H>(
       return g02(() => {
         requireWritable(err02);
         requireFile(this.core, err02);
-        requireWrite(this.core, err02);
+        requireFileWrite(this.core, err02);
         if (backend.isSync) {
           return syncWriteStream((chunk) => void backend.append(this.core.h, chunk));
         }
@@ -753,7 +782,7 @@ export function makeFilesystem<H>(
     setSize(size: bigint): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
-        requireWrite(this.core, err02);
+        requireFileWrite(this.core, err02);
         return backend.setSize(this.core.h, Number(size));
       });
     }
@@ -761,7 +790,10 @@ export function makeFilesystem<H>(
     setTimes(atime: NewTimestampValue, mtime: NewTimestampValue): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
-        requireWrite(this.core, err02);
+        // The descriptor's OWN times: which half of the per-descriptor
+        // rule applies depends on what this descriptor IS (module header).
+        if (this.core.type === "directory") requireDirMutate(this.core, err02);
+        else requireFileWrite(this.core, err02);
         return backend.setTimes(
           this.core.h,
           newTimestampToSpec(atime),
@@ -786,7 +818,7 @@ export function makeFilesystem<H>(
       return g02(() => {
         requireWritable(err02);
         requireFile(this.core, err02);
-        requireWrite(this.core, err02);
+        requireFileWrite(this.core, err02);
         return chain(backend.write(this.core.h, buffer, Number(offset)), BigInt);
       });
     }
@@ -808,7 +840,8 @@ export function makeFilesystem<H>(
     createDirectoryAt(path: string): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
-        requireWrite(this.core, err02);
+        requireDir(this.core, err02);
+        requireDirMutate(this.core, err02);
         return backend.createDirectoryAt(
           this.core.h,
           requireFinal(parsePath(path, err02), err02),
@@ -841,7 +874,8 @@ export function makeFilesystem<H>(
     ): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
-        requireWrite(this.core, err02);
+        requireDir(this.core, err02);
+        requireDirMutate(this.core, err02);
         return backend.setTimesAt(
           this.core.h,
           parsePath(path, err02),
@@ -863,8 +897,10 @@ export function makeFilesystem<H>(
         if (backend.linkAt === undefined) throw err02("unsupported");
         // Both ends: a two-descriptor op checked on one side only is the
         // classic bridge bug (module header).
-        requireWrite(this.core, err02);
-        requireWrite(newDescriptor.core, err02);
+        requireDir(this.core, err02);
+        requireDirMutate(this.core, err02);
+        requireDir(newDescriptor.core, err02);
+        requireDirMutate(newDescriptor.core, err02);
         return backend.linkAt(
           this.core.h,
           requireFinal(parsePath(oldPath, err02), err02),
@@ -883,6 +919,19 @@ export function makeFilesystem<H>(
     ): MaybeAsync<Descriptor02> {
       return g02(() => {
         requireOpenAllowed(openFlags, flags, err02);
+        requireDir(this.core, err02);
+        // "obtain another handle which would permit any of those" (WIT,
+        // mutate-directory): a base directory without mutate-directory
+        // cannot mint a handle that escalates. `exclusive` is included
+        // beyond the WIT's literal create/truncate to mirror the
+        // package-level `requireOpenAllowed` enumeration.
+        if (
+          flags.write === true || flags.mutateDirectory === true ||
+          openFlags.create === true || openFlags.truncate === true ||
+          openFlags.exclusive === true
+        ) {
+          requireDirMutate(this.core, err02);
+        }
         return chain(
           backend.openAt(
             this.core.h,
@@ -904,7 +953,8 @@ export function makeFilesystem<H>(
     removeDirectoryAt(path: string): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
-        requireWrite(this.core, err02);
+        requireDir(this.core, err02);
+        requireDirMutate(this.core, err02);
         return backend.removeDirectoryAt(
           this.core.h,
           requireFinal(parsePath(path, err02), err02),
@@ -916,8 +966,10 @@ export function makeFilesystem<H>(
       return g02(() => {
         requireWritable(err02);
         // Both ends (see link-at).
-        requireWrite(this.core, err02);
-        requireWrite(newDescriptor.core, err02);
+        requireDir(this.core, err02);
+        requireDirMutate(this.core, err02);
+        requireDir(newDescriptor.core, err02);
+        requireDirMutate(newDescriptor.core, err02);
         return backend.renameAt(
           this.core.h,
           requireFinal(parsePath(oldPath, err02), err02),
@@ -931,7 +983,8 @@ export function makeFilesystem<H>(
       return g02(() => {
         requireWritable(err02);
         if (backend.symlinkAt === undefined) throw err02("unsupported");
-        requireWrite(this.core, err02);
+        requireDir(this.core, err02);
+        requireDirMutate(this.core, err02);
         // old-path is the link CONTENTS (never validated as a lookup path).
         return backend.symlinkAt(
           oldPath,
@@ -944,7 +997,8 @@ export function makeFilesystem<H>(
     unlinkFileAt(path: string): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
-        requireWrite(this.core, err02);
+        requireDir(this.core, err02);
+        requireDirMutate(this.core, err02);
         return backend.unlinkFileAt(
           this.core.h,
           requireFinal(parsePath(path, err02), err02),
@@ -1013,7 +1067,7 @@ export function makeFilesystem<H>(
       try {
         requireWritable(err03);
         requireFile(this.core, err03);
-        requireWrite(this.core, err03);
+        requireFileWrite(this.core, err03);
         let cursor = Number(offset);
         for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
           const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
@@ -1033,7 +1087,7 @@ export function makeFilesystem<H>(
       try {
         requireWritable(err03);
         requireFile(this.core, err03);
-        requireWrite(this.core, err03);
+        requireFileWrite(this.core, err03);
         for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
           const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
           await backend.append(this.core.h, bytes);
@@ -1067,7 +1121,7 @@ export function makeFilesystem<H>(
     setSize(size: bigint): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
-        requireWrite(this.core, err03);
+        requireFileWrite(this.core, err03);
         return backend.setSize(this.core.h, Number(size));
       });
     }
@@ -1075,7 +1129,10 @@ export function makeFilesystem<H>(
     setTimes(atime: NewTimestampValue, mtime: NewTimestampValue): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
-        requireWrite(this.core, err03);
+        // The descriptor's OWN times: which half of the per-descriptor
+        // rule applies depends on what this descriptor IS (module header).
+        if (this.core.type === "directory") requireDirMutate(this.core, err03);
+        else requireFileWrite(this.core, err03);
         return backend.setTimes(
           this.core.h,
           newTimestampToSpec(atime),
@@ -1105,7 +1162,8 @@ export function makeFilesystem<H>(
     createDirectoryAt(path: string): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
-        requireWrite(this.core, err03);
+        requireDir(this.core, err03);
+        requireDirMutate(this.core, err03);
         return backend.createDirectoryAt(
           this.core.h,
           requireFinal(parsePath(path, err03), err03),
@@ -1138,7 +1196,8 @@ export function makeFilesystem<H>(
     ): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
-        requireWrite(this.core, err03);
+        requireDir(this.core, err03);
+        requireDirMutate(this.core, err03);
         return backend.setTimesAt(
           this.core.h,
           parsePath(path, err03),
@@ -1160,8 +1219,10 @@ export function makeFilesystem<H>(
         if (backend.linkAt === undefined) throw err03("unsupported");
         // Both ends: a two-descriptor op checked on one side only is the
         // classic bridge bug (module header).
-        requireWrite(this.core, err03);
-        requireWrite(newDescriptor.core, err03);
+        requireDir(this.core, err03);
+        requireDirMutate(this.core, err03);
+        requireDir(newDescriptor.core, err03);
+        requireDirMutate(newDescriptor.core, err03);
         return backend.linkAt(
           this.core.h,
           requireFinal(parsePath(oldPath, err03), err03),
@@ -1180,6 +1241,19 @@ export function makeFilesystem<H>(
     ): MaybeAsync<Descriptor03> {
       return g03(() => {
         requireOpenAllowed(openFlags, flags, err03);
+        requireDir(this.core, err03);
+        // "obtain another handle which would permit any of those" (WIT,
+        // mutate-directory): a base directory without mutate-directory
+        // cannot mint a handle that escalates. `exclusive` is included
+        // beyond the WIT's literal create/truncate to mirror the
+        // package-level `requireOpenAllowed` enumeration.
+        if (
+          flags.write === true || flags.mutateDirectory === true ||
+          openFlags.create === true || openFlags.truncate === true ||
+          openFlags.exclusive === true
+        ) {
+          requireDirMutate(this.core, err03);
+        }
         return chain(
           backend.openAt(
             this.core.h,
@@ -1201,7 +1275,8 @@ export function makeFilesystem<H>(
     removeDirectoryAt(path: string): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
-        requireWrite(this.core, err03);
+        requireDir(this.core, err03);
+        requireDirMutate(this.core, err03);
         return backend.removeDirectoryAt(
           this.core.h,
           requireFinal(parsePath(path, err03), err03),
@@ -1213,8 +1288,10 @@ export function makeFilesystem<H>(
       return g03(() => {
         requireWritable(err03);
         // Both ends (see link-at).
-        requireWrite(this.core, err03);
-        requireWrite(newDescriptor.core, err03);
+        requireDir(this.core, err03);
+        requireDirMutate(this.core, err03);
+        requireDir(newDescriptor.core, err03);
+        requireDirMutate(newDescriptor.core, err03);
         return backend.renameAt(
           this.core.h,
           requireFinal(parsePath(oldPath, err03), err03),
@@ -1228,7 +1305,8 @@ export function makeFilesystem<H>(
       return g03(() => {
         requireWritable(err03);
         if (backend.symlinkAt === undefined) throw err03("unsupported");
-        requireWrite(this.core, err03);
+        requireDir(this.core, err03);
+        requireDirMutate(this.core, err03);
         return backend.symlinkAt(
           oldPath,
           this.core.h,
@@ -1240,7 +1318,8 @@ export function makeFilesystem<H>(
     unlinkFileAt(path: string): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
-        requireWrite(this.core, err03);
+        requireDir(this.core, err03);
+        requireDirMutate(this.core, err03);
         return backend.unlinkFileAt(
           this.core.h,
           requireFinal(parsePath(path, err03), err03),

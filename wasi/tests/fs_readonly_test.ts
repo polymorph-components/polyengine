@@ -338,11 +338,17 @@ Deno.test("fs-readonly: link-at/rename-at/symlink-at bridge nowhere by default",
 
 // --- per-descriptor flags: the enforcement that is NOT the global grant ------------
 //
-// Independent of `writable`, a descriptor that was not opened with
-// write/mutate-directory must be refused with `bad-descriptor`. Before
-// this track the directory-mutating ops skipped `requireWrite` entirely
-// and went straight to the backend, so per-descriptor flags were
-// unenforced for directory mutation and only the OS said no.
+// Independent of `writable`, a descriptor that was not opened with the
+// right flag is refused — and the CODE depends on the descriptor kind
+// (fs_provider.ts header). For directories the WIT dictates it: of
+// `mutate-directory`, "When this flag is unset on a descriptor,
+// operations using the descriptor which would create, rename, delete,
+// modify the data or metadata of filesystem objects, or obtain another
+// handle which would permit any of those, shall fail with
+// `error-code::read-only` if they would otherwise succeed." For files
+// the WIT is silent and we answer `bad-descriptor` (POSIX EBADF).
+// Before this track the directory-mutating ops answered `bad-descriptor`
+// too, contradicting that sentence.
 
 const DIR_FLAG_LEAVES: [string, (root: D02, ro: D02) => unknown][] = [
   ["create-directory-at", (_r, ro) => ro.createDirectoryAt("made")],
@@ -356,13 +362,26 @@ const DIR_FLAG_LEAVES: [string, (root: D02, ro: D02) => unknown][] = [
   ["link-at (destination side)", (root, ro) => root.linkAt({}, "seed.txt", ro, "pushed.txt")],
 ];
 
+/** Seed `sub` with the targets DIR_FLAG_LEAVES names, then open it with
+ * `df` — a writable package, so only descriptor flags can refuse. */
+function subDescriptor(df: Flags): { root02: D02; sub: D02; dir: string } {
+  const { root02, dir } = setup(true);
+  Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
+  Deno.mkdirSync(`${dir}/sub/nested`);
+  return { root02, sub: root02.openAt(FOLLOW, "sub", { directory: true }, df), dir };
+}
+
 for (const [name, op] of DIR_FLAG_LEAVES) {
   Deno.test(`fs-descriptor-flags 0.2: ${name} refuses a non-mutating descriptor`, () => {
-    const { root02, dir } = setup(true); // writable package: only flags can refuse
-    Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
-    Deno.mkdirSync(`${dir}/sub/nested`);
-    const ro = root02.openAt(FOLLOW, "sub", { directory: true }, READ);
-    assertEq(payload(() => op(root02, ro)), "bad-descriptor");
+    const { root02, sub } = subDescriptor(READ);
+    assertEq(payload(() => op(root02, sub)), "read-only");
+  });
+  // The residual of #194: `write` alone is NOT mutate-directory. A
+  // descriptor opened read+write on a DIRECTORY still may not mutate its
+  // contents — "This may only be set on directories" cuts both ways.
+  Deno.test(`fs-descriptor-flags 0.2: ${name} refuses a write-but-not-mutate directory`, () => {
+    const { root02, sub } = subDescriptor(RW);
+    assertEq(payload(() => op(root02, sub)), "read-only");
   });
 }
 
@@ -376,6 +395,88 @@ Deno.test("fs-descriptor-flags 0.2: a mutate-directory descriptor still works", 
   rw.createDirectoryAt("made");
   rw.unlinkFileAt("inner.txt");
   assertEq([...Deno.readDirSync(`${dir}/sub`)].map((e) => e.name).join(","), "made");
+});
+
+// --- open-at escalation: "obtain another handle which would permit any of those" ---
+
+Deno.test("fs-descriptor-flags 0.2: open-at refuses to escalate through a read-only dir", () => {
+  const { root02, dir } = setup(true); // writable package: only flags can refuse
+  Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
+  Deno.mkdirSync(`${dir}/sub/nested`);
+  const ro = root02.openAt(FOLLOW, "sub", { directory: true }, READ);
+  assertEq(payload(() => ro.openAt(FOLLOW, "inner.txt", {}, RW)), "read-only");
+  assertEq(
+    payload(() => ro.openAt(FOLLOW, "nested", { directory: true }, {
+      read: true,
+      mutateDirectory: true,
+    })),
+    "read-only",
+  );
+  assertEq(payload(() => ro.openAt(FOLLOW, "new.txt", { create: true }, READ)), "read-only");
+  assertEq(payload(() => ro.openAt(FOLLOW, "inner.txt", { truncate: true }, READ)), "read-only");
+  assertEq(payload(() => ro.openAt(FOLLOW, "new.txt", { exclusive: true }, READ)), "read-only");
+  // Plain reads through the same descriptor stay allowed.
+  assertEq(ro.openAt(FOLLOW, "inner.txt", {}, READ).getType(), "regular-file");
+  assertEq(ro.openAt(FOLLOW, "nested", { directory: true }, READ).getType(), "directory");
+});
+
+Deno.test("fs-descriptor-flags 0.2: a mutate-directory child is not escalation-blocked", () => {
+  const { root02, dir } = setup(true);
+  Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
+  const rw = root02.openAt(FOLLOW, "sub", { directory: true }, {
+    read: true,
+    mutateDirectory: true,
+  });
+  assertEq(rw.openAt(FOLLOW, "inner.txt", {}, RW).getType(), "regular-file");
+  rw.openAt(FOLLOW, "fresh.txt", { create: true }, RW);
+  rw.createDirectoryAt("made");
+  assertTrue(Deno.statSync(`${dir}/sub/made`).isDirectory, "the child dir was created");
+});
+
+// --- set-times: the type dispatch -------------------------------------------------
+
+Deno.test("fs-descriptor-flags 0.2: set-times splits by descriptor kind", () => {
+  const { root02, dir } = setup(true);
+  Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
+  const roDir = root02.openAt(FOLLOW, "sub", { directory: true }, READ);
+  assertEq(payload(() => roDir.setTimes(NOW, NOW)), "read-only");
+  const roFile = root02.openAt(FOLLOW, "seed.txt", {}, READ);
+  assertEq(payload(() => roFile.setTimes(NOW, NOW)), "bad-descriptor");
+  root02.openAt(FOLLOW, "seed.txt", {}, RW).setTimes(NOW, NOW); // no throw
+});
+
+// --- kind before permission: a path-op through a FILE is not-directory ------------
+
+Deno.test("fs-descriptor-flags 0.2: path ops on a file descriptor say not-directory", () => {
+  const { root02 } = setup(true);
+  const f = root02.openAt(FOLLOW, "seed.txt", {}, READ);
+  assertEq(payload(() => f.createDirectoryAt("made")), "not-directory");
+  assertEq(payload(() => f.unlinkFileAt("other.txt")), "not-directory");
+  // Two-descriptor op, wrong-kind DESTINATION: still not-directory, and
+  // reported before any permission verdict.
+  assertEq(payload(() => root02.renameAt("seed.txt", f, "moved.txt")), "not-directory");
+});
+
+Deno.test("fs-descriptor-flags 0.2: a write-only file descriptor still writes", () => {
+  const { root02, dir } = setup(true);
+  const f = root02.openAt(FOLLOW, "seed.txt", {}, { write: true });
+  assertEq(f.write(new TextEncoder().encode("X"), 0n), 1n);
+  f.setSize(1n);
+  assertEq(Deno.readTextFileSync(`${dir}/seed.txt`), "X");
+});
+
+// --- 0.3: the per-descriptor layer is the same code, spot-checked -----------------
+
+Deno.test("fs-descriptor-flags 0.3: the same refusals, variant-shaped", async () => {
+  const { root03, dir } = setup(true);
+  Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
+  const ro = (await root03.openAt(FOLLOW, "sub", { directory: true }, READ)) as D03;
+  assertReadOnly03(() => ro.createDirectoryAt("made"));
+  assertReadOnly03(() => ro.openAt(FOLLOW, "inner.txt", {}, RW));
+  // set-times dispatch: directory -> read-only, file -> bad-descriptor.
+  assertReadOnly03(() => ro.setTimes(NOW, NOW));
+  const roFile = (await root03.openAt(FOLLOW, "seed.txt", {}, READ)) as D03;
+  assertEq((payload(() => roFile.setTimes(NOW, NOW)) as { kind: string }).kind, "bad-descriptor");
 });
 
 // --- the async backend inherits the same refusals ---------------------------------
