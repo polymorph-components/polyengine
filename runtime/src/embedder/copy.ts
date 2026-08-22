@@ -32,7 +32,7 @@ export const COPY_URL: string = import.meta.url;
  * @internal — copy-identity constant for the A9 multi-copy diagnostics; not
  * host-facing.
  */
-export const RUNTIME_VERSION = "0.3.2";
+export const RUNTIME_VERSION = "0.4.0";
 
 /**
  * Compose a cross-copy diagnostic: what was foreign, which copy is speaking,

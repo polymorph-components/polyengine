@@ -32,11 +32,12 @@ Their jco blockers map one-for-one onto this project's proven strengths
   ([#16](https://github.com/polymorph-components/polyengine/issues/16), 2026-08-16) and are
   caret-honest — still 0.x/unstable, compatible within a minor line,
   breaking changes bump the minor — so consumers couple via caret
-  constraints (`jsr:@polyengine/*@^0.1.0`), with `pre-<shorthash>` prerelease
+  constraints (`jsr:@polyengine/*@^0.4.0`), with `pre-<shorthash>` prerelease
   artifacts (exact pins) and git references for tracking `main` between
   releases. That first caret line ran under the project's former name, in
-  the `@deltic` scope, through `0.2.1`; the rename restarts the numbering
-  at `@polyengine/*@0.1.0` (see "The scope rename" below).
+  the `@deltic` scope, through `0.2.1`; the `@polyengine` line begins at
+  `0.3.0` — the deltic-era `v*` tags survived the transfer, so lower
+  numbers would collide (#206; see "The scope rename" below).
 - **WASI interfaces are design inputs even though implementations stay
   out of core.** The conventions must make wasi p2 idioms (pollables, io
   streams, error-code enums, resource-heavy surfaces) and p3 idioms
@@ -140,8 +141,8 @@ What a consumer changes when its turn comes:
 | Surface | Before | After |
 |---|---|---|
 | package specifiers | `jsr:@deltic/{runtime,protocol,translator,wasi,ct-runner}` | `jsr:@polyengine/…` |
-| version line | `0.2.x` | restarts at `0.1.0` (new scope, fresh numbering) |
-| cross-copy brands | `Symbol.for("deltic.witError/1")` and siblings | `Symbol.for("polyengine.witError/1")` — see [embedder-api.md](../contracts/embedder-api.md) amendment A18 |
+| version line | `0.2.x` | continues at `0.3.0` (first number clear of the surviving deltic-era tags, #206) |
+| cross-copy brands | `Symbol.for("deltic.witError/1")` and siblings | `Symbol.for("polyengine.componentException/1")` — see [embedder-api.md](../contracts/embedder-api.md) amendments A18/A19 (A18 shipped this key as `polyengine.witError/1`; A19 renamed the leaf) |
 | environment | `DELTIC_TRANSLATOR`, `DELTIC_SCHED_SEED`, `DELTIC_DRIVE_TRACE` | `POLYENGINE_*` |
 | release assets | `deltic-embedder.mjs`, `deltic-translator-shim.wasm` | `polyengine-*` |
 | ct-runner envelope target | `deltic/host` (the CLI default) | `polyengine/host` |
@@ -155,9 +156,10 @@ never partially.
 **What survives the rename, and what does not.** The JSR packages do: JSR
 versions are immutable, so `@deltic/*` through `0.2.1` stays resolvable
 forever and an un-migrated consumer keeps building. The deltic-era **GitHub
-releases** do not: `v0.1.0`, `v0.2.0` and `v0.2.1` were deleted so the
-`@polyengine` line could restart its numbering at `0.1.0` without colliding
-with the tags the transfer carried over. That deletion loses nothing. A
+releases** do not: `v0.1.0`, `v0.2.0` and `v0.2.1` were deleted during the
+rename. Their *tags* survived, which is why the `@polyengine` line starts
+at `0.3.0` — `gh release create` on a `0.1.x`/`0.2.x` version would attach
+to the old tag's commit (#206). A
 release can only be cut from a commit that already has a green
 `pre-<shorthash>` prerelease (release.yml's guard), so each deleted `v*`
 release has a surviving prerelease twin at the same commit carrying

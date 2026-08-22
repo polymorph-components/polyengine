@@ -164,7 +164,7 @@ export class Stream<T> {
   private constructor(host: HostStream<T> | null, codec: ElemCodec<T> | null) {
     this.#host = host;
     this.#codec = codec;
-    // A19 (contracts/embedder-api.md §"Realm boundaries and
+    // A20 (contracts/embedder-api.md §"Realm boundaries and
     // structured-clone-safe forms"; issue #131): the realm-local pill —
     // stateful handles must fail loud (DataCloneError) at a raw
     // structuredClone/postMessage instead of husking silently.
@@ -386,7 +386,7 @@ export class StreamWriter<T> {
 
   constructor(stream: Stream<T>) {
     this.#stream = stream;
-    // A19 realm-local pill (see Stream's constructor above for rationale).
+    // A20 realm-local pill (see Stream's constructor above for rationale).
     defineRealmLocal(this);
   }
 
@@ -483,7 +483,7 @@ export class Future<T> implements PromiseLike<T> {
     this.#host = host;
     this.#hostP = hostP;
     this.#codec = codec;
-    // A19 realm-local pill (see Stream's constructor above for rationale).
+    // A20 realm-local pill (see Stream's constructor above for rationale).
     defineRealmLocal(this);
   }
 
@@ -661,7 +661,7 @@ export class ErrorContext {
   constructor(internal: InternalErrorContext) {
     this.internal = internal;
     this.message = internal.debugMessage;
-    // A19 realm-local pill (see Stream's constructor above for rationale).
+    // A20 realm-local pill (see Stream's constructor above for rationale).
     // Note: envelope-encodable brands take precedence over the pill at
     // toCloneable time (ErrorContext carries both ERROR_CONTEXT and the
     // pill; it encodes) — the pill here is only the backstop for raw

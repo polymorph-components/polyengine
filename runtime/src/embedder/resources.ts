@@ -76,7 +76,7 @@ export class GuestResource {
   declare [STATE]: WrapperState;
 
   constructor() {
-    // A19 (contracts/embedder-api.md §"Realm boundaries and
+    // A20 (contracts/embedder-api.md §"Realm boundaries and
     // structured-clone-safe forms"; issue #131): guest-resource wrappers are
     // realm-local by principle (their machinery lives in the minting
     // copy's tables, issue #129's identity rule) — the pill makes a raw
@@ -434,7 +434,7 @@ export function makeWrapper(
   owns: boolean,
 ): GuestResource {
   const w = Object.create(cls.prototype) as GuestResource;
-  // A19: `Object.create` bypasses `GuestResource`'s constructor, so the
+  // A20: `Object.create` bypasses `GuestResource`'s constructor, so the
   // realm-local pill is installed explicitly here (see that constructor).
   defineRealmLocal(w);
   initWrapper(w, {

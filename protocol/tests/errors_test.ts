@@ -40,10 +40,10 @@ Deno.test("A9: the brands do not cross-talk", () => {
 
 Deno.test("A9: a hand-rolled brand IS the value (zero-import host module)", () => {
   // Precisely the shape contracts/embedder-api.md blesses: "an Error with
-  // [Symbol.for('polyengine.witError/1')]: true and a payload property IS a
+  // [Symbol.for('polyengine.componentException/1')]: true and a payload property IS a
   // ComponentException to every copy".
   const e = Object.assign(new Error("boom"), {
-    [Symbol.for("polyengine.witError/1")]: true,
+    [Symbol.for("polyengine.componentException/1")]: true,
     payload: { kind: "denied" },
   });
   assert(isComponentException(e));
@@ -65,10 +65,10 @@ Deno.test("A9: unbranded look-alikes are refused", () => {
   assertFalse(isComponentException({ payload: 1 }));
   assertFalse(isComponentException(null));
   assertFalse(isComponentException(undefined));
-  assertFalse(isComponentException("polyengine.witError/1"));
+  assertFalse(isComponentException("polyengine.componentException/1"));
   assertFalse(isComponentException(42));
   // Present but not exactly `true`: refused (no truthiness coercion).
-  assertFalse(isComponentException({ [Symbol.for("polyengine.witError/1")]: 1 }));
+  assertFalse(isComponentException({ [Symbol.for("polyengine.componentException/1")]: 1 }));
 });
 
 Deno.test("A9: predicates are NOT instanceof — a foreign prototype passes", () => {
@@ -83,7 +83,7 @@ Deno.test("A9: predicates are NOT instanceof — a foreign prototype passes", ()
   }
   Object.defineProperty(
     ForeignComponentException.prototype,
-    Symbol.for("polyengine.witError/1"),
+    Symbol.for("polyengine.componentException/1"),
     { value: true },
   );
   const e = new ForeignComponentException({ kind: "x" });

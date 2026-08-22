@@ -85,8 +85,8 @@ anything breaking bumps the minor — so caret constraints are the intended
 way to consume:
 
 ```ts
-import { instantiate } from "jsr:@polyengine/runtime@^0.3.0/embedder";
-import { defaultTranslator } from "jsr:@polyengine/translator@^0.3.0";
+import { instantiate } from "jsr:@polyengine/runtime@^0.4.0/embedder";
+import { defaultTranslator } from "jsr:@polyengine/translator@^0.4.0";
 ```
 
 The same five packages ship to **npm** under the same names, built from the

@@ -11,7 +11,7 @@
   "tasks": {
     "gen": "cargo run -q -p testgen --manifest-path ../Cargo.toml",
     "shim-check": "test -f ../target/wasm32-unknown-unknown/release/translator_shim.wasm || cargo build -p translator-shim --manifest-path ../Cargo.toml --target wasm32-unknown-unknown --release",
-    "test": "deno test --allow-read=.. --allow-env=CONFORMANCE_EXECUTOR tests/",
+    "test": "deno test --allow-read=.. --allow-env=CONFORMANCE_EXECUTOR,POLYENGINE_SCHED_SEED tests/",
     "conformance": "deno task gen && deno task shim-check && deno task test",
     "browser:bundle": "deno run -A ../tools/browser/bundle.ts",
     "browser:chromium": "deno task gen && deno task shim-check && deno run -A ../tools/browser/run-lane.ts chromium",

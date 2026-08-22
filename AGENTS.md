@@ -44,7 +44,7 @@ just examples test-translate  # embedder examples; build-time translation CLI
 just conformance          # official CM suite, Deno lane
 just sched-seeds          # seeded-shuffle reruns: POLYENGINE_SCHED_SEED=1, =4242 (FIFO when unset)
 just shells               # pinned engine/runtime lanes: sm + node everywhere, jsc on x64, bun findings-only
-just browsers             # chromium + firefox lanes (`just browsers-install` once)
+just browsers             # chromium + firefox lanes incl. worker/shared-worker realm rows (`just browsers-install` once)
 just smoke-tls            # polymorph-tls suite (issue #18)
 just smoke-c0             # C0 smoke legs
 ```

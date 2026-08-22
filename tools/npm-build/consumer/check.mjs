@@ -31,7 +31,7 @@ const embedder = await import("@polyengine/runtime/embedder");
 
 assert.equal(
   protocol.COMPONENT_EXCEPTION,
-  Symbol.for("polyengine.witError/1"),
+  Symbol.for("polyengine.componentException/1"),
   "brand key is not the expected registry symbol",
 );
 assert.equal(protocol.PROTOCOL_GENERATION, 1, "unexpected brand generation");
@@ -42,13 +42,13 @@ assert.ok(
   "a runtime-minted ComponentException is not recognized by the protocol package",
 );
 assert.ok(
-  thrown[Symbol.for("polyengine.witError/1")],
+  thrown[Symbol.for("polyengine.componentException/1")],
   "the brand symbol is not present on the instance",
 );
 
 // A hand-rolled brand — the zero-import host-module path — must be honored too.
 const handRolled = Object.assign(new Error("hand-rolled"), {
-  [Symbol.for("polyengine.witError/1")]: true,
+  [Symbol.for("polyengine.componentException/1")]: true,
   payload: { kind: "smoke" },
 });
 assert.ok(

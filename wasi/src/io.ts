@@ -111,7 +111,7 @@ export class Pollable {
   ) {
     this.#ready = ready;
     this.#wait = wait;
-    // A19 realm-local pill (contracts/embedder-api.md §"Realm boundaries
+    // A20 realm-local pill (contracts/embedder-api.md §"Realm boundaries
     // and structured-clone-safe forms"; issue #131): stateful handles fail
     // loud at a raw structuredClone/postMessage instead of husking.
     defineRealmLocal(this);

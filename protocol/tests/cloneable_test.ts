@@ -1,6 +1,6 @@
 // Round-trip law and refusals for the structured-clone-safe forms
 // (contracts/embedder-api.md §"Realm boundaries and structured-clone-safe
-// forms", amendment A19; issue #131).
+// forms", amendment A20; issue #131).
 //
 // The clone step is a REAL `structuredClone` throughout, never a hand-rolled
 // stand-in: the whole point of the envelope is that it survives the platform
@@ -36,7 +36,7 @@ function roundTrip(v: unknown): unknown {
   return fromCloneable(structuredClone(toCloneable(v)));
 }
 
-Deno.test("A19: ComponentException round-trips exact for every matcher", () => {
+Deno.test("A20: ComponentException round-trips exact for every matcher", () => {
   const e = new ComponentException({ kind: "denied", value: 7 }, "nope");
   const out = roundTrip(e) as ComponentException<
     { kind: string; value: number }
@@ -48,7 +48,7 @@ Deno.test("A19: ComponentException round-trips exact for every matcher", () => {
   assertEquals(out.stack, e.stack, "the sender's stack is the useful one");
 });
 
-Deno.test("A19: a payloadless variant keeps `value` ABSENT", () => {
+Deno.test("A20: a payloadless variant keeps `value` ABSENT", () => {
   const out = roundTrip(
     new ComponentException({ kind: "timed-out" }),
   ) as ComponentException<Record<string, unknown>>;
@@ -56,7 +56,7 @@ Deno.test("A19: a payloadless variant keeps `value` ABSENT", () => {
   assertFalse("value" in out.payload, "`value` must not materialize");
 });
 
-Deno.test("A19: an undefined payload survives as undefined, not absent", () => {
+Deno.test("A20: an undefined payload survives as undefined, not absent", () => {
   const out = roundTrip(
     new ComponentException(undefined),
   ) as ComponentException;
@@ -64,7 +64,7 @@ Deno.test("A19: an undefined payload survives as undefined, not absent", () => {
   assertEquals(out.payload, undefined);
 });
 
-Deno.test("A19: nested record/list payloads keep binary content", () => {
+Deno.test("A20: nested record/list payloads keep binary content", () => {
   const e = new ComponentException({
     kind: "io",
     value: { chunks: [new Uint8Array([1, 2, 3]), new Uint8Array([])], n: 2n },
@@ -78,7 +78,7 @@ Deno.test("A19: nested record/list payloads keep binary content", () => {
   assert(out.payload.value.n === 2n, "bigint passes through");
 });
 
-Deno.test("A19: Trap / DroppedError / InvalidHandleError round-trip", () => {
+Deno.test("A20: Trap / DroppedError / InvalidHandleError round-trip", () => {
   const t = roundTrip(new Trap("boom")) as Trap;
   assert(isTrap(t));
   assertEquals([t.name, t.message], ["Trap", "boom"]);
@@ -92,7 +92,7 @@ Deno.test("A19: Trap / DroppedError / InvalidHandleError round-trip", () => {
   assertEquals(i.message, "gone");
 });
 
-Deno.test("A19: PeerTrappedError keeps message, progress and its cause chain", () => {
+Deno.test("A20: PeerTrappedError keeps message, progress and its cause chain", () => {
   const inner = new Trap("guest trapped");
   const e = new PeerTrappedError("stream write", inner, 3);
   const out = roundTrip(e) as PeerTrappedError;
@@ -103,7 +103,7 @@ Deno.test("A19: PeerTrappedError keeps message, progress and its cause chain", (
   assertEquals((out.cause as Trap).message, "guest trapped");
 });
 
-Deno.test("A19: progress stays out of the envelope when the sender had none", () => {
+Deno.test("A20: progress stays out of the envelope when the sender had none", () => {
   // (`progress` is a declared class field, so the property itself exists on
   // every instance; what must not happen is a fabricated VALUE.)
   const enc = toCloneable(new PeerTrappedError("w", new Trap())) as Record<
@@ -117,7 +117,7 @@ Deno.test("A19: progress stays out of the envelope when the sender had none", ()
   assertEquals(out.progress, undefined);
 });
 
-Deno.test("A19: StreamProducerError carries an unbranded cause as an Error", () => {
+Deno.test("A20: StreamProducerError carries an unbranded cause as an Error", () => {
   const cause = new RangeError("out of range");
   const out = roundTrip(
     new StreamProducerError("site", cause),
@@ -128,12 +128,12 @@ Deno.test("A19: StreamProducerError carries an unbranded cause as an Error", () 
   assertEquals([c.name, c.message], ["RangeError", "out of range"]);
 });
 
-Deno.test("A19: a cause chain survives to full depth through an unbranded link", () => {
+Deno.test("A20: a cause chain survives to full depth through an unbranded link", () => {
   // The runtime's real peer-fault shape (runtime/src/task/streams.ts:876-883):
   // the recorded poisoning failure is a plain `new Error(msg, { cause })`
   // whose cause is the underlying branded `Trap`. The trap at the bottom must
   // still satisfy `isTrap` after the crossing, or a proxy cannot distinguish
-  // a peer fault from a clean drop's cousin (A19 round-trip law).
+  // a peer fault from a clean drop's cousin (A20 round-trip law).
   const e = new PeerTrappedError(
     "read",
     new Error("instance trapped while holding an end", {
@@ -159,12 +159,12 @@ Deno.test("A19: a cause chain survives to full depth through an unbranded link",
   assertEquals(trap.message, "guest trapped: unreachable");
 });
 
-Deno.test("A19: a cause absent at the sender stays absent", () => {
+Deno.test("A20: a cause absent at the sender stays absent", () => {
   const out = roundTrip(new Trap("bare")) as Trap;
   assertFalse("cause" in out, "absent and undefined-valued are different");
 });
 
-Deno.test("A19: a hand-rolled brand encodes identically to the class", () => {
+Deno.test("A20: a hand-rolled brand encodes identically to the class", () => {
   const rolled = Object.assign(new Error("boom"), {
     [COMPONENT_EXCEPTION]: true,
     payload: { kind: "denied" },
@@ -181,7 +181,7 @@ Deno.test("A19: a hand-rolled brand encodes identically to the class", () => {
   assertEquals(out.payload.kind, "denied");
 });
 
-Deno.test("A19: error-context round-trips as a branded message carrier", () => {
+Deno.test("A20: error-context round-trips as a branded message carrier", () => {
   const ctx = { message: "guest said no" };
   defineBrand(ctx, ERROR_CONTEXT);
   const out = roundTrip(ctx) as { message: string };
@@ -189,9 +189,9 @@ Deno.test("A19: error-context round-trips as a branded message carrier", () => {
   assertEquals(out.message, "guest said no");
 });
 
-Deno.test("A19: an ErrorContext-shaped value encodes despite its pill", () => {
+Deno.test("A20: an ErrorContext-shaped value encodes despite its pill", () => {
   // The realm-local pill and an envelope-encodable brand coexist on a lifted
-  // `ErrorContext`; the envelope wins (A19 walk semantics).
+  // `ErrorContext`; the envelope wins (A20 walk semantics).
   const ctx = { message: "both" };
   defineBrand(ctx, ERROR_CONTEXT);
   defineRealmLocal(ctx);
@@ -200,7 +200,7 @@ Deno.test("A19: an ErrorContext-shaped value encodes despite its pill", () => {
   assertEquals(out.message, "both");
 });
 
-Deno.test("A19: a wasi exit unwind round-trips by brand, not by import", () => {
+Deno.test("A20: a wasi exit unwind round-trips by brand, not by import", () => {
   const exit = Object.assign(new Error("exit(3)"), { ok: false, code: 3 });
   exit.name = "ExitError";
   defineBrand(exit, WASI_EXIT);
@@ -217,13 +217,13 @@ Deno.test("A19: a wasi exit unwind round-trips by brand, not by import", () => {
   assertFalse("code" in cleanOut);
 });
 
-Deno.test("A19: an unbranded Error rides the `error` row", () => {
+Deno.test("A20: an unbranded Error rides the `error` row", () => {
   const out = roundTrip(new TypeError("bad")) as Error;
   assert(out instanceof Error);
   assertEquals([out.name, out.message], ["TypeError", "bad"]);
 });
 
-Deno.test("A19: containers are rebuilt fresh, leaves pass through", () => {
+Deno.test("A20: containers are rebuilt fresh, leaves pass through", () => {
   const v = { list: [1, "a", true, null], nested: { n: 1n }, u: undefined };
   const enc = toCloneable(v) as typeof v;
   assertFalse(enc === v, "fresh containers");
@@ -233,7 +233,7 @@ Deno.test("A19: containers are rebuilt fresh, leaves pass through", () => {
   assert("u" in out && out.u === undefined);
 });
 
-Deno.test("A19: Map/Set/Date pass through unwalked", () => {
+Deno.test("A20: Map/Set/Date pass through unwalked", () => {
   const d = new Date(0);
   const enc = toCloneable({ d, m: new Map([["k", 1]]) }) as {
     d: Date;
@@ -250,7 +250,7 @@ Deno.test("A19: Map/Set/Date pass through unwalked", () => {
 
 // --- refusals ------------------------------------------------------------
 
-Deno.test("A19: a realm-local leaf is refused, with its path named", () => {
+Deno.test("A20: a realm-local leaf is refused, with its path named", () => {
   const handle = {};
   defineRealmLocal(handle);
   const e = assertThrows(
@@ -262,7 +262,7 @@ Deno.test("A19: a realm-local leaf is refused, with its path named", () => {
   assert(e.message.includes("Proxy the interface, not the handle"));
 });
 
-Deno.test("A19: a STREAM-branded value is realm-local too", () => {
+Deno.test("A20: a STREAM-branded value is realm-local too", () => {
   const stream = {};
   defineBrand(stream, STREAM);
   assertThrows(
@@ -272,7 +272,7 @@ Deno.test("A19: a STREAM-branded value is realm-local too", () => {
   );
 });
 
-Deno.test("A19: functions and symbols are TypeErrors naming the path", () => {
+Deno.test("A20: functions and symbols are TypeErrors naming the path", () => {
   assertThrows(() => toCloneable({ f: () => {} }), TypeError, "value.f");
   assertThrows(
     () => toCloneable([{ "odd key": Symbol("s") }]),
@@ -281,7 +281,7 @@ Deno.test("A19: functions and symbols are TypeErrors naming the path", () => {
   );
 });
 
-Deno.test("A19: a genuine cycle is refused; DAG aliasing is duplicated", () => {
+Deno.test("A20: a genuine cycle is refused; DAG aliasing is duplicated", () => {
   const cyclic: Record<string, unknown> = {};
   cyclic.self = cyclic;
   assertThrows(() => toCloneable(cyclic), TypeError, "value.self");
@@ -294,7 +294,7 @@ Deno.test("A19: a genuine cycle is refused; DAG aliasing is duplicated", () => {
   assertFalse(dag.a === dag.b, "aliasing is not preserved, only cycles refuse");
 });
 
-Deno.test("A19: an input already carrying the tag key is refused", () => {
+Deno.test("A20: an input already carrying the tag key is refused", () => {
   assertThrows(
     () => toCloneable({ inner: { "polyengine.cloneable/1": "error" } }),
     TypeError,
@@ -302,7 +302,7 @@ Deno.test("A19: an input already carrying the tag key is refused", () => {
   );
 });
 
-Deno.test("A19: an unknown tag fails loud at fromCloneable", () => {
+Deno.test("A20: an unknown tag fails loud at fromCloneable", () => {
   assertThrows(
     () =>
       fromCloneable({ x: { "polyengine.cloneable/1": "polyengine.woo/9" } }),
@@ -311,14 +311,14 @@ Deno.test("A19: an unknown tag fails loud at fromCloneable", () => {
   );
 });
 
-Deno.test("A19: a foreign prototype is refused", () => {
+Deno.test("A20: a foreign prototype is refused", () => {
   class Widget {}
   assertThrows(() => toCloneable({ w: new Widget() }), TypeError, "value.w");
 });
 
 // --- the replace hook ----------------------------------------------------
 
-Deno.test("A19: replace substitutes plain data, which is then walked", () => {
+Deno.test("A20: replace substitutes plain data, which is then walked", () => {
   const handle = {};
   defineRealmLocal(handle);
   const seen: string[] = [];
@@ -344,7 +344,7 @@ Deno.test("A19: replace substitutes plain data, which is then walked", () => {
   );
 });
 
-Deno.test("A19: replace returning undefined or the leaf falls through", () => {
+Deno.test("A20: replace returning undefined or the leaf falls through", () => {
   const handle = {};
   defineRealmLocal(handle);
   assertThrows(
@@ -361,7 +361,7 @@ Deno.test("A19: replace returning undefined or the leaf falls through", () => {
 
 // --- pill mechanics ------------------------------------------------------
 
-Deno.test("A19: the pill trips the serializer, and only the serializer", () => {
+Deno.test("A20: the pill trips the serializer, and only the serializer", () => {
   const handle: Record<string, unknown> = { id: 1 };
   defineRealmLocal(handle);
 
@@ -390,7 +390,7 @@ Deno.test("A19: the pill trips the serializer, and only the serializer", () => {
 
 // --- the actual point: a real realm boundary -----------------------------
 
-Deno.test("A19: the envelope survives a real cross-realm postMessage", async () => {
+Deno.test("A20: the envelope survives a real cross-realm postMessage", async () => {
   const worker = new Worker(import.meta.resolve("./cloneable_worker.ts"), {
     type: "module",
   });

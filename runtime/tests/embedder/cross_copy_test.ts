@@ -90,8 +90,8 @@ Deno.test("A9: a foreign Future is refused, not silently adopted as a thenable",
   assertTrue(m.includes("Promise.resolve(f)"), "names the by-value remediation");
 });
 
-Deno.test("A9: a foreign error-context is named cross-copy, not 'expected an ErrorContext' (A19: only without a string message)", () => {
-  // A19 (contracts/embedder-api.md §"Error-context is message-valued";
+Deno.test("A9: a foreign error-context is named cross-copy, not 'expected an ErrorContext' (A20: only without a string message)", () => {
+  // A20 (contracts/embedder-api.md §"Error-context is message-valued";
   // issue #131): a branded carrier of a STRING message is now message-valued
   // and accepted (mints a fresh local context) — the loud cross-copy
   // refusal survives only for a branded carrier WITHOUT a string message,

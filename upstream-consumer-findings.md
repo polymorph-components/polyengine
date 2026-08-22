@@ -221,6 +221,30 @@ operator's call.
 
 ---
 
+## POLYVISOR-1 — docs spike vendors a full deltic-0.1.0 engine bundle (DRAFT)
+
+**Repo:** polyvisor. **Where:** `docs/spike-todomvc/app.js` — a checked-in
+minified bundle containing an entire deltic-era engine copy (protocol
+brands, canonical classes, plan validation, CABI; `RUNTIME_VERSION`
+"0.1.0", `deltic.*/1` brand keys, `DELTIC_SCHED_SEED`).
+
+**Why it matters:** this is the one raw `deltic.witError/1` spelling left
+anywhere in the consumer family (audited 2026-08-22 during embedder-api
+amendment A19; every live consumer imports the canonical classes via
+`@deltic/runtime/embedder` or `@polyengine/runtime/embedder`, none
+hand-roll brands or import the protocol package directly). A vendored
+bundle is exactly the multi-copy scenario A18/A19 leave undiagnosed: its
+brand namespace is disjoint from both the current `@deltic@0.2.x` line
+and every `@polyengine` line, so if the spike is ever revived next to a
+current engine copy, values simply go unrecognized — no error names the
+mismatch.
+
+**Proposed fix:** regenerate (or delete) the bundle when polyvisor takes
+its migration turn; until then it is inert documentation. Filing is the
+operator's call.
+
+---
+
 ## Out of scope here, tracked where they belong
 
 - Spec/reference findings: `upstream-component-model-repo-findings.md`.

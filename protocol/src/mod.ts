@@ -51,7 +51,7 @@ export {
   ComponentException,
 } from "./errors.ts";
 
-// Realm-boundary crossings (amendment A19; issue #131). The envelope TAG is
+// Realm-boundary crossings (amendment A20; issue #131). The envelope TAG is
 // deliberately not exported: the form is version-internal, and an exported
 // constant invites persistence on it.
 export {

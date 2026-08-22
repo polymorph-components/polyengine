@@ -11,7 +11,7 @@ import * as brands from "../src/brands.ts";
 import { PROTOCOL_GENERATION, ComponentException } from "../src/mod.ts";
 
 const EXPECTED: Record<string, symbol> = {
-  "polyengine.witError/1": brands.COMPONENT_EXCEPTION,
+  "polyengine.componentException/1": brands.COMPONENT_EXCEPTION,
   "polyengine.trap/1": brands.TRAP,
   "polyengine.dropped/1": brands.DROPPED,
   "polyengine.peerTrapped/1": brands.PEER_TRAPPED,
@@ -27,7 +27,7 @@ const EXPECTED: Record<string, symbol> = {
   "polyengine.runtimeCopies/1": brands.RUNTIME_COPIES,
 };
 
-// The realm-local pill (amendment A19) is a STRING key, not a registry
+// The realm-local pill (amendment A20) is a STRING key, not a registry
 // symbol, so it sits outside the table above — but it is shared vocabulary
 // across copies exactly as the brands are, and renaming it is the same
 // breaking ecosystem event. Pinned literally for the same reason.
@@ -48,7 +48,7 @@ Deno.test("A9: the table is exhaustive — no unpinned exported brand", () => {
   assertEquals(exported, Object.keys(EXPECTED).sort());
 });
 
-Deno.test("A19: the realm-local pill key is exactly the contract's spelling", () => {
+Deno.test("A20: the realm-local pill key is exactly the contract's spelling", () => {
   assertEquals(brands.REALM_LOCAL, EXPECTED_REALM_LOCAL);
   assertEquals(EXPECTED_REALM_LOCAL.endsWith(`/${PROTOCOL_GENERATION}`), true);
 });

@@ -147,7 +147,7 @@ Deno.test({
     // The zero-import host-module path: no polyengine import anywhere.
     const viaHandRolled = await withImport(() => {
       throw Object.assign(new Error("x"), {
-        [Symbol.for("polyengine.witError/1")]: true,
+        [Symbol.for("polyengine.componentException/1")]: true,
         payload: "hand-rolled",
       });
     });

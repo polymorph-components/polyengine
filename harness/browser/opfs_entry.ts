@@ -35,9 +35,19 @@ interface CheckResult {
   detail?: string;
 }
 
+/**
+ * JS realm the battery ran in (issue #129, realm neutrality — same
+ * vocabulary as `harness/browser/entry.ts`'s `Realm`, kept independent so
+ * this file has no import-time dependency on the sibling conformance-lane
+ * track).
+ */
+export type OpfsRealm = "page" | "worker" | "shared-worker";
+
 export interface OpfsSmokeReport {
   userAgent: string;
   renamePath: "move" | "copy-delete" | "unknown";
+  /** Which realm actually ran the battery (issue #129). */
+  realm: OpfsRealm;
   direct: CheckResult[];
   composed: CheckResult[];
 }
@@ -131,7 +141,13 @@ async function smokeDir(name: string): Promise<OpfsDirectoryHandle> {
 
 // --- half 1: the direct battery ----------------------------------------------------
 
-async function runDirect(report: OpfsSmokeReport): Promise<void> {
+/**
+ * The battery itself (both halves), exported so `opfs_worker_entry.ts` can
+ * run the SAME code inside a dedicated/shared worker realm. Pure functions
+ * of a report object plus real ambient (navigator.storage, fetch) — nothing
+ * here is page-only, so it is import-safe from a worker module.
+ */
+export async function runDirect(report: OpfsSmokeReport): Promise<void> {
   const dir = await smokeDir("polyengine-opfs-smoke-direct");
   // The rename-path probe belongs on a FILE handle: Chromium ships
   // `move()` there (not on directory handles); Firefox on neither.
@@ -262,7 +278,7 @@ async function runDirect(report: OpfsSmokeReport): Promise<void> {
 
 // --- half 2: the composed fs-probe guest --------------------------------------------
 
-async function runComposed(report: OpfsSmokeReport): Promise<void> {
+export async function runComposed(report: OpfsSmokeReport): Promise<void> {
   const push = (name: string, ok: boolean, detail?: string): void => {
     report.composed.push({ name, ok, ...(detail === undefined ? {} : { detail }) });
   };
@@ -295,10 +311,11 @@ async function runComposed(report: OpfsSmokeReport): Promise<void> {
   }
 }
 
-async function runSmoke(): Promise<OpfsSmokeReport> {
+async function runSmokeInPage(): Promise<OpfsSmokeReport> {
   const report: OpfsSmokeReport = {
     userAgent: navigator.userAgent,
     renamePath: "unknown",
+    realm: "page",
     direct: [],
     composed: [],
   };
@@ -311,4 +328,44 @@ async function runSmoke(): Promise<OpfsSmokeReport> {
   return report;
 }
 
-(globalThis as { __opfsSmoke?: () => Promise<OpfsSmokeReport> }).__opfsSmoke = runSmoke;
+/**
+ * "worker" / "shared-worker": spawn `/dist/opfs_worker_entry.js` as the
+ * respective worker kind and run the SAME battery inside that realm — the
+ * OPFS × JSPI-parking × worker-realm intersection issue #129 exists to pin.
+ * The worker posts back `{kind:"report",report}` or
+ * `{kind:"fatal",detail}`; this resolves/rejects accordingly.
+ */
+function runSmokeInWorker(realm: "worker" | "shared-worker"): Promise<OpfsSmokeReport> {
+  return new Promise((resolve, reject) => {
+    type Msg =
+      | { kind: "report"; report: OpfsSmokeReport }
+      | { kind: "fatal"; detail: string };
+
+    const onMessage = (data: Msg) => {
+      if (data.kind === "report") resolve(data.report);
+      else reject(new Error(`worker realm fatal: ${data.detail}`));
+    };
+
+    if (realm === "worker") {
+      const w = new Worker("/dist/opfs_worker_entry.js", { type: "module" });
+      w.onmessage = (ev: MessageEvent) => onMessage(ev.data as Msg);
+      w.onerror = (ev: ErrorEvent) =>
+        reject(new Error(`dedicated worker error: ${ev.message}`));
+      w.postMessage({ kind: "start", realm });
+    } else {
+      const w = new SharedWorker("/dist/opfs_worker_entry.js", { type: "module" });
+      w.port.onmessage = (ev: MessageEvent) => onMessage(ev.data as Msg);
+      w.onerror = (ev: Event) =>
+        reject(new Error(`shared worker error: ${(ev as ErrorEvent).message ?? "unknown"}`));
+      w.port.start();
+      w.port.postMessage({ kind: "start", realm });
+    }
+  });
+}
+
+async function runSmoke(realm?: OpfsRealm): Promise<OpfsSmokeReport> {
+  if (realm === undefined || realm === "page") return await runSmokeInPage();
+  return await runSmokeInWorker(realm);
+}
+
+(globalThis as { __opfsSmoke?: (realm?: OpfsRealm) => Promise<OpfsSmokeReport> }).__opfsSmoke = runSmoke;

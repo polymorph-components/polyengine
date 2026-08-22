@@ -1,6 +1,6 @@
 {
   "name": "@polyengine/runtime",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "exports": {
     "./cache": "./src/cache/mod.ts",
     "./plan": "./src/plan/mod.ts",
@@ -9,7 +9,7 @@
     "./shim": "./src/shim/mod.ts"
   },
   "tasks": {
-    "test": "deno test --allow-read=..,/tmp --allow-write=/tmp",
+    "test": "deno test --allow-read=..,/tmp --allow-write=/tmp --allow-env=POLYENGINE_SCHED_SEED",
     "check": "deno check src tests",
     "gen-fixtures": "python3 tests/fixtures/generate.py"
   },

@@ -974,3 +974,41 @@ export const XFAIL: XfailEntry[] = [
 export function isXfail(file: string, line: number): boolean {
   return XFAIL.some((e) => e.file === file && e.line === line);
 }
+
+// ---------------------------------------------------------------------------
+// Schedule-profile-dependent corpus files — a different axis from XFAIL
+// above.
+//
+// XFAIL entries mean "the engine can't do this yet" (a capability gap).
+// The entries below mean the opposite: the ENGINE is fine, but the guest
+// component itself encodes an assumption that only holds under the
+// reference interpreter's DETERMINISTIC_PROFILE
+// (third_party/component-model/design/mvp/canonical-abi/definitions.py:1373),
+// where `Store.tick` (definitions.py:603) resolves ties in a fixed order
+// instead of `random.choice`. Our default FIFO policy matches that profile,
+// so these files are fully green normally — they only need to be skipped
+// when `POLYENGINE_SCHED_SEED` deliberately explores schedules BEYOND it
+// (see runtime/src/task/scheduler.ts's `readSeed`/seeded-shuffle policy).
+//
+// async/async-calls-sync.json (async-calls-sync.wast:183 area) is the
+// precedent for this class: the guest asserts each subtask's RETURNED value
+// equals its subtask index, where that index is `$AsyncInner`'s `$counter`,
+// handed out in the order backpressured tasks are RELEASED. That release
+// order is pinned only under DETERMINISTIC_PROFILE; under a seed the guest
+// can legitimately observe a different release order and hit its own
+// `unreachable` — a profile-dependent guest assumption failing, not an
+// engine fault. This is the exact class runtime/tests/jspi/handshake_test.ts
+// (lines ~40-58) already self-skips for the same file, for the same reason,
+// on the runtime side; this set lets harness/tests/conformance_test.ts do
+// the analogous self-skip on the conformance-suite side.
+//
+// Measured (orchestrator, this repo): reproduces identically at
+// POLYENGINE_SCHED_SEED = 1, 2, 3, 7, 4242, 99991 — always exactly this one
+// corpus file failing (wast lines 250/251, "expected return, got trap:
+// guest trapped: unreachable"), consistent with a scheduling-order-dependent
+// guest assertion rather than a flake or an engine regression.
+//
+// Corpus-relative path, same shape as XfailEntry.file.
+export const DETERMINISTIC_PROFILE_ONLY: ReadonlySet<string> = new Set([
+  "async/async-calls-sync.json",
+]);

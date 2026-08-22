@@ -1,10 +1,10 @@
-// A19 realm-local pill (contracts/embedder-api.md §"Realm boundaries and
+// A20 realm-local pill (contracts/embedder-api.md §"Realm boundaries and
 // structured-clone-safe forms"; issue #131): every stateful handle class
 // installs an own, enumerable, string-keyed, function-valued property
 // (`polyengine.realmLocal/1`) at construction, so a raw structuredClone or
 // postMessage throws DataCloneError in the sender realm instead of
 // delivering a husk. This file pins that backstop across every realm-local
-// class this track owns, plus the A19 message-valued error-context
+// class this track owns, plus the A20 message-valued error-context
 // lowering relaxation in values.ts.
 
 import { assertEq } from "../support/asserts.ts";
@@ -36,18 +36,18 @@ async function assertDataCloneError(
   }
 }
 
-Deno.test("A19: a raw structuredClone of a Stream throws DataCloneError", async () => {
+Deno.test("A20: a raw structuredClone of a Stream throws DataCloneError", async () => {
   const { stream } = Stream.create<number>();
   await assertDataCloneError(() => structuredClone(stream), "Stream");
 });
 
-Deno.test("A19: a raw structuredClone of a StreamWriter throws DataCloneError", async () => {
+Deno.test("A20: a raw structuredClone of a StreamWriter throws DataCloneError", async () => {
   const { writer } = Stream.create<number>();
   assertEq(writer instanceof StreamWriter, true);
   await assertDataCloneError(() => structuredClone(writer), "StreamWriter");
 });
 
-Deno.test("A19: a raw structuredClone of a Future throws DataCloneError", async () => {
+Deno.test("A20: a raw structuredClone of a Future throws DataCloneError", async () => {
   const codec = {
     element: { kind: "u32" } as ValType,
     toHost: (v: ComponentValue) => v as number,
@@ -60,14 +60,14 @@ Deno.test("A19: a raw structuredClone of a Future throws DataCloneError", async 
   await assertDataCloneError(() => structuredClone(f), "Future");
 });
 
-Deno.test("A19: a raw structuredClone of an embedder ErrorContext throws DataCloneError", async () => {
+Deno.test("A20: a raw structuredClone of an embedder ErrorContext throws DataCloneError", async () => {
   const ctx = new ErrorContext(new InternalErrorContext("boom"));
   await assertDataCloneError(() => structuredClone(ctx), "ErrorContext");
 });
 
 Deno.test({
   name:
-    "A19: a raw structuredClone of a guest-resource wrapper throws DataCloneError",
+    "A20: a raw structuredClone of a guest-resource wrapper throws DataCloneError",
   ignore: !ready,
   fn: async () => {
     const inst = await instantiateFixture(guest("resources"));
@@ -81,7 +81,7 @@ Deno.test({
   },
 });
 
-Deno.test("A19: the pill is buried — structuredClone descends into records/arrays", async () => {
+Deno.test("A20: the pill is buried — structuredClone descends into records/arrays", async () => {
   const { stream } = Stream.create<number>();
   await assertDataCloneError(
     () => structuredClone({ a: [{ b: stream }] }),
@@ -89,7 +89,7 @@ Deno.test("A19: the pill is buried — structuredClone descends into records/arr
   );
 });
 
-Deno.test("A19: JSON.stringify and spread of a pilled ErrorContext still work (function values omitted, not thrown)", () => {
+Deno.test("A20: JSON.stringify and spread of a pilled ErrorContext still work (function values omitted, not thrown)", () => {
   const ctx = new ErrorContext(new InternalErrorContext("boom"));
   // The pill is a function-valued property; JSON.stringify silently omits
   // function values (no throw) and object spread copies an inert reference.
@@ -99,7 +99,7 @@ Deno.test("A19: JSON.stringify and spread of a pilled ErrorContext still work (f
   assertEq(spread.message, "boom");
 });
 
-Deno.test("A19: error-context lowering accepts a hand-rolled branded carrier with a string message", () => {
+Deno.test("A20: error-context lowering accepts a hand-rolled branded carrier with a string message", () => {
   const brandKey = Symbol.for("polyengine.errorContext/1");
   const carrier = { [brandKey]: true, message: "why" };
   const lowered = fromHost(
@@ -109,12 +109,12 @@ Deno.test("A19: error-context lowering accepts a hand-rolled branded carrier wit
   ) as unknown as InternalErrorContext;
   assertEq(lowered instanceof InternalErrorContext, true);
   assertEq(lowered.debugMessage, "why");
-  // A19: a NEW local context is minted, never "the same" one — there is
+  // A20: a NEW local context is minted, never "the same" one — there is
   // nothing to alias for a hand-rolled carrier that owns no host state.
   assertEq(lowered === (carrier as unknown as InternalErrorContext), false);
 });
 
-Deno.test("A19: error-context lowering still refuses a branded carrier WITHOUT a string message", async () => {
+Deno.test("A20: error-context lowering still refuses a branded carrier WITHOUT a string message", async () => {
   const brandKey = Symbol.for("polyengine.errorContext/1");
   const carrier = { [brandKey]: true, message: 42 };
   const e = await caught(() =>

@@ -247,6 +247,17 @@ export function schedulerSeedForTesting(value: number | null): void {
   rngState = seed ?? 0;
 }
 
+/**
+ * Test hook: snapshot the module's current seed without mutating it. Used by
+ * the `just sched-seeds` regression guard (sched_seed_guard_test.ts) to
+ * confirm `readSeed()` actually picked up `POLYENGINE_SCHED_SEED` from the
+ * environment at import time, rather than silently falling back to FIFO for
+ * lack of `--allow-env`.
+ */
+export function schedulerSeedSnapshotForTesting(): number | null {
+  return seed;
+}
+
 export function schedulerPolicy(): "fifo" | "seeded-shuffle" {
   return seed === null ? "fifo" : "seeded-shuffle";
 }

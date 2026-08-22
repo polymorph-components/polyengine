@@ -87,7 +87,19 @@ instantiation"; amendment A18 (2026-08-21) renames the project from
 (`deltic.witError/1` → `polyengine.witError/1` and siblings) — a hard
 break with no compatibility spelling, superseding A10's freeze; the brand
 GENERATION stays `1` — see §"Module identity and @polyengine/protocol";
-amendment A19 (2026-08-22, issue #131) defines realm-boundary crossings:
+amendment A19 (2026-08-22) renames the brand key
+`polyengine.witError/1` → `polyengine.componentException/1`, retiring the
+last leaf that named the pre-A10 class — a rename that should have ridden
+A18's break and didn't. Same shape as A18: a hard break with no
+compatibility spelling and no diagnostic, and the generation stays `1`
+(a spelling change already yields a disjoint symbol set). The rest of the
+vocabulary was audited and stands: every other leaf matches its current
+class or concept; `wasiExit` keeps its package prefix deliberately
+(`exit` is too generic for a flat namespace), and the digest's `cewd`
+constant stays frozen — it is hashed wire content nobody reads or
+hand-rolls, so A10's opaque-constant argument still holds there —
+see §"Module identity and @polyengine/protocol";
+amendment A20 (2026-08-22, issue #131) defines realm-boundary crossings:
 `@polyengine/protocol` gains `toCloneable`/`fromCloneable` — a
 structured-clone-safe envelope for the branded error taxonomy,
 error-contexts, and wasi exit unwinds, round-trip exact for every matcher
@@ -499,7 +511,7 @@ interface Stream<T> {
 interface Future<T> extends PromiseLike<T> {  // await it directly
   drop(): void; cancel(): void;
 }
-class ErrorContext { readonly message: string }  // lift-only constructor-wise (C2 amendment); lowering also accepts any branded string-`message` carrier by minting a fresh local context (A19)
+class ErrorContext { readonly message: string }  // lift-only constructor-wise (C2 amendment); lowering also accepts any branded string-`message` carrier by minting a fresh local context (A20)
 class DroppedError extends Error { … }    // awaiting a dropped future rejects with this
 ```
 
@@ -641,7 +653,7 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
   via `.readable()`, a foreign future via `Promise.resolve(f)`. Handles
   are stateful — their machinery lives in the copy that minted them — so
   brands make foreign handles *diagnosable*, never *usable*. (Error-
-  contexts left this class in amendment A19: they are message-valued, so
+  contexts left this class in amendment A20: they are message-valued, so
   a branded foreign one carrying a string `message` lowers by minting a
   fresh local context — see §"Realm boundaries and structured-clone-safe
   forms".)
@@ -779,7 +791,7 @@ equivalent of a semver major:
 
 | brand key | carried by | marks |
 |---|---|---|
-| `polyengine.witError/1` | `ComponentException.prototype` | err-result values |
+| `polyengine.componentException/1` | `ComponentException.prototype` | err-result values |
 | `polyengine.trap/1` | `Trap.prototype` | component-fatal errors |
 | `polyengine.dropped/1` | `DroppedError.prototype` | dropped-future rejections |
 | `polyengine.peerTrapped/1` | `PeerTrappedError.prototype` | peer-fault rejections (A7) |
@@ -788,7 +800,7 @@ equivalent of a semver major:
 | `polyengine.suspending/1` | the marked function / class prototype (A1/A2) | suspendable sync imports |
 | `polyengine.stream/1` | `Stream.prototype` | embedder stream handles |
 | `polyengine.future/1` | `Future.prototype` | embedder future handles |
-| `polyengine.errorContext/1` | `ErrorContext.prototype` | error-contexts (message-valued at lowering since A19) |
+| `polyengine.errorContext/1` | `ErrorContext.prototype` | error-contexts (message-valued at lowering since A20) |
 | `polyengine.resourceState/1` | guest-resource wrappers (key for internal state; the state shape stays runtime-internal) | resource wrappers |
 | `polyengine.pollable/1` | `Pollable.prototype` (the wasi package) | pollables |
 | `polyengine.wasiExit/1` | `ExitError.prototype` (the wasi package) | wasi exit unwinds |
@@ -822,9 +834,30 @@ resolves exactly one engine, which is the same invariant A9 already asks
 consumers to gate on (docs/consumers.md). Migrate an engine dependency in
 one step; never partially.
 
+**The A19 leaf rename (2026-08-22).** Through 0.3.x the err-result key
+read `polyengine.witError/1`: A18 renamed every key's prefix but
+deliberately kept the one leaf still spelling the pre-A10 class name,
+citing the same opaque-constant argument A10 used to freeze it. That was
+the wrong call — A18 was already a total break, so the leaf rename would
+have been free — and keeping a key that names a class retired two
+generations of naming ago is the same standing tax on readers and
+hand-rollers that justified A18. A19 renames it to
+`polyengine.componentException/1`, with A18's exact semantics: a hard
+break with no compatibility spelling, no diagnostic (the two spellings
+are disjoint symbols; a pre-A19 copy's exceptions are simply unrecognized,
+exactly as described for A18 above), and the generation stays `1` for
+A18's reason. The audit that produced A19 covered the whole table: every
+other leaf matches its current class (minus the `Error` suffix,
+camelCased) or its concept; `wasiExit` keeps its `wasi` prefix because a
+bare `exit` is too generic for the flat key namespace (`pollable` needs
+no prefix — the word is already WASI vocabulary); and the world-digest
+`cewd` constant stays frozen, because it is hashed wire content that no
+consumer reads or hand-writes — the opaque-constant argument A19 retires
+for brand keys still holds where there is no reader.
+
 **Brands are contract markers, not a security boundary.** A hand-rolled
 object carrying the right brand is a legal value: an Error with
-`[Symbol.for("polyengine.witError/1")]: true` and a `payload` property IS a
+`[Symbol.for("polyengine.componentException/1")]: true` and a `payload` property IS a
 ComponentException to every copy; a function with
 `[Symbol.for("polyengine.suspending/1")]: true` IS suspending-marked. This is
 what makes zero-import host modules possible. The canonical classes are
@@ -839,7 +872,7 @@ principle. For those, the brand converts "misclassified" into
 "recognized-but-foreign": a named error listing both copies' URLs (see
 §"Streams and futures" and the cross-store assert family, which now
 distinguishes cross-copy from cross-store). Error-contexts sit between
-the two since amendment A19: message-valued — any branded carrier of a
+the two since amendment A20: message-valued — any branded carrier of a
 string `message` is honored at lowering by minting a fresh local context
 (§"Realm boundaries and structured-clone-safe forms").
 
@@ -860,7 +893,30 @@ copies: import maps are an application concern; host-module packages must
 not carry `@polyengine/*` mappings in any config consumers resolve through
 (docs/consumers.md records the convention).
 
-## Realm boundaries and structured-clone-safe forms (amendment A19)
+**Identity is realm-local (issue #129).** Everything in this section is
+per-realm by construction: a JS realm has its own module graph, so "copies
+of the runtime" means copies *within one realm* — two realms (a window and
+its worker, two workers, two Deno workers) are two runtimes, always, and
+that is placement, not a defect the copy census diagnoses. No polyengine
+value carries identity across a realm boundary. Workers are separate JS
+agents, so even the `Symbol.for` registry — which spans same-agent realms —
+does not span them; and structured clone strips prototypes and refuses
+functions and symbol-keyed properties, so a handle, resource wrapper,
+branded error, or suspending-marked function that crosses `postMessage`
+arrives as an inert plain object, recognized by nothing (not even as
+"recognized-but-foreign" — the cross-copy story above is same-realm only).
+Structured-clone-safe *representations* for crossing realms are a separate
+surface, defined by amendment A20 (§"Realm boundaries and
+structured-clone-safe forms" below); recipes for worker-hosted topologies
+live outside the runtime (#128). The complementary guarantee — that the
+runtime, translator, and embedder paths themselves carry no Window or
+main-thread-only dependencies, so a runtime placed IN a worker behaves
+identically — is tested, not assumed: the conformance realm rows (Deno
+worker slice, browser dedicated/shared-worker rows, OPFS worker smokes)
+gate it in CI, and where a platform API differs by realm the runtime
+depends on the intersection rather than detecting and branching.
+
+## Realm boundaries and structured-clone-safe forms (amendment A20)
 
 Consumer evidence (issue #131; polyvisor G5's SharedWorker device host):
 recipe-layer proxies carry embedder-typed values across realm boundaries
@@ -869,7 +925,7 @@ symbol-keyed properties — a branded error arrives as an unbranded husk
 (`payload` gone), a `Stream` as an empty object. Two realms are two
 runtimes by construction (issue #129), so no import-map discipline can
 help; without a defined form every proxy author invents an ad-hoc
-serialization, each subtly wrong. A19 defines the sanctioned crossing and
+serialization, each subtly wrong. A20 defines the sanctioned crossing and
 makes the unsanctioned one fail loudly at the sender.
 
 **The API.** `@polyengine/protocol` exports:
@@ -919,7 +975,7 @@ canonical class instances. Coverage:
 
 | tag value | encodes | fields besides the tag |
 |---|---|---|
-| `polyengine.witError/1` | `ComponentException` | `message`, `stack?`, `cause?` (walked), `payload` (walked) |
+| `polyengine.componentException/1` | `ComponentException` | `message`, `stack?`, `cause?` (walked), `payload` (walked) |
 | `polyengine.trap/1` | `Trap` | `message`, `stack?`, `cause?` (walked) |
 | `polyengine.dropped/1` | `DroppedError` | `message`, `stack?`, `cause?` (walked) |
 | `polyengine.invalidHandle/1` | `InvalidHandleError` | `message`, `stack?`, `cause?` (walked) |
@@ -949,7 +1005,7 @@ supported matrix, and failing loud beats a half-rehydrated tree.
 - Encode: branded values per the table; unbranded `Error` instances as
   `error`. Envelope-encodable brands take precedence over the realm-local
   pill (an `ErrorContext` instance carries both; it encodes).
-- Refuse with `InvalidHandleError` (whose documented meaning A19 widens
+- Refuse with `InvalidHandleError` (whose documented meaning A20 widens
   from "resource-wrapper misuse" to handle misuse generally): realm-local
   leaves — anything `isRealmLocal`, anything carrying the `STREAM`,
   `FUTURE`, or `POLLABLE` brand, and resource wrappers (a defined
@@ -1003,7 +1059,7 @@ userland property can change that. That is precisely the gap
 `toCloneable` exists to fill; the pill covers only the stateful handles,
 and the two mechanisms partition the vocabulary exactly.
 
-**Error-context is message-valued** (A19 semantic change, superseding
+**Error-context is message-valued** (A20 semantic change, superseding
 "lowering accepts only lifted instances", §"Streams and futures"). An
 error-context's state is exactly its debug message (definitions.py), so
 lowering accepts, besides this copy's lifted instances, **any** branded
@@ -1015,8 +1071,9 @@ error-context **without** a string `message` keeps the loud A9 cross-copy
 refusal — that shape is a genuinely foreign stateful handle, not a
 message carrier.
 
-A19 ships in `@polyengine/protocol` 0.2.0 (new exports; the runtime
-re-exports them unchanged, per A9).
+A20 ships in `@polyengine/protocol` 0.2.0 — the same pending release as
+A19's key rename (new exports; the runtime re-exports them unchanged, per
+A9).
 
 ## Bindgen obligations (summary of what the above requires)
 

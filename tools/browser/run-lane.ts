@@ -22,6 +22,12 @@
 //
 //     deno run -A tools/browser/run-lane.ts chromium [--headed] [--keep-open]
 //                                                    [--json <path>]
+//                                                    [--realm page|worker|shared-worker]
+//
+//   `--realm` (issue #129) runs the whole corpus inside a dedicated or shared
+//   worker instead of the window realm, judged against the same expectation:
+//   a Window-only dependency creeping into the runtime fails the realm row
+//   and names the realm.
 //
 //   Prerequisites (both are also checked at startup):
 //     * `cd harness && deno task gen`        -> harness/generated/**
@@ -81,22 +87,41 @@ const repoRoot = normalize(
   join(dirname(fromFileUrl(import.meta.url)), "..", ".."),
 );
 
+/**
+ * JS realm the corpus runs in (issue #129). `page` is the historical
+ * behavior; the worker realms run the SAME corpus through the SAME driver and
+ * are judged against the SAME per-engine expectation — same engine + same
+ * corpus means identical totals, so any delta at all is a realm leak.
+ */
+const REALMS = ["page", "worker", "shared-worker"] as const;
+type Realm = typeof REALMS[number];
 
 interface Args {
   lane: string;
   headed: boolean;
   keepOpen: boolean;
   jsonOut: string | null;
+  realm: Realm;
 }
 
 function parseArgs(argv: string[]): Args {
-  const lane = argv.find((a) => !a.startsWith("-")) ?? "chromium";
+  // `--realm <v>`'s value is not a flag, so exclude it from the lane guess.
+  const realmIdx = argv.indexOf("--realm");
+  const realmRaw = realmIdx >= 0 ? argv[realmIdx + 1] ?? "" : "page";
+  const realmValIdx = realmIdx >= 0 ? realmIdx + 1 : -1;
+  const lane =
+    argv.filter((a, i) => !a.startsWith("-") && i !== realmValIdx)[0] ??
+      "chromium";
   const jsonIdx = argv.indexOf("--json");
+  if (!(REALMS as readonly string[]).includes(realmRaw)) {
+    fail(`unknown realm '${realmRaw}' (${REALMS.join(" | ")})`);
+  }
   return {
     lane,
     headed: argv.includes("--headed"),
     keepOpen: argv.includes("--keep-open"),
     jsonOut: jsonIdx >= 0 ? argv[jsonIdx + 1] ?? null : null,
+    realm: realmRaw as Realm,
   };
 }
 
@@ -134,7 +159,6 @@ async function preflight(): Promise<void> {
   }
 }
 
-
 async function main() {
   const args = parseArgs(Deno.args);
   const exp = EXPECTATIONS[args.lane];
@@ -143,6 +167,14 @@ async function main() {
   await preflight();
   console.log(`[browser-lane] bundling…`);
   await bundle();
+  // Only built for the realm rows, so the default `page` lane's work (and
+  // output) is unchanged.
+  if (args.realm !== "page") {
+    await bundle(
+      join("harness", "browser", "worker_entry.ts"),
+      join("harness", "browser", "dist", "worker_entry.js"),
+    );
+  }
 
   const files: BrowserFile[] = [];
   let header: Header = null;
@@ -175,8 +207,8 @@ async function main() {
     // silent 30s timeout would look like a corpus shrink.
     await page.evaluate(
       // deno-lint-ignore no-explicit-any
-      () => (globalThis as any).__ceRunAll(),
-      undefined,
+      (realm: string) => (globalThis as any).__ceRunAll(realm),
+      args.realm,
       { timeout: 0 },
     );
   } catch (e) {
@@ -188,7 +220,18 @@ async function main() {
   await server.shutdown();
 
   // ---- report -------------------------------------------------------------
-  console.log(`\n=== lane: ${args.lane} ===`);
+  // Realm annotation is emitted only for the realm rows, so `page` output
+  // stays byte-identical to the pre-#129 lane.
+  console.log(
+    `\n=== lane: ${args.lane}${
+      args.realm === "page" ? "" : ` (realm: ${args.realm})`
+    } ===`,
+  );
+  if (args.realm !== "page") {
+    console.log(
+      `realm      : ${args.realm} (header says: ${header?.realm ?? "?"})`,
+    );
+  }
   console.log(
     `user agent : ${header?.userAgent ?? "(none — page never reported)"}`,
   );
@@ -211,7 +254,11 @@ async function main() {
   if (args.jsonOut) {
     await Deno.writeTextFile(
       args.jsonOut,
-      JSON.stringify({ lane: args.lane, header, wallMs, files }, null, 2),
+      JSON.stringify(
+        { lane: args.lane, realm: args.realm, header, wallMs, files },
+        null,
+        2,
+      ),
     );
     console.log(`[browser-lane] raw results -> ${args.jsonOut}`);
   }
@@ -274,11 +321,17 @@ async function main() {
   }
 
   if (!bad) {
-    console.log(`\n[browser-lane] ${args.lane}: OK (matches expectation)`);
+    console.log(
+      `\n[browser-lane] ${args.lane}${
+        args.realm === "page" ? "" : ` [realm: ${args.realm}]`
+      }: OK (matches expectation)`,
+    );
     Deno.exit(0);
   }
   console.error(
-    `\n[browser-lane] ${args.lane}: ${
+    `\n[browser-lane] ${args.lane}${
+      args.realm === "page" ? "" : ` [realm: ${args.realm}]`
+    }: ${
       exp.required
         ? "FAILED"
         : "deviations recorded (findings lane, not gating)"

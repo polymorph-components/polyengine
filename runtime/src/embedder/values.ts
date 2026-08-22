@@ -348,7 +348,7 @@ export function fromHost(
         return v.internal as unknown as ComponentValue;
       }
       if (v instanceof InternalErrorContext) return v as unknown as ComponentValue;
-      // A19 (contracts/embedder-api.md §"Error-context is message-valued";
+      // A20 (contracts/embedder-api.md §"Error-context is message-valued";
       // issue #131; definitions.py — an error-context's state is exactly
       // its debug message): a branded carrier of a string `message`, from
       // any copy (or hand-rolled), is accepted by minting a FRESH local

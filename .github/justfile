@@ -64,15 +64,25 @@ core:
     @just gha::_step sched-seeds
 
 # The post-merge browser job (ci.yml `browser`; gates the prerelease).
+# The worker / shared-worker realm rows (issue #129) reuse each engine's
+# expectation verbatim — a delta is a realm leak and fails naming the realm.
 browser:
     @just gha::_step shim
     @just gha::_step corpus
     @just gha::_step fixtures
     @just gha::_step "browsers-install --with-deps"
     @just gha::_step "browser-lane chromium"
+    @just gha::_step "browser-lane chromium --realm worker"
+    @just gha::_step "browser-lane chromium --realm shared-worker"
     @just gha::_step "browser-lane firefox"
+    @just gha::_step "browser-lane firefox --realm worker"
+    @just gha::_step "browser-lane firefox --realm shared-worker"
     @just gha::_step "smoke-opfs chromium"
+    @just gha::_step "smoke-opfs chromium --realm worker"
+    @just gha::_step "smoke-opfs chromium --realm shared-worker"
     @just gha::_step "smoke-opfs firefox"
+    @just gha::_step "smoke-opfs firefox --realm worker"
+    @just gha::_step "smoke-opfs firefox --realm shared-worker"
     @just gha::_step-tolerated "browsers-install-webkit --with-deps"
     @just gha::_step-tolerated "browser-lane webkit"
 

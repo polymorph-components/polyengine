@@ -213,19 +213,36 @@ browsers-install-webkit *flags:
 browser-lane lane *args: shim corpus
     deno run -A tools/browser/run-lane.ts {{lane}} {{args}}
 
-# The post-merge browser gates.
+# The post-merge browser gates. The worker / shared-worker rows (issue
+# #129) run the SAME corpus / battery inside those realms, judged against
+# the SAME per-engine expectations: any delta at all is a realm leak (a
+# Window-only dependency creeping into the runtime), and the failure names
+# the realm. The first consumer topology (polyvisor G5) hosts the engine
+# in a shared worker, so those rows gate here rather than surfacing as a
+# consumer-side mystery.
 browsers:
     just browser-lane chromium
+    just browser-lane chromium --realm worker
+    just browser-lane chromium --realm shared-worker
     just browser-lane firefox
+    just browser-lane firefox --realm worker
+    just browser-lane firefox --realm shared-worker
     just smoke-opfs chromium
+    just smoke-opfs chromium --realm worker
+    just smoke-opfs chromium --realm shared-worker
     just smoke-opfs firefox
+    just smoke-opfs firefox --realm worker
+    just smoke-opfs firefox --realm shared-worker
 
 # filesystem-web against the REAL Origin Private File System (the unit
 # suite runs an in-memory fake — Deno has no navigator.storage): the
 # direct descriptor battery plus the fs-probe guest parking through
 # A14/JSPI over real async storage. tools/browser/opfs-smoke.ts.
-smoke-opfs lane: shim fixtures
-    deno run -A tools/browser/opfs-smoke.ts {{lane}}
+# `--realm worker|shared-worker` (issue #129) runs the battery inside that
+# realm — the OPFS × JSPI-parking × worker-realm intersection the first
+# consumer (polyvisor G5) actually ships.
+smoke-opfs lane *args: shim fixtures
+    deno run -A tools/browser/opfs-smoke.ts {{lane}} {{args}}
 
 # ----- consumer smokes + exams (polymorph checkouts; docs/consumers.md) -------
 

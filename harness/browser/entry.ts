@@ -38,8 +38,17 @@ export interface BrowserFileResult {
   ms: number;
 }
 
+/** JS realm kind the corpus was executed in (issue #129, realm neutrality). */
+export type Realm = "page" | "worker" | "shared-worker";
+
 export interface BrowserHeader {
   userAgent: string;
+  /**
+   * Which realm actually ran the corpus. Set by whoever calls `runAll`, so a
+   * worker row's header (userAgent, jspi.roundTrip) describes the WORKER
+   * realm, not the page that spawned it.
+   */
+  realm: Realm;
   /** Does this engine expose the JSPI JS API surface at all? */
   jspi: {
     suspending: boolean;
@@ -152,20 +161,27 @@ export interface RunOptions {
   onHeader?: (h: BrowserHeader) => void;
   /** Triage aid: restrict the run to these corpus-relative paths. */
   only?: string[];
+  /** Realm this run executes in; recorded in the header. Default "page". */
+  realm?: Realm;
 }
 
 export async function runAll(
   opts: RunOptions = {},
 ): Promise<{ header: BrowserHeader; files: BrowserFileResult[] }> {
-  const shimWasm = await fetchBytes("./corpus/translator_shim.wasm");
+  // Absolute corpus URLs: a worker's base URL is its own script
+  // (`/dist/worker_entry.js`), so a relative `./corpus/…` would resolve to
+  // `/dist/corpus/…`. Identical to the old relative form for the page, whose
+  // base URL is `/`.
+  const shimWasm = await fetchBytes("/corpus/translator_shim.wasm");
   const executor = await RuntimeExecutor.create(shimWasm);
 
   const manifest: { files: string[] } = await (
-    await fetch("./corpus/manifest.json")
+    await fetch("/corpus/manifest.json")
   ).json();
 
   const header: BrowserHeader = {
     userAgent: navigator.userAgent,
+    realm: opts.realm ?? "page",
     jspi: await probeJspi(),
     // `RuntimeExecutor` keeps its Translator private, so digest the bytes we
     // fetched — same definition as `Translator.buildHash` (sha256 hex).
@@ -184,7 +200,7 @@ export async function runAll(
   for (const relPath of wanted) {
     const dir = relPath.split("/")[0];
     const t0 = performance.now();
-    const doc: WastJson = await (await fetch(`./corpus/${relPath}`)).json();
+    const doc: WastJson = await (await fetch(`/corpus/${relPath}`)).json();
 
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<"stalled">((resolve) => {
@@ -195,7 +211,7 @@ export async function runAll(
       raced = await Promise.race([
         runWastJson(
           doc,
-          (filename) => fetchBytes(`./corpus/${dir}/${filename}`),
+          (filename) => fetchBytes(`/corpus/${dir}/${filename}`),
           executor,
         ),
         timeout,
@@ -250,14 +266,140 @@ export async function runAll(
   return { header, files };
 }
 
-// Driver entry point: `page.evaluate(() => __ceRunAll())`.
+/**
+ * Messages a worker realm sends back to the page (mirror of the union
+ * produced by `worker_entry.ts` — keep the two in sync).
+ */
+type WorkerMsg =
+  | { kind: "file-progress"; path: string; ms: number; done: number }
+  | { kind: "done"; header: BrowserHeader; fileCount: number }
+  | { kind: "fatal"; detail: string };
+
+/** How long the page waits for ANY message from the worker before giving up. */
+const WORKER_SILENCE_TIMEOUT_MS = 180_000;
+
+/**
+ * Run the corpus inside a dedicated / shared worker (issue #129, realm
+ * neutrality). The WORKER does the whole run — including its own `/ingest`
+ * POSTs — so a worker that dies mid-corpus still leaves the driver every file
+ * that ran. The page only relays progress to `#status`: all `document`
+ * touches stay here, which is exactly the asymmetry the realm rows exist to
+ * police.
+ */
+async function runInWorkerRealm(
+  realm: "worker" | "shared-worker",
+): Promise<{ header: BrowserHeader; files: BrowserFileResult[] }> {
+  const status = document.getElementById("status");
+  const url = "/dist/worker_entry.js";
+
+  return await new Promise((resolve, reject) => {
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const arm = () => {
+      clearTimeout(timer);
+      timer = setTimeout(
+        () =>
+          finish(() =>
+            reject(
+              new Error(
+                `realm ${realm}: worker silent for ${
+                  WORKER_SILENCE_TIMEOUT_MS / 1000
+                }s (no progress, no error) — treated as a hang`,
+              ),
+            )
+          ),
+        WORKER_SILENCE_TIMEOUT_MS,
+      );
+    };
+
+    const onMessage = (ev: MessageEvent) => {
+      const msg = ev.data as WorkerMsg;
+      arm();
+      if (msg.kind === "file-progress") {
+        if (status) {
+          status.textContent =
+            `[${realm}] ${msg.done} files — last ${msg.path} (${msg.ms}ms)`;
+        }
+      } else if (msg.kind === "done") {
+        finish(() =>
+          // `files` stayed in the worker and reached the driver over /ingest;
+          // the page never accumulates them (nor does the driver read them
+          // from this return value — it ingests).
+          resolve({ header: msg.header, files: [] })
+        );
+      } else if (msg.kind === "fatal") {
+        finish(() => reject(new Error(`realm ${realm}: ${msg.detail}`)));
+      }
+    };
+    const onError = (ev: Event) => {
+      const e = ev as ErrorEvent;
+      finish(() =>
+        reject(
+          new Error(
+            `realm ${realm}: worker error: ${e.message ?? "(no message)"} @ ${
+              e.filename ?? "?"
+            }:${e.lineno ?? "?"}`,
+          ),
+        )
+      );
+    };
+
+    try {
+      if (realm === "worker") {
+        const w = new Worker(url, { type: "module" });
+        w.onmessage = onMessage;
+        w.onerror = onError;
+        w.onmessageerror = onError;
+        w.postMessage({ cmd: "run", realm });
+      } else {
+        const sw = new SharedWorker(url, { type: "module" });
+        sw.onerror = onError;
+        sw.port.onmessage = onMessage;
+        sw.port.onmessageerror = onError;
+        sw.port.start();
+        sw.port.postMessage({ cmd: "run", realm });
+      }
+    } catch (e) {
+      finish(() =>
+        reject(
+          new Error(
+            `realm ${realm}: could not construct worker: ${
+              e instanceof Error ? e.message : String(e)
+            }`,
+          ),
+        )
+      );
+      return;
+    }
+    if (status) status.textContent = `[${realm}] worker spawned…`;
+    arm();
+  });
+}
+
+// Driver entry point: `page.evaluate((realm) => __ceRunAll(realm), realm)`.
 //
 // Results are ALSO streamed to the server's ingest endpoint file-by-file, so
 // that a page crash / OOM mid-corpus leaves the driver with everything that
 // ran rather than nothing: `{kind:"header"}`, then one `{kind:"file"}` per
 // corpus file, then `{kind:"done"}`.
+//
+// `realm` (issue #129): undefined/"page" runs here, in the window realm,
+// exactly as before; "worker"/"shared-worker" delegate the run to
+// `worker_entry.js` in that realm.
 // deno-lint-ignore no-explicit-any
-(globalThis as any).__ceRunAll = async () => {
+(globalThis as any).__ceRunAll = async (realm?: Realm) => {
+  if (realm === "worker" || realm === "shared-worker") {
+    return await runInWorkerRealm(realm);
+  }
+  if (realm !== undefined && realm !== "page") {
+    throw new Error(`unknown realm '${realm}'`);
+  }
   const status = document.getElementById("status");
   let done = 0;
   const post = (body: unknown) =>
