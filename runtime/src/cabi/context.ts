@@ -84,10 +84,13 @@ export class LiftLowerContext {
   ) {}
 
   /**
-   * definitions.py `LiftLowerContext.reallocate` routes the call through
-   * canon_lift (reentrance bookkeeping and may_leave toggling around a
-   * guest-side realloc export). v1 simplification: call the provided realloc
-   * directly. The full path returns with the task machinery.
+   * definitions.py `LiftLowerContext.reallocate`: the guest's realloc runs
+   * with `may_leave` cleared, so a realloc that lowers an import traps
+   * (`canon_lower`'s `trap_if(not ...may_leave)`, implemented here by
+   * exec/boundary.ts `createLoweredImport`). That bracket is implemented
+   * below. What remains deferred is only the reference's routing of the call
+   * through `canon_lift`; upstream component-model PR #705 removes that
+   * routing, leaving this bracket as the whole story. polyengine issue #147.
    */
   reallocate(
     old: number,
@@ -97,7 +100,21 @@ export class LiftLowerContext {
   ): number {
     const realloc = this.opts.realloc;
     trapIf(realloc === null, "realloc required but not provided");
-    return realloc!(old, oldByteLength, alignment, newByteLength);
+    // A null instance is the value-interpreter unit-test harness only
+    // (tests/support/driver.ts `mkCx`); every real runtime path constructs
+    // this context with an instance, so there is no flag to bracket.
+    if (this.inst === null) {
+      return realloc!(old, oldByteLength, alignment, newByteLength);
+    }
+    assert_(this.inst.mayLeave, "realloc with may_leave already false");
+    this.inst.mayLeave = false;
+    // NO try/finally, deliberately: same bare bracket as the post-return one
+    // in intrinsics/fact_calls.ts (#91) and the reference's `assert`/restore
+    // pair. A trapping realloc skips the restore exactly as the reference
+    // does; the host-boundary unwind and instance poisoning handle the rest.
+    const ptr = realloc!(old, oldByteLength, alignment, newByteLength);
+    this.inst.mayLeave = true;
+    return ptr;
   }
 
   allocate(alignment: number, byteLength: number): number {
