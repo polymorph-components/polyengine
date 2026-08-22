@@ -32,8 +32,8 @@ Their jco blockers map one-for-one onto this project's proven strengths
   ([#16](https://github.com/polymorph-components/polyengine/issues/16), 2026-08-16) and are
   caret-honest — still 0.x/unstable, compatible within a minor line,
   breaking changes bump the minor — so consumers couple via caret
-  constraints (`jsr:@polyengine/*@^0.4.0`), with `pre-<shorthash>` prerelease
-  artifacts (exact pins) and git references for tracking `main` between
+  constraints (`jsr:@polyengine/*@^0.4.0`), with `pre-<shorthash>` GitHub
+  release artifacts and git references for tracking `main` between
   releases. That first caret line ran under the project's former name, in
   the `@deltic` scope, through `0.2.1`; the `@polyengine` line begins at
   `0.3.0` — the deltic-era `v*` tags survived the transfer, so lower

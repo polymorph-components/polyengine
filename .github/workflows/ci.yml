@@ -44,7 +44,19 @@ jobs:
       # lives on the root-justfile recipes it composes. Suite order and
       # arch-conditional lanes (jsc-pinned is x64-only) are all encoded
       # there.
+      #
+      # The env below is the only thing the version guard's `pr` mode needs
+      # (its first step): it reads the PR's LIVE labels and diffs against the
+      # base. All three are empty on push runs, where the guard skips itself —
+      # deliberately, since there is no PR to have labels. Note that label
+      # edits do NOT re-trigger this workflow (no `types:` addition above, on
+      # purpose): the PR pass is an early warning, release.yml's `cut` mode is
+      # the enforcement point, and a re-run picks up corrected labels.
       - run: just gha::core
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          GH_TOKEN: ${{ github.token }}
 
   browser:
     runs-on: ubuntu-24.04
@@ -90,19 +102,31 @@ jobs:
       # required lanes + the best-effort webkit lane, per the recipes.
       - run: just gha::browser
 
-  # Every GREEN main ref update ships a prerelease (issue #16's interim
-  # scheme): tag pre-<shorthash>, shim artifacts + SHA256SUMS. Gated on this
-  # same run's core matrix + browser job, so "green" is the release
-  # criterion by construction. Notes: (a) the concurrency group above
-  # cancels superseded runs, so rapid consecutive pushes release only the
-  # surviving tip — a cancelled run was never green; (b) continue-on-error
-  # steps (the webkit lane) do not block a release, by the same policy
-  # that keeps them non-blocking in CI.
+  # Every GREEN main ref update ships a GitHub PRERELEASE: tag
+  # pre-<shorthash>, shim artifacts + SHA256SUMS, and nothing on a registry
+  # — JSR and npm carry cut releases only (#223). Gated on this same run's
+  # core matrix + browser job, so "green" is the release criterion by
+  # construction, and the prerelease doubles as the proof a cut later
+  # requires ("a pre-<shorthash> release exists for this commit"). Notes:
+  # (a) the concurrency group above cancels superseded runs, so rapid
+  # consecutive pushes release only the surviving tip — a cancelled run was
+  # never green; (b) continue-on-error steps (the webkit lane) do not block
+  # a release, by the same policy that keeps them non-blocking in CI.
   release:
     needs: [core, browser]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # The prerelease path only ever uses `contents: write` (create a GitHub
+    # release, upload assets) — no registry is published from a prerelease,
+    # so id-token (JSR OIDC) and actions (the npm dispatch) are dead weight
+    # here. They are granted anyway BECAUSE THEY MUST BE: a reusable-workflow
+    # call fails at STARTUP unless the caller grants everything the called
+    # workflow's `permissions` block requests, if-skipped steps included
+    # (observed on #223: "requesting 'actions: write, id-token: write', but
+    # is only allowed 'none'"), and release.yml requests all three for its
+    # cut mode. The unused tokens are inert: the steps that would spend them
+    # are `if: inputs.release`, which a workflow_call run cannot set.
     permissions:
       contents: write
-      id-token: write # JSR OIDC publishing (the called workflow requests it)
-      actions: write # ditto: it dispatches npm-publish.yml
+      id-token: write # unused here; required by release.yml's request (cut mode)
+      actions: write # ditto
     uses: ./.github/workflows/release.yml

@@ -122,21 +122,20 @@ not an alias: `@polyengine/*` starts a fresh `0.1.0` line, the
 `deltic.*` ones, and the `POLYENGINE_*` environment variables replace their
 `DELTIC_*` spellings. Nothing bridges the two — port in one step.
 
-Between releases, every green `main` commit still publishes
-`<next>-pre.g<shorthash>` prereleases to JSR — the same short hash as the
-corresponding `pre-<shorthash>` GitHub release, so a version names an
-exact commit. Hash versions are not ordered, and semver ranges never
-resolve to prereleases: **pin prereleases exactly and bump deliberately**.
-The same prereleases go to npm under the `pre` dist-tag, leaving `latest`
-to track cut releases. (One wrinkle, self-correcting: npm pins `latest` to
-a package's first-ever publish whatever `--tag` says, so until the first
-release is cut `latest` names the bootstrap prerelease. Pin explicitly
-until then.)
+Between releases, every green `main` commit still gets a
+`pre-<shorthash>` [GitHub release](https://github.com/polymorph-components/polyengine/releases)
+carrying the same artifacts a cut carries — the translator shim wasm, the
+embedder bundle, `SHA256SUMS` — but **nothing is published to JSR or npm
+between cuts**: the registries carry `vX.Y.Z` releases only. To track
+`main`, use those release assets or a git reference and upgrade
+deliberately. (The `<next>-pre.g<shorthash>` versions on JSR and the npm
+`pre` dist-tag are frozen leftovers of the earlier flow, which published
+every green commit; nothing new lands there.)
 
 Deno's [minimum-dependency-age](https://docs.deno.com/runtime/packages/supply_chain/#minimum-dependency-age)
-gate (24 h by default) applies to releases and prereleases alike, so a
-fresh publish won't resolve on day zero. To consume same-day publishes
-while keeping the gate for the rest of your graph, exempt the scope
+gate (24 h by default) applies to every publish, so a freshly cut release
+won't resolve on day zero. To consume same-day releases while keeping the
+gate for the rest of your graph, exempt the scope
 (wildcard excludes work as of Deno 2.9):
 
 ```jsonc
