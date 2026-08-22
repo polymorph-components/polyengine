@@ -202,3 +202,19 @@ Deno.test("io: a closed-stream failure never leaks an unbranded throw type", asy
   // to let a genuine bug (an exploding sink) surface as a raw exception here
   // — the facade, not this package, is the trap boundary.
 });
+
+// A20 (contracts/embedder-api.md §"Realm boundaries and structured-clone-safe
+// forms"; issue #131): Pollable is a stateful, realm-local handle — the
+// engine-enforced backstop pill fires at a raw structuredClone/postMessage,
+// throwing DataCloneError in the sender realm instead of delivering a husk.
+Deno.test("A20: a raw structuredClone of a Pollable throws DataCloneError", () => {
+  const p = new Pollable();
+  let threw: unknown;
+  try {
+    structuredClone(p);
+  } catch (e) {
+    threw = e;
+  }
+  assertTrue(threw instanceof DOMException, `got ${threw}`);
+  assertEq((threw as DOMException).name, "DataCloneError");
+});

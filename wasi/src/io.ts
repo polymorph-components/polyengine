@@ -46,7 +46,7 @@
 // suspendability), which is what lets the duck-typed async streams park
 // through the resource types registered here.
 
-import { defineBrand, POLLABLE } from "@polyengine/protocol";
+import { defineBrand, defineRealmLocal, POLLABLE } from "@polyengine/protocol";
 import { suspending, ComponentException } from "@polyengine/runtime/embedder";
 
 /** The engine setTimeout ceiling: delays above 2^31-1 ms are clamped to
@@ -111,6 +111,10 @@ export class Pollable {
   ) {
     this.#ready = ready;
     this.#wait = wait;
+    // A20 realm-local pill (contracts/embedder-api.md §"Realm boundaries
+    // and structured-clone-safe forms"; issue #131): stateful handles fail
+    // loud at a raw structuredClone/postMessage instead of husking.
+    defineRealmLocal(this);
   }
 
   /**

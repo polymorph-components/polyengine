@@ -27,6 +27,12 @@ const EXPECTED: Record<string, symbol> = {
   "polyengine.runtimeCopies/1": brands.RUNTIME_COPIES,
 };
 
+// The realm-local pill (amendment A20) is a STRING key, not a registry
+// symbol, so it sits outside the table above — but it is shared vocabulary
+// across copies exactly as the brands are, and renaming it is the same
+// breaking ecosystem event. Pinned literally for the same reason.
+const EXPECTED_REALM_LOCAL = "polyengine.realmLocal/1";
+
 Deno.test("A9: every brand key is exactly the contract's table entry", () => {
   for (const [key, sym] of Object.entries(EXPECTED)) {
     assertEquals(sym, Symbol.for(key), `brand key drift for ${key}`);
@@ -40,6 +46,11 @@ Deno.test("A9: the table is exhaustive — no unpinned exported brand", () => {
     .map((s) => Symbol.keyFor(s) ?? "<not a registry symbol>")
     .sort();
   assertEquals(exported, Object.keys(EXPECTED).sort());
+});
+
+Deno.test("A20: the realm-local pill key is exactly the contract's spelling", () => {
+  assertEquals(brands.REALM_LOCAL, EXPECTED_REALM_LOCAL);
+  assertEquals(EXPECTED_REALM_LOCAL.endsWith(`/${PROTOCOL_GENERATION}`), true);
 });
 
 Deno.test("A9: the protocol generation matches the key suffix", () => {

@@ -348,11 +348,24 @@ export function fromHost(
         return v.internal as unknown as ComponentValue;
       }
       if (v instanceof InternalErrorContext) return v as unknown as ComponentValue;
-      // Branded but not ours (amendment A9): an `ErrorContext` minted by
-      // another runtime copy. It is stateful (it lives in that copy's handle
-      // table), so it can never be lowered here — but "recognized and named"
-      // beats the generic "expected an ErrorContext" that sent issue #83
-      // hunting in the wrong direction.
+      // A20 (contracts/embedder-api.md §"Error-context is message-valued";
+      // issue #131; definitions.py — an error-context's state is exactly
+      // its debug message): a branded carrier of a string `message`, from
+      // any copy (or hand-rolled), is accepted by minting a FRESH local
+      // context — never "the same" one, since there is nothing to alias.
+      if (
+        hasBrand(v, ERROR_CONTEXT) &&
+        typeof (v as { message?: unknown }).message === "string"
+      ) {
+        return new InternalErrorContext(
+          (v as { message: string }).message,
+        ) as unknown as ComponentValue;
+      }
+      // Branded but no string `message` (amendment A9, superseded above only
+      // for the message-valued case): a genuinely foreign stateful handle —
+      // it lives in another copy's handle table, so it can never be lowered
+      // here — but "recognized and named" beats the generic "expected an
+      // ErrorContext" that sent issue #83 hunting in the wrong direction.
       if (hasBrand(v, ERROR_CONTEXT)) {
         throw new TypeError(
           `${o.where}: ${describeCrossCopy("this error-context")}`,

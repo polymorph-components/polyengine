@@ -16,7 +16,7 @@
 // | host passes borrow<R>   | wrapper stays valid          | rep reused/allocated      |
 
 import type { ResourceTypeInfo, ValType } from "../cabi/types.ts";
-import { RESOURCE_STATE } from "@polyengine/protocol";
+import { defineRealmLocal, RESOURCE_STATE } from "@polyengine/protocol";
 import { hostDtorCall } from "../exec/boundary.ts";
 import { COPY_URL, describeCrossCopy } from "./copy.ts";
 import { InvalidHandleError } from "./errors.ts";
@@ -74,6 +74,17 @@ interface WrapperState {
 export class GuestResource {
   /** @internal */
   declare [STATE]: WrapperState;
+
+  constructor() {
+    // A20 (contracts/embedder-api.md §"Realm boundaries and
+    // structured-clone-safe forms"; issue #131): guest-resource wrappers are
+    // realm-local by principle (their machinery lives in the minting
+    // copy's tables, issue #129's identity rule) — the pill makes a raw
+    // structuredClone/postMessage of one throw instead of husking. NOTE:
+    // `makeWrapper` below mints via `Object.create`, which bypasses this
+    // constructor entirely — it installs the pill itself.
+    defineRealmLocal(this);
+  }
 
   /** Drop the handle (alias of `[Symbol.dispose]`, so TS `using` works). */
   drop(): void {
@@ -423,6 +434,9 @@ export function makeWrapper(
   owns: boolean,
 ): GuestResource {
   const w = Object.create(cls.prototype) as GuestResource;
+  // A20: `Object.create` bypasses `GuestResource`'s constructor, so the
+  // realm-local pill is installed explicitly here (see that constructor).
+  defineRealmLocal(w);
   initWrapper(w, {
     rep,
     valid: true,

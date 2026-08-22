@@ -59,7 +59,7 @@ export const SUSPENDING: unique symbol = Symbol.for(
 export const STREAM: unique symbol = Symbol.for("polyengine.stream/1");
 /** `Future.prototype` — embedder future handles (stateful: foreign = refused). */
 export const FUTURE: unique symbol = Symbol.for("polyengine.future/1");
-/** Lifted error-contexts (stateful: foreign = refused). */
+/** Lifted error-contexts (message-valued at lowering since A20). */
 export const ERROR_CONTEXT: unique symbol = Symbol.for(
   "polyengine.errorContext/1",
 );
@@ -94,6 +94,65 @@ export const RUNTIME_COPIES: unique symbol = Symbol.for(
  * so a future generation bump is diagnosable rather than silent.
  */
 export const PROTOCOL_GENERATION = 1;
+
+/**
+ * The realm-local pill key (contracts/embedder-api.md §"Realm boundaries and
+ * structured-clone-safe forms", amendment A20; issue #131).
+ *
+ * A STRING key, deliberately — the one brand-like marker in the vocabulary
+ * that is not a `Symbol.for` symbol, because its job is to be seen by the
+ * structured-clone serializer, which visits own enumerable STRING-keyed
+ * properties and skips symbol keys entirely. Its value is a function
+ * (`polyengineRealmLocalValue` below), which structured serialization
+ * refuses by construction: a raw `postMessage`/`structuredClone` of a
+ * realm-local value — a `Stream` buried three levels deep in a record
+ * included — throws `DataCloneError` in the SENDER realm instead of
+ * delivering an unbranded husk. `JSON.stringify` omits function values and
+ * spread copies an inert reference, so only clone paths trip.
+ *
+ * No WIT-mapped value can collide with the key (WIT identifiers cannot
+ * contain `.` or `/`). The deterministic, explanatory refusal is
+ * `toCloneable`'s job (cloneable.ts); the pill is the engine-enforced
+ * backstop for values that never went through it.
+ */
+export const REALM_LOCAL = "polyengine.realmLocal/1";
+
+/**
+ * The pill value. Never called; the FUNCTION VALUE itself is what makes the
+ * serializer throw. Named so engines that quote the function in their
+ * `DataCloneError` message (V8 does) point the reader somewhere useful.
+ */
+function polyengineRealmLocalValue(): void {
+  // Intentionally empty: reaching the serializer is this function's job.
+}
+
+/**
+ * Mark an object realm-local (amendment A20): own, enumerable (the
+ * serializer skips non-enumerables), string-keyed (it skips symbol keys),
+ * function-valued (it refuses functions). Installed per INSTANCE at
+ * construction — the serializer never visits prototypes, so this cannot
+ * ride `defineBrand`'s prototype mechanism.
+ */
+export function defineRealmLocal(target: object): void {
+  if (Object.prototype.hasOwnProperty.call(target, REALM_LOCAL)) return;
+  Object.defineProperty(target, REALM_LOCAL, {
+    value: polyengineRealmLocalValue,
+    enumerable: true,
+    writable: false,
+    configurable: false,
+  });
+}
+
+/**
+ * Realm-local check (amendment A20). Structural, like `hasBrand`: any own
+ * `polyengine.realmLocal/1` property marks the value, whoever minted it —
+ * the marker is shared vocabulary across runtime copies exactly as the
+ * symbol brands are.
+ */
+export function isRealmLocal(value: unknown): boolean {
+  if (value === null || typeof value !== "object") return false;
+  return Object.prototype.hasOwnProperty.call(value, REALM_LOCAL);
+}
 
 /**
  * Brand check. True iff `value` is a non-null object (or function — the

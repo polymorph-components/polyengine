@@ -5,7 +5,7 @@
     ".": "./src/mod.ts"
   },
   "tasks": {
-    "test": "deno test tests/",
+    "test": "deno test --allow-read=. tests/",
     "check": "deno check src tests"
   },
   "publish": {

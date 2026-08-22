@@ -15,14 +15,17 @@
 
 export {
   defineBrand,
+  defineRealmLocal,
   DROPPED,
   ERROR_CONTEXT,
   FUTURE,
   hasBrand,
   INVALID_HANDLE,
+  isRealmLocal,
   PEER_TRAPPED,
   POLLABLE,
   PROTOCOL_GENERATION,
+  REALM_LOCAL,
   RESOURCE_STATE,
   RUNTIME_COPIES,
   STREAM,
@@ -47,6 +50,15 @@ export {
   Trap,
   ComponentException,
 } from "./errors.ts";
+
+// Realm-boundary crossings (amendment A20; issue #131). The envelope TAG is
+// deliberately not exported: the form is version-internal, and an exported
+// constant invites persistence on it.
+export {
+  fromCloneable,
+  toCloneable,
+  type ToCloneableOptions,
+} from "./cloneable.ts";
 
 export { anySuspendingImport, isSuspending, suspending } from "./suspending.ts";
 

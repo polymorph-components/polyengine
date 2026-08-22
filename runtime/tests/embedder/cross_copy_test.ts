@@ -90,8 +90,13 @@ Deno.test("A9: a foreign Future is refused, not silently adopted as a thenable",
   assertTrue(m.includes("Promise.resolve(f)"), "names the by-value remediation");
 });
 
-Deno.test("A9: a foreign error-context is named cross-copy, not 'expected an ErrorContext'", () => {
-  const v = foreign("polyengine.errorContext/1", { message: "boom" });
+Deno.test("A9: a foreign error-context is named cross-copy, not 'expected an ErrorContext' (A20: only without a string message)", () => {
+  // A20 (contracts/embedder-api.md §"Error-context is message-valued";
+  // issue #131): a branded carrier of a STRING message is now message-valued
+  // and accepted (mints a fresh local context) — the loud cross-copy
+  // refusal survives only for a branded carrier WITHOUT a string message,
+  // which is a genuinely foreign stateful handle, not a message carrier.
+  const v = foreign("polyengine.errorContext/1", { message: 42 });
   const e = caught(() =>
     fromHost(v, { kind: "error-context" } as never, { where: "export 'f'" } as never)
   );

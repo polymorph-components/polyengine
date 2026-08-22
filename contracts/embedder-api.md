@@ -98,7 +98,20 @@ class or concept; `wasiExit` keeps its package prefix deliberately
 (`exit` is too generic for a flat namespace), and the digest's `cewd`
 constant stays frozen — it is hashed wire content nobody reads or
 hand-rolls, so A10's opaque-constant argument still holds there —
-see §"Module identity and @polyengine/protocol".**
+see §"Module identity and @polyengine/protocol";
+amendment A20 (2026-08-22, issue #131) defines realm-boundary crossings:
+`@polyengine/protocol` gains `toCloneable`/`fromCloneable` — a
+structured-clone-safe envelope for the branded error taxonomy,
+error-contexts, and wasi exit unwinds, round-trip exact for every matcher
+this contract offers — while realm-local values (streams, stream writers,
+futures, resource wrappers, pollables) refuse `toCloneable` and carry an
+own enumerable function-valued property `"polyengine.realmLocal/1"` (the
+**realm-local pill**) so a raw structured clone throws `DataCloneError`
+at the sender instead of delivering a husk; error-context becomes
+**message-valued** at lowering (any branded carrier of a string `message`
+mints a fresh local context, superseding "lowering accepts only lifted
+instances"); the envelope is version-internal, never a wire format — see
+§"Realm boundaries and structured-clone-safe forms".**
 This document supersedes `descriptor-ir.md`'s interim
 "host value mapping" table as the destination for host-facing value shapes.
 The runtime's *raw* boundary (`instance.exports`, `HostImports`) keeps the
@@ -498,7 +511,7 @@ interface Stream<T> {
 interface Future<T> extends PromiseLike<T> {  // await it directly
   drop(): void; cancel(): void;
 }
-class ErrorContext { readonly message: string }  // lift-only: no host constructor (C2 amendment); lowering accepts only lifted instances
+class ErrorContext { readonly message: string }  // lift-only constructor-wise (C2 amendment); lowering also accepts any branded string-`message` carrier by minting a fresh local context (A20)
 class DroppedError extends Error { … }    // awaiting a dropped future rejects with this
 ```
 
@@ -639,7 +652,11 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
   guarantees). Remediation is by value, explicitly: pipe a foreign stream
   via `.readable()`, a foreign future via `Promise.resolve(f)`. Handles
   are stateful — their machinery lives in the copy that minted them — so
-  brands make foreign handles *diagnosable*, never *usable*.
+  brands make foreign handles *diagnosable*, never *usable*. (Error-
+  contexts left this class in amendment A20: they are message-valued, so
+  a branded foreign one carrying a string `message` lowers by minting a
+  fresh local context — see §"Realm boundaries and structured-clone-safe
+  forms".)
 - Writer-side host ends (`hostStream()`-era API) remain the low-level seam
   underneath; the conventions layer exposes them as
   `Stream.create<T>(): { stream: Stream<T>, writer: StreamWriter<T> }`
@@ -783,7 +800,7 @@ equivalent of a semver major:
 | `polyengine.suspending/1` | the marked function / class prototype (A1/A2) | suspendable sync imports |
 | `polyengine.stream/1` | `Stream.prototype` | embedder stream handles |
 | `polyengine.future/1` | `Future.prototype` | embedder future handles |
-| `polyengine.errorContext/1` | `ErrorContext.prototype` | lifted error-contexts |
+| `polyengine.errorContext/1` | `ErrorContext.prototype` | error-contexts (message-valued at lowering since A20) |
 | `polyengine.resourceState/1` | guest-resource wrappers (key for internal state; the state shape stays runtime-internal) | resource wrappers |
 | `polyengine.pollable/1` | `Pollable.prototype` (the wasi package) | pollables |
 | `polyengine.wasiExit/1` | `ExitError.prototype` (the wasi package) | wasi exit unwinds |
@@ -849,12 +866,15 @@ conveniences, not gatekeepers.
 **Stateless vs stateful.** For the error classes and the suspending mark,
 brand agreement is the whole story — a copy-B `ComponentException`
 crossing a copy-A boundary is fully honored. Stateful values (stream/future handles,
-resource wrappers, error-contexts) are different: their machinery lives
+resource wrappers) are different: their machinery lives
 in the copy that minted them, so cross-copy use is impossible in
 principle. For those, the brand converts "misclassified" into
 "recognized-but-foreign": a named error listing both copies' URLs (see
 §"Streams and futures" and the cross-store assert family, which now
-distinguishes cross-copy from cross-store).
+distinguishes cross-copy from cross-store). Error-contexts sit between
+the two since amendment A20: message-valued — any branded carrier of a
+string `message` is honored at lowering by minting a fresh local context
+(§"Realm boundaries and structured-clone-safe forms").
 
 **The copy registry.** Each embedder module instance appends
 `{ url, runtimeVersion, protocolGeneration }` (its `import.meta.url`) to
@@ -885,16 +905,175 @@ functions and symbol-keyed properties, so a handle, resource wrapper,
 branded error, or suspending-marked function that crosses `postMessage`
 arrives as an inert plain object, recognized by nothing (not even as
 "recognized-but-foreign" — the cross-copy story above is same-realm only).
-Structured-clone-safe *representations* for crossing realms
-(ComponentException payloads, close-info, etc.) are a separate surface,
-deliberately not defined here; recipes for worker-hosted topologies live
-outside the runtime (#128). The complementary guarantee — that the runtime,
-translator, and embedder paths themselves carry no Window or
+Structured-clone-safe *representations* for crossing realms are a separate
+surface, defined by amendment A20 (§"Realm boundaries and
+structured-clone-safe forms" below); recipes for worker-hosted topologies
+live outside the runtime (#128). The complementary guarantee — that the
+runtime, translator, and embedder paths themselves carry no Window or
 main-thread-only dependencies, so a runtime placed IN a worker behaves
 identically — is tested, not assumed: the conformance realm rows (Deno
 worker slice, browser dedicated/shared-worker rows, OPFS worker smokes)
 gate it in CI, and where a platform API differs by realm the runtime
 depends on the intersection rather than detecting and branching.
+
+## Realm boundaries and structured-clone-safe forms (amendment A20)
+
+Consumer evidence (issue #131; polyvisor G5's SharedWorker device host):
+recipe-layer proxies carry embedder-typed values across realm boundaries
+over `postMessage`, and structured clone strips prototypes and
+symbol-keyed properties — a branded error arrives as an unbranded husk
+(`payload` gone), a `Stream` as an empty object. Two realms are two
+runtimes by construction (issue #129), so no import-map discipline can
+help; without a defined form every proxy author invents an ad-hoc
+serialization, each subtly wrong. A20 defines the sanctioned crossing and
+makes the unsanctioned one fail loudly at the sender.
+
+**The API.** `@polyengine/protocol` exports:
+
+```ts
+function toCloneable(v: unknown, opts?: {
+  /** Called for realm-local leaves instead of throwing; the substitute is
+   *  walked in turn. Returning `undefined` (or the leaf itself) falls back
+   *  to the refusal. */
+  replace?: (leaf: object, path: string) => unknown;
+}): unknown;
+function fromCloneable(data: unknown): unknown;
+```
+
+`toCloneable` returns plain data safe for `structuredClone`/`postMessage`
+— no transfer list required, so the shape also passes `BroadcastChannel`,
+IndexedDB structured storage, etc. (a property of plain data, **not** a
+compatibility promise; see the version rule below). `fromCloneable` walks
+clone output and rehydrates every envelope into a value **branded by the
+local copy** — a new local value with correct identity semantics, never
+"the same" value. No RPC protocol, no automatic proxying, no cross-realm
+identity.
+
+**The round-trip law** (tested per taxonomy member):
+`fromCloneable(structuredClone(toCloneable(v)))` is behaviorally
+indistinguishable from `v` for every matcher this contract offers — the
+recognition predicates, `payload`/`kind`/`value` access, `message`,
+`cause` chains, `progress`, error-context `message`. Cause chains are
+walked to their full depth through branded and unbranded links alike —
+the canonical case is `PeerTrappedError.cause`, an unbranded recorded
+poisoning failure whose own `cause` is the underlying `Trap`
+(task/streams.ts): the trap at the bottom must still satisfy `isTrap`
+after the crossing, or a proxy cannot distinguish a peer fault from a
+clean drop's cousin. `stack` is carried
+verbatim when present (the sender's stack is the diagnostically useful
+one; the rehydration site's is noise).
+
+**The envelope.** A plain object whose tag property
+`"polyengine.cloneable/1"` holds the encoded value's brand key string. No
+WIT-mapped value can collide with the tag — WIT identifiers cannot
+contain `.` or `/`, and `map<K, V>` despecializes to a list of tuples,
+never an object keyed by data — and `toCloneable` refuses an input plain
+object that already carries the tag key, so the encoding needs no
+escaping scheme. Detection is by brand, never `instanceof`, so
+hand-rolled branded values (§"Module identity") encode identically to
+canonical class instances. Coverage:
+
+| tag value | encodes | fields besides the tag |
+|---|---|---|
+| `polyengine.componentException/1` | `ComponentException` | `message`, `stack?`, `cause?` (walked), `payload` (walked) |
+| `polyengine.trap/1` | `Trap` | `message`, `stack?`, `cause?` (walked) |
+| `polyengine.dropped/1` | `DroppedError` | `message`, `stack?`, `cause?` (walked) |
+| `polyengine.invalidHandle/1` | `InvalidHandleError` | `message`, `stack?`, `cause?` (walked) |
+| `polyengine.peerTrapped/1` | `PeerTrappedError` | `message`, `stack?`, `progress?`, `cause` (walked) |
+| `polyengine.streamProducer/1` | `StreamProducerError` | `message`, `stack?`, `cause` (walked) |
+| `polyengine.errorContext/1` | error-context (its message; see below) | `message` |
+| `polyengine.wasiExit/1` | the wasi package's `ExitError` | `message`, `stack?`, `ok`, `code?` |
+| `error` | an **unbranded** `Error` (cause chains) | `name`, `message`, `stack?`, `cause?` (walked) |
+
+`fromCloneable` rehydrates the six error tags as canonical protocol class
+instances; `error` as a plain `Error` with `name` restored;
+`polyengine.wasiExit/1` as a hand-rolled branded `Error` carrying
+`ok`/`code` (the protocol package does not import the wasi package — the
+brand *is* the contract); `polyengine.errorContext/1` as a branded plain
+object `{ message }`, which the runtime accepts at lowering (below). An
+**unknown tag throws** `TypeError`: the envelope is version-internal, so
+a tag this copy does not know means mixed engine versions — outside the
+supported matrix, and failing loud beats a half-rehydrated tree.
+
+**Walk semantics** (`toCloneable`; `fromCloneable` mirrors it):
+
+- Pass through: `string`, `number`, `boolean`, `bigint`, `undefined`,
+  `null`; `ArrayBuffer`, typed arrays, `DataView` (by reference — the
+  serializer copies them).
+- Walk into fresh containers: arrays; plain objects (prototype
+  `Object.prototype` or `null`), own enumerable string-keyed properties.
+- Encode: branded values per the table; unbranded `Error` instances as
+  `error`. Envelope-encodable brands take precedence over the realm-local
+  pill (an `ErrorContext` instance carries both; it encodes).
+- Refuse with `InvalidHandleError` (whose documented meaning A20 widens
+  from "resource-wrapper misuse" to handle misuse generally): realm-local
+  leaves — anything `isRealmLocal`, anything carrying the `STREAM`,
+  `FUTURE`, or `POLLABLE` brand, and resource wrappers (a defined
+  `RESOURCE_STATE` property) — unless `replace` substitutes. Resources
+  are realm-local by principle (their machinery lives in the minting
+  copy's tables; issue #129's identity rule): **proxy the interface, not
+  the handle.**
+- Refuse with `TypeError`: functions, symbols, cyclic values, objects
+  with any other prototype. `Map`/`Set`/`Date`/`RegExp` and other
+  platform clonables cannot occur in WIT-mapped data and are passed
+  through **unwalked** — a branded value hidden inside one is not
+  converted (unsupported), and a realm-local handle hidden inside one
+  still trips its pill at clone time.
+- Every refusal message MUST name the path to the offending leaf (e.g.
+  `payload.attempts[2].handle`) — that is the proxy author's debugging
+  surface.
+
+Aliasing within the input is not preserved (WIT values have no aliasing
+semantics); a genuinely cyclic value is refused rather than looped over.
+
+**Version-internal, not a wire format.** The supported matrix is the same
+engine version in both realms — the family already pins one engine
+version per tree (docs/consumers.md). The envelope shape may change in
+any release with no compatibility spelling; never build persistence on
+it.
+
+**The realm-local pill.** Every instance of the realm-local classes —
+`Stream`, `StreamWriter`, `Future`, `ErrorContext`, guest-resource
+wrappers, the wasi package's `Pollable` — carries an **own, enumerable,
+string-keyed** data property `"polyengine.realmLocal/1"` whose value is a
+named function (`polyengineRealmLocalValue`), installed at construction.
+Structured serialization visits own enumerable string-keyed properties
+and refuses function values by construction, so a raw
+`postMessage`/`structuredClone` of such a value — including one buried
+inside a record the embedder posted raw — throws `DataCloneError` in the
+**sender** realm instead of delivering a husk. The property must be a
+string key (the serializer skips symbol keys) and own (it never visits
+prototypes), which is why it cannot ride the A9 brand mechanism.
+Collateral is deliberate: `JSON.stringify` omits function values and
+spread copies an inert reference, so only clone paths trip. The
+deterministic, explanatory error is `toCloneable`'s job; the pill is the
+engine-enforced backstop for everyone who skips it. Vocabulary:
+`REALM_LOCAL` (the key string), `defineRealmLocal(target)`,
+`isRealmLocal(v)`, exported by `@polyengine/protocol`.
+
+**Errors cannot be pilled.** The serializer takes the `[[ErrorData]]`
+branch for `Error` instances: `name`/`message`(/`stack`) survive, custom
+own properties and getters are never consulted. A raw-cloned branded
+error therefore husks **silently** — brand and `payload` gone — and no
+userland property can change that. That is precisely the gap
+`toCloneable` exists to fill; the pill covers only the stateful handles,
+and the two mechanisms partition the vocabulary exactly.
+
+**Error-context is message-valued** (A20 semantic change, superseding
+"lowering accepts only lifted instances", §"Streams and futures"). An
+error-context's state is exactly its debug message (definitions.py), so
+lowering accepts, besides this copy's lifted instances, **any** branded
+carrier of a string `message` — a fresh local context is minted, a new
+local value, never "the same" one. `fromCloneable`'s error-context output
+is such a carrier, and so is a hand-rolled
+`{ [Symbol.for("polyengine.errorContext/1")]: true, message }`. A branded
+error-context **without** a string `message` keeps the loud A9 cross-copy
+refusal — that shape is a genuinely foreign stateful handle, not a
+message carrier.
+
+A20 ships in `@polyengine/protocol` 0.2.0 — the same pending release as
+A19's key rename (new exports; the runtime re-exports them unchanged, per
+A9).
 
 ## Bindgen obligations (summary of what the above requires)
 
