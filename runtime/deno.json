@@ -1,6 +1,6 @@
 {
   "name": "@polyengine/runtime",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "exports": {
     "./cache": "./src/cache/mod.ts",
     "./plan": "./src/plan/mod.ts",
