@@ -3,11 +3,18 @@ name: Publish to npm
 # The npm half of the release scheme. JSR is published inline by release.yml;
 # npm is published HERE, for the release that release.yml has just created.
 #
-# How this is reached: release.yml DISPATCHES it explicitly (its last step).
-# The `release: published` trigger below is a backstop for a release created by
-# hand — it cannot serve the automated path, because GitHub does not start
-# workflow runs from events raised with GITHUB_TOKEN, and `workflow_dispatch`
-# is the documented exception to that rule.
+# CUT RELEASES ONLY (#223): the registries carry `v<version>` cuts and
+# nothing else. A `pre-<shorthash>` tag is REFUSED by the version step
+# below rather than ignored, which also gives the `release: published`
+# backstop teeth — a hand-made GitHub prerelease can start this workflow,
+# but it cannot publish anything.
+#
+# How this is reached: release.yml DISPATCHES it explicitly (its last step,
+# on cut releases only). The `release: published` trigger below is a
+# backstop for a release created by hand — it cannot serve the automated
+# path, because GitHub does not start workflow runs from events raised with
+# GITHUB_TOKEN, and `workflow_dispatch` is the documented exception to that
+# rule.
 #
 # Why not a step inside release.yml, next to the JSR publish: npm's trusted
 # publishing (OIDC) validates the CALLING workflow's filename, and release.yml
@@ -32,7 +39,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: The release tag to publish to npm (e.g. v0.1.0 or pre-abc1234).
+        description: The release tag to publish to npm (a cut tag, e.g. v0.1.0).
         required: true
         type: string
 
@@ -69,16 +76,16 @@ jobs:
       - name: compute the version
         id: ver
         # Mirrors release.yml's scheme exactly, derived from the tag so the two
-        # cannot drift: a cut release tags `v<version>`; a prerelease tags
-        # `pre-<shorthash>` and takes <next> from the committed manifest, which
-        # release.yml stamps only in its own working tree. This VERSION is the
-        # build stamp for the lockstep four (runtime, translator, wasi,
-        # ct-runner) only — build.ts passes it as `--version` and it does NOT
-        # affect @polyengine/protocol, which always emits at its own manifest
-        # version (A10). The dist-tag is no longer computed here: each
-        # package's actual built version decides its own tag in the publish
-        # step below (a hyphen means prerelease), since protocol's version can
-        # differ from the stamp.
+        # cannot drift: a cut release tags `v<version>` and publishes at
+        # exactly that version. `pre-<shorthash>` tags are refused, not
+        # skipped: prereleases are GitHub releases carrying artifacts and are
+        # published to NO registry (#223), so reaching this workflow with one
+        # means something dispatched or triggered it in error, and a clear
+        # failure beats a surprise publish. This VERSION is the build stamp
+        # for the lockstep four (runtime, translator, wasi, ct-runner) only —
+        # build.ts passes it as `--version` and it does NOT affect
+        # @polyengine/protocol, which always emits at its own manifest
+        # version (A10).
         run: |
           TAG='${{ steps.rel.outputs.tag }}'
           case "$TAG" in
@@ -86,10 +93,11 @@ jobs:
               VERSION="${TAG#v}"
               ;;
             pre-*)
-              VERSION="$(jq -r '.version' runtime/deno.json)-pre.g${TAG#pre-}"
+              echo "tag '$TAG' is a prerelease: prereleases are not published to npm or JSR (policy as of #223) — only cut releases (v<version>) are" >&2
+              exit 1
               ;;
             *)
-              echo "tag '$TAG' is neither v<version> nor pre-<shorthash>" >&2
+              echo "tag '$TAG' is not a cut tag (v<version>)" >&2
               exit 1
               ;;
           esac
@@ -118,28 +126,18 @@ jobs:
       - name: publish
         # Dependency order — protocol first: it is not part of the lockstep
         # (A10), so it publishes once per manifest bump, at its own version,
-        # and is skipped as already-published on every other run (JSR parity
-        # with release.yml's "compute tag and version" step). Publishing it
-        # before its dependents guarantees the version they reference (via a
-        # caret dependency — see build.ts) already exists on the registry the
-        # first time it is needed. Already-published versions are skipped
-        # rather than failed for every package — same convergence property as
-        # the JSR step, so a re-run after a partial failure completes the set
-        # instead of stranding it.
+        # and is skipped as already-published at every cut after that (npm
+        # parity with release.yml's JSR step). Publishing it before its
+        # dependents guarantees the version they reference (via a caret
+        # dependency — see build.ts) already exists on the registry the first
+        # time it is needed. Already-published versions are skipped rather
+        # than failed for every package — a re-run after a partial failure
+        # completes the set instead of stranding it.
         #
-        # Dist-tag is derived per package from its OWN built version, not the
-        # lockstep stamp: a hyphen (prerelease, e.g. 0.3.1-pre.gabc1234) means
-        # `--tag pre`; a bare version means `--tag latest`. Note the one case
-        # this cannot control: npm points `latest` at a package's FIRST
-        # published version regardless of --tag, and refuses to remove the tag
-        # (403) — the bootstrap publish that created these packages was a
-        # prerelease, so `latest` named it until the first cut release
-        # overwrote it. protocol's next publish (its manifest is 0.1.0) will
-        # move npm `latest` for @polyengine/protocol BACKWARD from whatever
-        # lockstep-stamped prerelease last got tagged `latest` there (e.g. an
-        # orphaned 0.3.0) — this is intended, not a bug: the orphan stays
-        # published and reachable, because runtime@0.3.0 (etc.) pins it
-        # exactly rather than through `latest`.
+        # Every version reaching this loop is a bare cut version (the step
+        # above refuses anything else), so `latest` is the only dist-tag in
+        # play; the `pre` tag belongs to the retired prerelease-publishing
+        # flow and stays frozen wherever it last pointed.
         #
         # Provenance attestations are generated automatically for trusted
         # publishing from a public repository; no --provenance flag needed.
@@ -152,10 +150,6 @@ jobs:
               echo "$name@$V already published — skipping"
               continue
             fi
-            case "$V" in
-              *-*) TAG=pre ;;
-              *) TAG=latest ;;
-            esac
-            echo "publishing $name@$V (dist-tag $TAG)"
-            npm publish --tag "$TAG" --workspaces=false ./npm/"$p"
+            echo "publishing $name@$V (dist-tag latest)"
+            npm publish --tag latest --workspaces=false ./npm/"$p"
           done

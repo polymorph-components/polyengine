@@ -6,21 +6,23 @@ name: Release
 #
 # PRERELEASE (default; invoked automatically from ci.yml's `release` job on
 # every GREEN main ref update via workflow_call, and manually via
-# workflow_dispatch as the escape hatch): tag `pre-<shorthash>`, JSR
-# versions `<next>-pre.g<shorthash>` where <next> is the lockstep version
-# in the package manifests. The manifests always carry the NEXT release —
-# bumped to the next patch right after each cut, or to the next minor by
-# the PR that lands a breaking change — so prereleases order after the
-# last release and never collide with a cut version.
+# workflow_dispatch as the escape hatch): a GitHub release tagged
+# `pre-<shorthash>` carrying the artifact set below. It publishes NOTHING
+# to a registry (policy as of #223 — JSR and npm are published by CUT
+# releases only), so there is no version stamping either: the manifests
+# are left exactly as committed, and a prerelease names a commit rather
+# than a version. Consumers tracking `main` between cuts take these
+# release assets or a git reference (README §Consuming).
 #
 # RELEASE (workflow_dispatch with release=true): cuts the manifest version
-# — JSR publish at exactly <next>, tag `v<next>`, GitHub release without
-# the prerelease mark, same artifact set. Guards: the four manifests agree
-# (lockstep), the tag does not exist, and the commit already carries its
-# `pre-<shorthash>` release — proof this exact commit went green through
-# the full core+browser pipeline (the automatic path only fires on green
-# main). Cut, then land the manifest-bump PR; until it lands, further
-# prereleases stamp `<cut>-pre.*` (unordered but exact-pin-only, harmless).
+# — JSR publish at exactly <next> (the manifests always carry the NEXT
+# release: bumped to the next patch right after each cut, or to the next
+# minor by the PR that lands a breaking change), tag `v<next>`, GitHub
+# release without the prerelease mark, same artifact set. Guards: the four
+# manifests agree (lockstep), the tag does not exist, and the commit
+# already carries its `pre-<shorthash>` release — proof this exact commit
+# went green through the full core+browser pipeline (the automatic path
+# only fires on green main). Cut, then land the manifest-bump PR.
 #
 # Artifacts (both modes): the prebuilt translator wasm (standard release
 # build — the exact artifact every test suite runs against — with the
@@ -33,19 +35,22 @@ name: Release
 # test-version-guard`). Two of its three modes run here — the third is
 # ci.yml's per-PR early warning:
 #
-#   `publish` (BOTH modes, before the JSR publish) — the protocol identity
-#   guard. @polyengine/protocol is outside the lockstep and is SKIPPED as
-#   already-published whenever its manifest version already exists on JSR;
-#   if the in-tree protocol has moved since that version was published,
-#   this run ships every dependent against the registry's older copy. That
-#   is the #219 tear: protocol/src changed without a manifest bump (its
-#   merge assumed 0.2.0 was unpublished; an automatic prerelease had
-#   published it hours earlier), so runtime@0.4.0-pre.* went out importing
-#   exports protocol@0.2.0 did not have, an import-time failure for
-#   consumers, repaired by #221. The guard compares in-tree protocol to the
-#   published manifest byte for byte, both directions, and fails the run
-#   before anything is published. Here rather than at PR time by
-#   necessity: a PR-time check races publish-on-green-main and loses.
+#   `publish` (BOTH modes, before the JSR publish step) — the protocol
+#   identity guard. @polyengine/protocol is outside the lockstep and is
+#   SKIPPED as already-published whenever its manifest version already
+#   exists on JSR; if the in-tree protocol has moved since that version was
+#   published, a publish ships every dependent against the registry's older
+#   copy. That is the #219 tear: protocol/src changed without a manifest
+#   bump (its merge assumed 0.2.0 was unpublished; under the pre-#223 flow
+#   every green main published, and one had published 0.2.0 hours earlier),
+#   so runtime@0.4.0-pre.* went out importing exports protocol@0.2.0 did
+#   not have — an import-time failure for consumers, repaired by #221. The
+#   guard compares in-tree protocol to the published manifest byte for
+#   byte, both directions. It runs in BOTH modes for different reasons: on
+#   the cut path it is authoritative, standing between a tear and the only
+#   registry publish there is; on the prerelease path nothing publishes, so
+#   it is pure early detection — a red there means the NEXT CUT would tear,
+#   and main hears about it on the first green run instead of at cut time.
 #
 #   `cut` (RELEASE=true only) — reads the breaking/* labels of every PR
 #   merged since the last cut tag, LIVE from the API (so a label corrected
@@ -93,12 +98,13 @@ jobs:
         id: tag
         # The manifest version is the single source of truth (the NEXT
         # release); the lockstep guard keeps a half-bumped workspace from
-        # publishing a torn version set. @polyengine/protocol is deliberately
-        # outside the lockstep: it versions independently (embedder-api
-        # A10), publishes as-is on the first green run after its manifest
-        # bumps (prerelease cross-deps rewrite to caret of the manifest
-        # version, so it must exist on JSR), and is skipped as
-        # already-published on every other run.
+        # publishing a torn version set. VERSION is the manifest version in
+        # both modes — no stamping since #223 — but only the cut path
+        # consumes it, since a prerelease publishes to no registry and names
+        # its commit instead. @polyengine/protocol is deliberately outside
+        # the lockstep: it versions independently (embedder-api A10),
+        # publishes at the next cut after its manifest bumps, and is skipped
+        # as already-published at every cut after that.
         run: |
           VERSION=$(jq -r '.version' runtime/deno.json)
           for p in translator wasi ct-runner; do
@@ -117,7 +123,6 @@ jobs:
             fi
           else
             TAG="pre-$SHORT"
-            VERSION="$VERSION-pre.g$SHORT"
           fi
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "release $TAG already exists" >&2
@@ -130,15 +135,23 @@ jobs:
           RELEASE: ${{ inputs.release }}
 
       - name: protocol identity guard
-        # Both modes, and BEFORE `deno publish` — see the header. If
+        # Both modes, and BEFORE the JSR publish step — see the header. If
         # protocol/deno.json's version is unpublished this passes trivially
-        # (the publish below creates it); if it is already published, the
-        # in-tree protocol must be byte-identical to what is on JSR under
-        # that version, because `deno publish` will skip it and every
-        # dependent published in this run will resolve to the registry's
-        # copy. Exact identity is deliberate: a "meaningful difference"
-        # heuristic is what talks a torn release into shipping (softer
-        # variants are parked in issue #222).
+        # (the next cut creates it); if it is already published, the in-tree
+        # protocol must be byte-identical to what is on JSR under that
+        # version, because `deno publish` will skip it and every dependent
+        # published alongside will resolve to the registry's copy.
+        #
+        # On the CUT path that makes it the authoritative guard: it is the
+        # last thing between a tear and the only registry publish there is.
+        # On the PRERELEASE path nothing publishes at all since #223, so it
+        # is pure early detection — a red means the next cut would tear, and
+        # main hears about it on the first green run after the mistake
+        # lands rather than at cut time. Cheap either way (two HTTP GETs).
+        #
+        # Exact identity is deliberate: a "meaningful difference" heuristic
+        # is what talks a torn release into shipping (softer variants are
+        # parked in issue #222).
         run: >-
           deno run --allow-net=jsr.io --allow-read=.
           tools/version-guard/check.ts publish
@@ -166,22 +179,11 @@ jobs:
         run: just release-artifacts
 
       - name: publish to JSR
-        # Prerelease version scheme (issue #16): <next>-pre.g<shorthash> —
-        # correlates 1:1 with this run's `pre-<shorthash>` release tag. The
-        # `g` prefix (git-describe's convention) is load-bearing: a bare
-        # short hash can be all-digits-with-leading-zero, which is INVALID
-        # semver (numeric identifiers forbid leading zeros) and would fail
-        # ~0.4% of publishes at random. Hash versions are unique per commit
-        # (JSR refuses duplicates, making re-runs no-ops-by-failure like
-        # the tag guard) but deliberately NOT monotonic under semver
-        # ordering: unstable prereleases are pinned exactly, never ranged.
-        # The stamped versions are CI-working-tree-only (never committed);
-        # cross-package workspace deps are rewritten by `deno publish`.
-        # Release mode publishes the manifests exactly as committed — no
-        # stamping. --allow-dirty in both modes: the working tree holds the
-        # untracked release artifacts (and, in prerelease mode, the stamped
-        # manifests); checkout-at-sha plus the tag guard carry the actual
-        # integrity.
+        # CUT RELEASES ONLY (#223): the registries carry cut versions and
+        # nothing else, so there is no prerelease publish and no version
+        # stamping — the manifests publish exactly as committed. Consumers
+        # tracking `main` between cuts use the prerelease's artifacts or a
+        # git reference (README §Consuming).
         # Auth: OIDC (permissions.id-token) — the @polyengine packages must
         # exist on jsr.io and be linked to this repository (one-time
         # manual setup; see the #16 checklist). The scope's "actor must be
@@ -194,25 +196,23 @@ jobs:
         # publish` skips already-published versions, so it converges
         # instead of stranding a release that claims unpublished JSR
         # versions.
+        # --allow-dirty: the working tree holds the untracked release
+        # artifacts built above; checkout-at-sha plus the tag guard carry
+        # the actual integrity.
+        if: inputs.release
         run: |
           echo "publishing @polyengine/* ${VERSION}"
-          if [ "$RELEASE" != "true" ]; then
-            for p in runtime translator wasi ct-runner; do
-              jq --arg v "$VERSION" '.version = $v' "$p/deno.json" > "$p/deno.json.tmp"
-              mv "$p/deno.json.tmp" "$p/deno.json"
-            done
-          fi
           deno publish --allow-dirty
         env:
           VERSION: ${{ steps.tag.outputs.version }}
-          RELEASE: ${{ inputs.release }}
 
       - name: create release
         # RELEASE=true splices the guard's changes.md (Breaking / Changes,
         # empty sections omitted) between the intro and the artifacts
-        # paragraph. Prerelease notes stay exactly as they were: a
-        # prerelease is a single commit, and the release window it would
-        # describe is the one the next cut will describe in full.
+        # paragraph. A prerelease has no window to describe (it is one
+        # commit; the next cut describes the whole span) and, since #223,
+        # nothing on a registry to point at — so its notes say what it
+        # actually is: artifacts for a green main commit.
         run: |
           {
             if [ "$RELEASE" = "true" ]; then
@@ -229,10 +229,10 @@ jobs:
             else
               echo "Prerelease \`${TAG}\` at ${GITHUB_SHA}."
               echo
-              echo "The same commit is published to JSR as an unstable prerelease"
-              echo "of \`@polyengine/{runtime,translator,wasi,ct-runner}\` (\`${VERSION}\`,"
-              echo "exact-pin-only), and to npm under the \`pre\` dist-tag; see README.md"
-              echo "for usage."
+              echo "Artifacts only: nothing here is published to JSR or npm — the"
+              echo "registries carry cut releases (\`v*\`) exclusively. To track \`main\`"
+              echo "between cuts, use the assets below or a git reference; see"
+              echo "README.md §Consuming."
             fi
             echo
             echo "Artifacts: the prebuilt translator shim wasm (size-tuned — the"
@@ -262,6 +262,9 @@ jobs:
           RELEASE: ${{ inputs.release }}
 
       - name: publish to npm
+        # CUT RELEASES ONLY (#223), matching the JSR step: prereleases
+        # publish to no registry, so there is nothing to dispatch for them.
+        #
         # An explicit dispatch, not npm-publish.yml's `release: published`
         # trigger: GitHub deliberately does NOT start workflow runs from events
         # raised with GITHUB_TOKEN, so the release created above fires nothing.
@@ -276,6 +279,7 @@ jobs:
         # second registry, and a failure there must not retroactively fail a
         # release whose JSR publish and GitHub release already succeeded. The
         # dispatched run is re-runnable on its own.
+        if: inputs.release
         run: |
           gh workflow run npm-publish.yml \
             --repo "$GITHUB_REPOSITORY" \

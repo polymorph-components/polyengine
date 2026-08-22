@@ -147,8 +147,9 @@ Deno.test("semver: compare covers the ordering edges", () => {
   lt("0.3.9", "0.4.0");
   lt("0.4.0", "0.4.1");
   lt("0.9.0", "1.0.0");
-  // A prerelease sorts BEFORE its release — the property the whole
-  // `<next>-pre.g<hash>` scheme rests on.
+  // A prerelease sorts BEFORE its release — the property the retired
+  // `<next>-pre.g<hash>` registry scheme rested on; its versions remain
+  // published, so the ordering edge stays pinned.
   lt("0.4.0-pre.g1a2b3c4", "0.4.0");
   // Numeric identifiers compare numerically, not as strings.
   lt("0.4.0-pre.2", "0.4.0-pre.10");

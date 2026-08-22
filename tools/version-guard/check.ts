@@ -4,8 +4,8 @@
 // What it defends. The five packages publish under two rules (AGENTS.md
 // §Versioning, README §Consuming): @polyengine/{runtime,translator,wasi,
 // ct-runner} version in LOCKSTEP and their manifests always carry the NEXT
-// release; @polyengine/protocol versions independently and publishes as-is
-// on the first green run after its manifest bumps. Breaking changes are
+// release; @polyengine/protocol versions independently and publishes at the
+// next cut after its manifest bumps. Breaking changes are
 // declared per package by PR labels `breaking/<package>`; no label means
 // caret-compatible. Labels are MUTABLE and read live from the GitHub API
 // every time — a label corrected after the merge still steers the cut,
@@ -20,23 +20,30 @@
 //             Advisory in the sense that matters: label edits deliberately
 //             do NOT re-trigger CI, so a PR-time verdict can be stale by
 //             merge time. Cheap to be wrong here; a re-run picks up fixes.
-//   publish — the AUTHORITATIVE tear guard, in release.yml before `deno
-//             publish`, in BOTH modes. PR-time checks lose a TOCTOU race
-//             against publish-on-green-main; this one runs at the moment of
-//             publishing and cannot.
+//   publish — the AUTHORITATIVE tear guard, in release.yml's publish step,
+//             in BOTH modes. Registry publishes happen only at explicit
+//             cuts (#223), so the window between a PR-time verdict and a
+//             publish is no longer a race — but a PR-time verdict is still
+//             the wrong thing to trust: it misses label edits made after
+//             the run, commits pushed straight to main, and any run stale
+//             by the time the cut happens. This check runs at the publish
+//             itself, reads the tree being published, and cannot be stale.
+//             On the prerelease path it publishes nothing and is instead
+//             early detection: a red means the next CUT would tear.
 //   cut     — label/version consistency for the whole release window, plus
 //             the release-notes fragment, in release.yml on release=true
 //             only. This is where a breaking label becomes a minor bump.
 //
 // The tear this exists for (the concrete incident): PR #219 changed
 // protocol/src without bumping protocol/deno.json, because its merge
-// resolution assumed 0.2.0 was still unpublished — an automatic prerelease
-// had published it hours earlier. Every publish after that skipped protocol
-// as already-published, so runtime@0.4.0-pre.* shipped importing exports
-// the published protocol@0.2.0 did not have: an import-time failure for
-// anyone consuming the pair. #221 (protocol 0.2.1) repaired it. `publish`
-// mode is the check that would have made that red, loudly, at the first
-// publish after the merge.
+// resolution assumed 0.2.0 was still unpublished — under the pre-#223 flow
+// every green main published, and one such run had published 0.2.0 hours
+// earlier. Every publish after that skipped protocol as already-published,
+// so runtime@0.4.0-pre.* shipped importing exports the published
+// protocol@0.2.0 did not have: an import-time failure for anyone consuming
+// the pair. #221 (protocol 0.2.1) repaired it. `publish` mode is the check
+// that would have made that red, loudly, at the first publish after the
+// merge.
 
 import { compareSemver, isMinorBumped, parseSemver } from "./semver.ts";
 import {
@@ -347,11 +354,11 @@ export function protocolPrChecks(input: {
   // 7. The tear, caught early: protocol source moving without a version
   // move means the next publish silently skips protocol as
   // already-published and its dependents ship against stale exports.
-  // Note the reference point is JSR's CURRENT latest, so re-running this
-  // check on an ALREADY-MERGED protocol PR goes red (its bump has since
-  // been published). That is the honest reading for a live check — the
-  // question is always "would publishing from this tree tear?" — and it
-  // costs nothing, since a merged PR's rerun gates nothing.
+  // The reference point is JSR's CURRENT latest, which is a cut version:
+  // since #223 a merged bump stays unpublished until the next cut, so
+  // replaying this check on an already-merged protocol PR still passes.
+  // The question it asks is always the live one — "would publishing from
+  // this tree tear?".
   const touched = changed.filter((f) =>
     f.startsWith("protocol/src/") || f === "protocol/deno.json"
   );

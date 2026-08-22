@@ -128,8 +128,10 @@ Standing rules:
   plus runtime's A9 copy-identity constant `RUNTIME_VERSION`
   (runtime/src/embedder/copy.ts; `just test-runtime` pins the sync).
   `@polyengine/protocol`
-  versions independently; bumping its manifest publishes it for real on
-  the next green run.
+  versions independently; bumping its manifest publishes it for real at the
+  next cut. Prereleases (`pre-<shorthash>`, every green `main`) are GitHub
+  releases carrying artifacts only — JSR and npm are published by cut
+  releases exclusively (#223).
 - Breaking changes are declared by PR **label**, one per package:
   `breaking/{runtime,translator,wasi,ct-runner,protocol}`. A label asserts
   that the PR breaks that package's published surface (caret-incompatible);
@@ -142,10 +144,13 @@ Standing rules:
   logic): `pr` mode in `gha::core` (lockstep agreement, monotonicity,
   label ↔ minor-bump agreement both ways, protocol-tear warning — an early
   warning only, since label edits deliberately do not re-trigger CI);
-  `publish` mode in release.yml before every JSR publish (in-tree protocol
-  must be byte-identical to the published version its manifest names —
-  the authoritative guard against the #219 tear, which PR-time checks
-  cannot own because they race publish-on-green-main); and `cut` mode on
+  `publish` mode in release.yml's publish step, both modes (in-tree
+  protocol must be byte-identical to the published version its manifest
+  names — the authoritative guard against the #219 tear, which PR-time
+  checks cannot own because they miss post-run label edits, direct pushes
+  to main, and their own staleness at cut time; on the prerelease path
+  nothing publishes, so it is early detection of a tear the next cut would
+  hit); and `cut` mode on
   `release=true`, which turns the window's labels into the minor-bump
   requirement and renders the release notes.
 - **Cutting a release.** (1) Sanity pass, the step no machine can do:
@@ -165,8 +170,9 @@ Standing rules:
   (5) Land the post-cut manifest-bump PR to the next patch immediately: the
   four lockstep manifests + `RUNTIME_VERSION`. (6) Confirm the
   npm-publish.yml run release.yml dispatched, and spot-check the dist-tags
-  (`npm view @polyengine/runtime dist-tags`) — `latest` on the cut,
-  `pre` on the prerelease stream.
+  (`npm view @polyengine/runtime dist-tags`) — `latest` must name the cut.
+  (The `pre` dist-tag is retired with the prerelease-publishing flow and
+  stays frozen wherever it last pointed.)
 - Two registries, one version (protocol rides its own manifest version on
   both — A10). JSR is published inline by release.yml; npm
   is published by npm-publish.yml, triggered by the GitHub release, from

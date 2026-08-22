@@ -102,19 +102,25 @@ jobs:
       # required lanes + the best-effort webkit lane, per the recipes.
       - run: just gha::browser
 
-  # Every GREEN main ref update ships a prerelease (issue #16's interim
-  # scheme): tag pre-<shorthash>, shim artifacts + SHA256SUMS. Gated on this
-  # same run's core matrix + browser job, so "green" is the release
-  # criterion by construction. Notes: (a) the concurrency group above
-  # cancels superseded runs, so rapid consecutive pushes release only the
-  # surviving tip — a cancelled run was never green; (b) continue-on-error
-  # steps (the webkit lane) do not block a release, by the same policy
-  # that keeps them non-blocking in CI.
+  # Every GREEN main ref update ships a GitHub PRERELEASE: tag
+  # pre-<shorthash>, shim artifacts + SHA256SUMS, and nothing on a registry
+  # — JSR and npm carry cut releases only (#223). Gated on this same run's
+  # core matrix + browser job, so "green" is the release criterion by
+  # construction, and the prerelease doubles as the proof a cut later
+  # requires ("a pre-<shorthash> release exists for this commit"). Notes:
+  # (a) the concurrency group above cancels superseded runs, so rapid
+  # consecutive pushes release only the surviving tip — a cancelled run was
+  # never green; (b) continue-on-error steps (the webkit lane) do not block
+  # a release, by the same policy that keeps them non-blocking in CI.
   release:
     needs: [core, browser]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # `contents: write` only: this path creates a GitHub release and uploads
+    # assets, full stop. It no longer needs id-token (JSR OIDC) or actions
+    # (dispatching npm-publish.yml), because neither registry is published
+    # from a prerelease. A cut enters release.yml by workflow_dispatch
+    # instead, under that workflow's own permissions block, which still
+    # carries both.
     permissions:
       contents: write
-      id-token: write # JSR OIDC publishing (the called workflow requests it)
-      actions: write # ditto: it dispatches npm-publish.yml
     uses: ./.github/workflows/release.yml
