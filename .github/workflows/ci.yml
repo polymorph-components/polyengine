@@ -115,12 +115,18 @@ jobs:
   release:
     needs: [core, browser]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    # `contents: write` only: this path creates a GitHub release and uploads
-    # assets, full stop. It no longer needs id-token (JSR OIDC) or actions
-    # (dispatching npm-publish.yml), because neither registry is published
-    # from a prerelease. A cut enters release.yml by workflow_dispatch
-    # instead, under that workflow's own permissions block, which still
-    # carries both.
+    # The prerelease path only ever uses `contents: write` (create a GitHub
+    # release, upload assets) — no registry is published from a prerelease,
+    # so id-token (JSR OIDC) and actions (the npm dispatch) are dead weight
+    # here. They are granted anyway BECAUSE THEY MUST BE: a reusable-workflow
+    # call fails at STARTUP unless the caller grants everything the called
+    # workflow's `permissions` block requests, if-skipped steps included
+    # (observed on #223: "requesting 'actions: write, id-token: write', but
+    # is only allowed 'none'"), and release.yml requests all three for its
+    # cut mode. The unused tokens are inert: the steps that would spend them
+    # are `if: inputs.release`, which a workflow_call run cannot set.
     permissions:
       contents: write
+      id-token: write # unused here; required by release.yml's request (cut mode)
+      actions: write # ditto
     uses: ./.github/workflows/release.yml
