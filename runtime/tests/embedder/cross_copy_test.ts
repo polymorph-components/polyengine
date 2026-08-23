@@ -16,11 +16,10 @@ function assertTrue(cond: boolean, msg = ""): void {
 }
 import {
   copyCensus,
-  COPY_URL,
   registerRuntimeCopy,
-  RUNTIME_VERSION,
   runtimeCopies,
-} from "../../src/embedder/mod.ts";
+} from "@polyengine/protocol";
+import { COPY_URL, RUNTIME_VERSION } from "../../src/embedder/mod.ts";
 import { lowerFutureSource, lowerStreamSource } from "../../src/embedder/streams.ts";
 import { initWrapper, takeRep, wrapperState } from "../../src/embedder/resources.ts";
 import { GuestResource } from "../../src/embedder/mod.ts";

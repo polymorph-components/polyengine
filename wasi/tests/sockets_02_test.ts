@@ -4,7 +4,7 @@
 // 0.3's variant — the A10 rule the composed gate can't isolate). The
 // happy composed path is integration_net_test.ts's std::net battery.
 
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import type { Pollable } from "../src/io.ts";
 import { type IpSocketAddress, SocketIoError, sockets } from "../src/sockets.ts";
 import { assertEq, assertThrows, assertTrue } from "./asserts.ts";

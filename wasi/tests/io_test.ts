@@ -2,7 +2,7 @@
 // stream-error cases (contracts/embedder-api.md §"WASI examination").
 
 import { assertEq, assertRejects, assertTrue } from "./asserts.ts";
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import { InputStream, io, OutputStream, Pollable, poll } from "../src/io.ts";
 import type { StreamErrorValue } from "../src/io.ts";
 

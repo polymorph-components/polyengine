@@ -531,6 +531,12 @@ class ErrorContext { readonly message: string }  // lift-only constructor-wise (
 class DroppedError extends Error { … }    // awaiting a dropped future rejects with this
 ```
 
+Since amendment A22 these interfaces (plus `StreamWriter<T>` and the aux
+types) are exported, executable, from `@polyengine/protocol`, with brand
+predicates `isStream`/`isStreamWriter`/`isFuture`/`isErrorContext`; the
+runtime's concrete classes implement them and are not exported (§"The
+host-ABI surface and its version").
+
 - **Future results are eager handles** (C2 amendment): an export whose WIT
   result is `future<T>` returns `Future<T>` **directly**, not
   `Promise<Future<T>>` — JS promise resolution unconditionally adopts
@@ -557,7 +563,11 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
 - **Lowering accepts the natural JS producers**: where the guest expects a
   `stream<T>`, the host may pass a `ReadableStream`, an `AsyncIterable`,
   an array (finite), or a `Stream<T>` handle; for `future<T>`, a
-  `Promise<T>` or `Future<T>`. Bindgen adapts and **owns the pumping**:
+  `Promise<T>` or `Future<T>`. A `Future<T>` **handle** is lowerable once
+  its host end has materialized (its producing call completed — the A16
+  deferred window); lowering a still-deferred handle is refused loudly,
+  never queued (A22 suite evidence — a thenable or `Promise` has no such
+  window and is always accepted). Bindgen adapts and **owns the pumping**:
   the driving arms auto-close on end/`DROPPED` (eliminating the
   deadlock-masking activity-lifetime footgun — R-fix review note 2), and
   cross-store reuse is a runtime-asserted error, not silent misbehavior
@@ -628,7 +638,7 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
     transfers it, exactly as between two guests);
   - host↔host rendezvous is legal for **every** element type — the
     same-instance restriction applies to component instances only;
-  - a `Stream.create()` writer keeps feeding the same stream across hops
+  - a `createStream()` writer keeps feeding the same stream across hops
     (the writer half addresses the shared end, not a particular handle).
 - **Deadlock-verdict suppression tracks host retention** (amendment A15,
   2026-08-21 — issue #162). While the host retains a way to act on a
@@ -674,8 +684,8 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
   fresh local context — see §"Realm boundaries and structured-clone-safe
   forms".)
 - Writer-side host ends (`hostStream()`-era API) remain the low-level seam
-  underneath; the conventions layer exposes them as
-  `Stream.create<T>(): { stream: Stream<T>, writer: StreamWriter<T> }`
+  underneath; the conventions layer exposes them as the application-surface
+  factory (A22) `createStream<T>(): { stream: Stream<T>, writer: StreamWriter<T> }`
   with `write`/`writeAll`/`writeDirect`/`cancelWrite`/`close`.
 - **Component faults are loud on stream/future operations** (amendment
   A7). When the component instance holding the peer end traps, its live
@@ -789,7 +799,7 @@ class DroppedError extends Error { … }    // awaiting a dropped future rejects
     `cancelRead` retract a parked session (A8's indistinguishability
     caveats unchanged); the A15 transfer guard applies to `readDirect` as
     to `read`; a parked session is retention, so the deadlock-verdict arm
-    stays live. `writeDirect` on an unbound `Stream.create()` writer parks
+    stays live. `writeDirect` on an unbound `createStream()` writer parks
     until the lowering site binds the element type, then requires u8;
     `readDirect` on an unbound or non-u8 stream throws, as `read`'s
     refusals do.
@@ -883,7 +893,9 @@ embedder code keeps working with no import changes. Host-module packages
 SHOULD import `@polyengine/protocol` at most (never runtime values); with
 hand-rolled brands (below) even that import is optional. Copies of the
 protocol package are harmless by construction — identity never rests on
-the package, only on the registry symbols.
+the package, only on the registry symbols. (**Superseded by A22**: the
+runtime re-exports are removed and the SHOULD is a MUST for published
+host modules — see §"The host-ABI surface and its version".)
 
 **Brands.** Every brand is a `Symbol.for` registry symbol, so N copies of
 the runtime (or of the protocol package) agree on every brand without
@@ -901,6 +913,7 @@ equivalent of a semver major:
 | `polyengine.streamProducer/1` | `StreamProducerError.prototype` | producer-side failures |
 | `polyengine.suspending/1` | the marked function / class prototype (A1/A2) | suspendable sync imports |
 | `polyengine.stream/1` | `Stream.prototype` | embedder stream handles |
+| `polyengine.streamWriter/1` | `StreamWriter.prototype` (A22) | embedder stream writer handles |
 | `polyengine.future/1` | `Future.prototype` | embedder future handles |
 | `polyengine.errorContext/1` | `ErrorContext.prototype` | error-contexts (message-valued at lowering since A20) |
 | `polyengine.resourceState/1` | guest-resource wrappers (key for internal state; the state shape stays runtime-internal) | resource wrappers |
@@ -1176,6 +1189,103 @@ message carrier.
 A20 ships in `@polyengine/protocol` 0.2.0 — the same pending release as
 A19's key rename (new exports; the runtime re-exports them unchanged, per
 A9).
+
+## The host-ABI surface and its version (amendment A22)
+
+Consumer evidence (2026-08-22, the polymorph-webcrypto decoupling
+question): a published host module consumed exactly three engine exports —
+`ComponentException`, `Stream` (type-only), `suspending` — yet its import
+map named `jsr:@polyengine/runtime@^0.4.0`, so every lockstep minor
+(plan-format bumps, translator breaks: nothing a host module can observe)
+invalidated its range and forced a republish. The in-repo `wasi` package
+has the same three-symbol footprint, plus four `instanceof Stream` sites —
+the class-identity anti-pattern A9 exists to kill. A9 removed class
+identity from the contract; A22 removes the remaining *type and specifier*
+coupling, and gives the behavioral conventions an executable definition
+whose version is `@polyengine/protocol`'s.
+
+**Protocol carries the whole host-boundary vocabulary.** In addition to
+the A9 set, `@polyengine/protocol` exports, as executable TypeScript:
+
+- the handle interfaces of §"Streams and futures" — `Stream<T>`,
+  `StreamWriter<T>`, `Future<T>`, `ErrorContext` — as **structural
+  interfaces** (`Chunk<T>`, `DirectSource`, `DirectDestination`, and the
+  lowering-source unions `StreamSource<T>`/`FutureSource<T>` ride along);
+- brand predicates for the stateful values: `isStream`, `isStreamWriter`,
+  `isFuture`, `isErrorContext`. Handle recognition is by brand, as
+  everywhere since A9 — `instanceof` against a concrete class is not
+  contract behavior in any package.
+
+The brand table gains `polyengine.streamWriter/1` (carried by the writer
+prototype) — an additive generation-1 vocabulary change; writers carried
+no brand before because nothing needed to recognize one, and
+`isStreamWriter` now does. The runtime's concrete classes declare
+`implements` against the protocol interfaces: conformance is a
+compile-time assertion pinned by `just test-runtime`, plus the
+conventions suite below.
+
+**The runtime's exported surface is application-only.**
+`@polyengine/runtime/embedder` stops exporting everything a host module
+could want: the A9 courtesy re-exports (error classes, predicates,
+brands, `suspending`, realm crossing, the copy registry) and the concrete
+handle classes (`Stream`, `StreamWriter`, `Future`, `ErrorContext`) are
+removed. What remains is machinery only an instantiating application
+uses: `instantiate`/`instantiateEmbedder`, artifact resolution,
+`requiredImports`, the import resolver and version canonicalization,
+`NameCollisionError` (raised while building a facade, before any value
+exists), the value-bridge/casing utilities, and the stream-pair factory
+`createStream<T>(): { stream, writer }` — the `Stream.create()` static's
+new spelling, since the class is no longer exported. Minting is
+application-tier by design: host modules produce streams and futures as
+natural JS producers (§"Streams and futures") and never need a writer;
+a host module that genuinely wants writer-driven push (`writeDirect`) is
+handed one by the application, which keeps placement — like runtime
+selection itself — with the deploying application. This supersedes A9's
+"re-exports all of it unchanged — existing embedder code keeps working
+with no import changes": applications now import the boundary vocabulary
+from `@polyengine/protocol`, like everyone else. A hard break in A18's
+mold (`breaking/runtime`, one lockstep minor), taken while the consumer
+family is small, known, and mid-migration to the `@polyengine` scope.
+
+**Host modules MUST NOT import `@polyengine/runtime`** (hardening A9's
+SHOULD, for published host-module packages): `@polyengine/protocol` at
+most; zero-import hand-rolled brands stay legal. After the surface
+removal the rule is nearly self-enforcing — the runtime exports nothing a
+host module needs — and a consumer can gate it mechanically with a
+one-line no-`@polyengine/runtime`-specifier check on the package. The
+wasi package converts to protocol-only imports (its `instanceof Stream`
+drop-on-unread checks become `isStream`), which also dissolves the
+module-identity constraint consumer configs carried on its behalf ("wasi
+imports `@polyengine/runtime/embedder` by bare specifier internally; map
+it identically everywhere").
+
+**The conventions suite is the executable definition of the host ABI.**
+`runtime/tests/conventions/` exercises this contract's lift/lower
+conventions against a probe host module written the way consumers write
+theirs (protocol imports only) and records what the engine does —
+imports-record shape, lowering-source adaptation, lifted-handle behavior,
+resource conventions, the error model, suspending, error-contexts — as
+normalized transcripts committed under
+`runtime/tests/conventions/golden/`. The gate rule:
+
+- **Modifying or deleting a committed golden asserts a host-ABI behavior
+  change** and requires `breaking/protocol` (with the protocol minor bump
+  the label already implies) in the same PR. The reviewed escape for a
+  behavior-neutral correction — the suite itself was wrong — is the
+  `conventions-fix` label, same trust model as the breaking labels.
+- **Adding goldens is free**: new coverage of existing behavior is not a
+  version event.
+- version-guard enforces both at PR time (labels, advisory as ever) and
+  authoritatively at cut time: any M/D under
+  `runtime/tests/conventions/golden/` in the release window
+  (`git diff --name-status v<lastCut>..HEAD -- <goldens>`) requires the
+  protocol version to have moved past the last cut.
+
+**Consequence: protocol's version is the host-ABI version.** A host
+module pins `jsr:@polyengine/protocol@^0.x` and is untouched by lockstep
+engine releases; an engine change that leaves the goldens byte-identical
+is host-ABI-neutral *by definition*, and one that doesn't cannot ship
+without announcing itself on protocol's line.
 
 ## Bindgen obligations (summary of what the above requires)
 

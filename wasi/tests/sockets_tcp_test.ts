@@ -10,7 +10,7 @@
 // throws must be BRANDED ComponentExceptions (a bare throw would be a
 // guest trap).
 
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import {
   type IpSocketAddress,
   type SocketErrorCode,

@@ -12,10 +12,7 @@ import type { ValType } from "../cabi/types.ts";
 import { despecialize } from "../cabi/types.ts";
 import type { ComponentValue } from "../cabi/types.ts";
 import {
-  type DirectDestination,
   type DirectSessionInfo,
-  type DirectSource,
-  type DirectVerdict,
   type HostFuture,
   hostFuture,
   hostFutureFor,
@@ -30,20 +27,32 @@ import {
   poisonFailureOf,
 } from "../task/mod.ts";
 import {
+  type Chunk,
   defineBrand,
   defineRealmLocal,
+  type DirectDestination,
+  type DirectSource,
+  type DirectVerdict,
+  type ErrorContext as ProtocolErrorContext,
   ERROR_CONTEXT,
+  type Future as ProtocolFuture,
   FUTURE,
   hasBrand,
   isStreamProducerError,
   STREAM,
+  type Stream as ProtocolStream,
   StreamProducerError,
+  STREAM_WRITER,
+  type StreamWriter as ProtocolStreamWriter,
 } from "@polyengine/protocol";
 import { describeCrossCopy } from "./copy.ts";
 import { DroppedError, PeerTrappedError } from "./errors.ts";
 
-/** `Chunk<u8>` is a `Uint8Array`; every other element type chunks as `T[]`. */
-export type Chunk<T> = T extends number ? Uint8Array | T[] : T[];
+// `Chunk<T>` moved to `@polyengine/protocol` (amendment A22, §"The host-ABI
+// surface and its version"); re-exported here so this module's existing
+// export surface (and therefore embedder/mod.ts's, unchanged in this track)
+// keeps working.
+export type { Chunk } from "@polyengine/protocol";
 
 /**
  * Per-element adaptation, supplied by the value adapter.
@@ -152,11 +161,11 @@ export function isU8Element(element: ValType | null): boolean {
 
 // Re-exported so embedders reach the A21 callback shapes from this layer too
 // (contracts/embedder-api.md §"Streams and futures", amendment A21, #128).
-export type {
-  DirectDestination,
-  DirectSource,
-  DirectVerdict,
-} from "../exec/host_streams.ts";
+// Canonical definitions moved to `@polyengine/protocol` with amendment A22
+// (§"The host-ABI surface and its version"); `exec/host_streams.ts` keeps its
+// own structurally-identical copies for the low-level seam, so both layers
+// agree without either importing the other.
+export type { DirectDestination, DirectSource, DirectVerdict } from "@polyengine/protocol";
 
 /**
  * A21 (#128): the direct-access byte edges are `stream<u8>` only. A
@@ -177,7 +186,7 @@ function requireU8Direct<T>(codec: ElemCodec<T> | null, who: string): void {
  * `read` returning an empty chunk is end-of-stream, exactly as the contract
  * spells it; `readable()` and the async iterator are built on it.
  */
-export class Stream<T> {
+export class Stream<T> implements ProtocolStream<T> {
   #host: HostStream<T> | null;
   #codec: ElemCodec<T> | null;
   /** Set once the handle's shared object has been handed to a guest. */
@@ -447,7 +456,7 @@ export class Stream<T> {
 const READ_CHUNK = 4096;
 
 /** Writer half of `Stream.create()`. */
-export class StreamWriter<T> {
+export class StreamWriter<T> implements ProtocolStreamWriter<T> {
   #stream: Stream<T>;
 
   constructor(stream: Stream<T>) {
@@ -571,7 +580,7 @@ export function publishHostStream<T>(s: Stream<T>, h: HostStream<T>): void {
  * A future whose write end dropped without ever writing rejects with
  * `DroppedError` — not `undefined`, which `future<void>` legitimately yields.
  */
-export class Future<T> implements PromiseLike<T> {
+export class Future<T> implements ProtocolFuture<T> {
   /** Present once the underlying host end exists. */
   #host: HostFuture<T> | null;
   /** Always present; resolves to the host end (immediately, when not deferred). */
@@ -759,7 +768,7 @@ export class Future<T> implements PromiseLike<T> {
  * The internal value is `task/streams.ts`'s `ErrorContext` (debug message
  * only, per definitions.py).
  */
-export class ErrorContext {
+export class ErrorContext implements ProtocolErrorContext {
   readonly message: string;
   /** @internal — the internal value, preserved so it can be lowered back. */
   readonly internal: InternalErrorContext;
@@ -776,11 +785,15 @@ export class ErrorContext {
   }
 }
 
-// A9 brands (contracts/embedder-api.md §"Module identity"): the three
-// STATEFUL embedder-facing handle classes. Their machinery lives in the copy
-// that minted them, so the brand never makes a foreign handle usable — it
-// makes it DIAGNOSABLE, at the lowering sites below.
+// A9 brands (contracts/embedder-api.md §"Module identity"): the STATEFUL
+// embedder-facing handle classes. Their machinery lives in the copy that
+// minted them, so the brand never makes a foreign handle usable — it makes
+// it DIAGNOSABLE, at the lowering sites below. `StreamWriter` gains its
+// brand with amendment A22 (§"The host-ABI surface and its version"):
+// writers carried none before because nothing needed to recognize one, and
+// `isStreamWriter` now does.
 defineBrand(Stream.prototype, STREAM);
+defineBrand(StreamWriter.prototype, STREAM_WRITER);
 defineBrand(Future.prototype, FUTURE);
 defineBrand(ErrorContext.prototype, ERROR_CONTEXT);
 

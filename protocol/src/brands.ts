@@ -59,6 +59,15 @@ export const SUSPENDING: unique symbol = Symbol.for(
 export const STREAM: unique symbol = Symbol.for("polyengine.stream/1");
 /** `Future.prototype` — embedder future handles (stateful: foreign = refused). */
 export const FUTURE: unique symbol = Symbol.for("polyengine.future/1");
+/**
+ * `StreamWriter.prototype` — embedder stream writer handles (stateful:
+ * foreign = refused). Additive amendment A22: writers carried no brand
+ * before because nothing needed to recognize one, and `isStreamWriter` now
+ * does.
+ */
+export const STREAM_WRITER: unique symbol = Symbol.for(
+  "polyengine.streamWriter/1",
+);
 /** Lifted error-contexts (message-valued at lowering since A20). */
 export const ERROR_CONTEXT: unique symbol = Symbol.for(
   "polyengine.errorContext/1",

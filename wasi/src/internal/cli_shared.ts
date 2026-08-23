@@ -5,7 +5,7 @@
 // vocabulary, never its sibling.
 
 import { defineBrand, WASI_EXIT } from "@polyengine/protocol";
-import { Stream } from "@polyengine/runtime/embedder";
+import type { Stream } from "@polyengine/protocol";
 
 /** `wasi:cli/types@0.3`'s `error-code` ENUM: bare kebab-case strings (the
  * A10 value table — enums are data strings, not `{kind}` variants; this

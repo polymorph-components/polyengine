@@ -48,7 +48,7 @@
 //     hop-limit/buffer-sizes are real where node has API, cached-getter
 //     where it has only a setter, `not-supported` where it has neither.
 
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import { FedInputStream, IoError, Pollable, SinkOutputStream } from "../io.ts";
 import {
   type DatagramConn,

@@ -1,0 +1,3 @@
+{"ev":"run","ok":true,"value":7}
+{"ev":"run/object-literal","ok":true,"value":2}
+{"ev":"greetLen/object-literal","ok":true,"value":5}

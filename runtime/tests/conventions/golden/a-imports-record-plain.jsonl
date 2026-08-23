@@ -1,0 +1,5 @@
+{"ev":"requiredImports","leaves":[{"async":false,"interfaceId":"log","jsName":"log","kind":"func","leaf":"log","memberForm":"plain","params":["u32"],"path":[],"results":[]},{"async":false,"interfaceId":"host:api/math","jsName":"add","kind":"func","leaf":"add","memberForm":"plain","params":["u32","u32"],"path":["add"],"results":["u32"]},{"async":false,"interfaceId":"host:api/math","jsName":"greet","kind":"func","leaf":"greet","memberForm":"plain","params":["string"],"path":["greet"],"results":["string"]}]}
+{"ev":"record-keys","keys":["host:api/math","log"]}
+{"ev":"call/run","ok":true,"value":42}
+{"ev":"bare-import-received","logged":[42]}
+{"ev":"call/greetLen","ok":true,"value":8}

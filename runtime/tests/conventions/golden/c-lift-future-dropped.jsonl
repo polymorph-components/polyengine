@@ -1,0 +1,3 @@
+{"ev":"unrelated-call","ok":true,"value":2}
+{"ev":"dropped"}
+{"ev":"await-after-drop","ok":false,"threw":{"@err":{"tag":"dropped"}}}

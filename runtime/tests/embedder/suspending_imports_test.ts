@@ -25,7 +25,7 @@ import {
   readArtifact,
   testdata,
 } from "./support.ts";
-import { suspending } from "../../src/embedder/mod.ts";
+import { suspending } from "@polyengine/protocol";
 import {
   anySuspendingImport,
   isSuspending,
@@ -185,7 +185,7 @@ Deno.test({
     // value — the parked frame resumes into `result::err` (run() == 1), and
     // nothing traps. The sync-throw variant of this pin lives in
     // host_imports_test.ts; this is the same rail at resume time.
-    const { ComponentException } = await import("../../src/embedder/mod.ts");
+    const { ComponentException } = await import("@polyengine/protocol");
     const c = await instantiateFixture(
       "runtime/tests/embedder/host-result.wasm",
       {

@@ -1,0 +1,4 @@
+{"ev":"requiredImports","leaves":[{"interfaceId":"host:api/dev","jsName":"Gauge","kind":"resource","leaf":"gauge","memberForm":"plain","path":["gauge"]},{"async":false,"interfaceId":"host:api/dev","jsClass":"Gauge","jsName":"constructor","kind":"func","leaf":"[constructor]gauge","memberForm":"constructor","params":["u32"],"path":["[constructor]gauge"],"results":["own"]},{"async":false,"interfaceId":"host:api/dev","jsClass":"Gauge","jsName":"read","kind":"func","leaf":"[method]gauge.read","memberForm":"method","params":["borrow"],"path":["[method]gauge.read"],"results":["u32"]},{"async":false,"interfaceId":"host:api/dev","jsClass":"Gauge","jsName":"calibrate","kind":"func","leaf":"[static]gauge.calibrate","memberForm":"static","params":[],"path":["[static]gauge.calibrate"],"results":["u32"]}]}
+{"ev":"call/probe","ok":true,"value":41}
+{"ev":"call/calib","ok":true,"value":1}
+{"calibrations":1,"disposed":[41],"ev":"host-observed"}

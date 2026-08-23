@@ -1,0 +1,4 @@
+{"ev":"array","ok":true,"value":{"@bigint":"10"}}
+{"ev":"readable-stream","ok":true,"value":{"@bigint":"10"}}
+{"ev":"async-iterable","ok":true,"value":{"@bigint":"10"}}
+{"ev":"empty-array","ok":true,"value":{"@bigint":"0"}}

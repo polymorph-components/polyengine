@@ -1,0 +1,4 @@
+{"classified":"future","ev":"export-result","value":"@future"}
+{"ev":"lower-while-in-flight","ok":false,"threw":{"@err":{"message":"this Future is still in flight and cannot be passed to a guest yet","name":"TypeError","tag":"error"}}}
+{"ev":"unrelated-call","ok":true,"value":2}
+{"ev":"lower-after-settled","ok":true,"value":84}

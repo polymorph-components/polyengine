@@ -1,6 +1,7 @@
 // `@polyengine/wasi` — the WASI providers for polyengine hosts, and the
 // executable check that the embedder conventions
-// (`@polyengine/runtime/embedder`) serve WASI (contracts/embedder-api.md C2
+// (`@polyengine/protocol`, amendment A22 — this package is protocol-only)
+// serve WASI (contracts/embedder-api.md C2
 // checklist item 7; docs/architecture.md §2 keeps implementations out of
 // the RUNTIME — this package is where they live). Scope: p2
 // baseline + p3 clocks + à la carte sockets on BOTH tracks (the

@@ -1,0 +1,6 @@
+{"ev":"roundtrip","ok":true,"value":7}
+{"disposed":[7],"ev":"effects","events":["make(7)","value(self.v=7, isCell=true)"]}
+{"ev":"make-and-keep","ok":true,"value":1}
+{"disposed":[7],"ev":"before-guest-drop"}
+{"ev":"drop-handle","ok":true,"value":"@undefined"}
+{"disposed":[7,9],"ev":"after-guest-drop"}

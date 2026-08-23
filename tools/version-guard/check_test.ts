@@ -191,6 +191,7 @@ function prFake(over: {
   baseRuntime?: string | null;
   changed?: string[];
   published?: string;
+  goldenDiff?: string;
 }) {
   const lockstep = over.lockstep ?? "0.4.0";
   const files: Record<string, string> = {
@@ -221,6 +222,8 @@ function prFake(over: {
       "diff --name-only base0000...HEAD": {
         stdout: (over.changed ?? ["runtime/src/x.ts"]).join("\n"),
       },
+      "diff --name-status base0000...HEAD -- runtime/tests/conventions/golden/":
+        { stdout: over.goldenDiff ?? "" },
       "show base0000:runtime/deno.json": over.baseRuntime === null
         ? { code: 1, stderr: "fatal: path does not exist" }
         : { stdout: manifest("runtime", over.baseRuntime ?? "0.4.0") },
@@ -507,6 +510,7 @@ Deno.test("cut: a breaking label in the window forces a minor bump", async () =>
     protocolVersion: "0.2.1",
     protocolAtLastCut: "0.2.1",
     window,
+    goldenChanges: [],
   });
   assertEquals(failed(bad), ["cut-lockstep-labels"]);
   assertStringIncludes(detail(bad, "cut-lockstep-labels"), "#219");
@@ -517,6 +521,7 @@ Deno.test("cut: a breaking label in the window forces a minor bump", async () =>
     protocolVersion: "0.2.1",
     protocolAtLastCut: "0.2.1",
     window,
+    goldenChanges: [],
   });
   assertEquals(failed(good), []);
 });
@@ -529,6 +534,7 @@ Deno.test("cut: breaking/protocol is judged against protocol at the last cut", a
     protocolVersion: "0.2.1",
     protocolAtLastCut: "0.2.0",
     window,
+    goldenChanges: [],
   });
   assertEquals(failed(bad), ["cut-protocol-labels"]);
   const good = cutGuards({
@@ -537,6 +543,7 @@ Deno.test("cut: breaking/protocol is judged against protocol at the last cut", a
     protocolVersion: "0.3.0",
     protocolAtLastCut: "0.2.0",
     window,
+    goldenChanges: [],
   });
   assertEquals(failed(good), []);
 });
@@ -609,6 +616,11 @@ Deno.test("cut: end to end — window scan, guards, and the notes fragment", asy
         content: btoa(manifest("protocol", "0.2.1")),
       }),
     },
+    git: {
+      "fetch origin refs/tags/v0.4.0 --depth=1": {},
+      "diff --name-status v0.4.0..cut12345 -- runtime/tests/conventions/golden/":
+        { stdout: "" },
+    },
   });
   assertEquals(await main(fx, ["cut", "--out", "changes.md"]), 0);
   assertEquals(fx.written["changes.md"].split("\n"), [
@@ -663,4 +675,192 @@ Deno.test("cut: the first cut ever has no window", async () => {
   });
   assertEquals(failed(checks), []);
   assertEquals(fx.written["changes.md"], "");
+});
+
+// ----- A22: conventions goldens (contracts/embedder-api.md "The
+// conventions suite is the executable definition of the host ABI") -------------
+
+const GOLDEN_DIR = "runtime/tests/conventions/golden/";
+const goldenNameStatus = (lines: string[]) => lines.join("\n");
+
+Deno.test("pr: a modified golden with no excusing label fails", async () => {
+  const checks = await prChecks(
+    prFake({ goldenDiff: goldenNameStatus([`M\t${GOLDEN_DIR}lift-record.json`]) }),
+    PR_ENV,
+  );
+  assertEquals(failed(checks), ["conventions-goldens"]);
+  const d = detail(checks, "conventions-goldens");
+  assertStringIncludes(d, `${GOLDEN_DIR}lift-record.json`);
+  assertStringIncludes(d, "breaking/protocol");
+  assertStringIncludes(d, "conventions-fix");
+});
+
+Deno.test("pr: a modified golden with breaking/protocol passes (and does not double-fire with the label/bump checks)", async () => {
+  const checks = await prChecks(
+    prFake({
+      goldenDiff: goldenNameStatus([`M\t${GOLDEN_DIR}error-model.json`]),
+      protocol: "0.3.0",
+      published: "0.2.1",
+      labels: ["breaking/protocol"],
+      changed: ["protocol/src/mod.ts", "protocol/deno.json"],
+    }),
+    PR_ENV,
+  );
+  assertEquals(failed(checks), []);
+  assertStringIncludes(
+    detail(checks, "conventions-goldens"),
+    "excused by breaking/protocol",
+  );
+});
+
+Deno.test("pr: a modified golden with conventions-fix passes without a version bump", async () => {
+  const checks = await prChecks(
+    prFake({
+      goldenDiff: goldenNameStatus([`D\t${GOLDEN_DIR}stale-probe.json`]),
+      labels: ["conventions-fix"],
+    }),
+    PR_ENV,
+  );
+  assertEquals(failed(checks), []);
+  assertStringIncludes(
+    detail(checks, "conventions-goldens"),
+    "excused by conventions-fix",
+  );
+});
+
+Deno.test("pr: adding goldens only is free — no label required", async () => {
+  const checks = await prChecks(
+    prFake({ goldenDiff: goldenNameStatus([`A\t${GOLDEN_DIR}new-probe.json`]) }),
+    PR_ENV,
+  );
+  assertEquals(failed(checks), []);
+  assertStringIncludes(
+    detail(checks, "conventions-goldens"),
+    "no modified/deleted goldens",
+  );
+});
+
+Deno.test("pr: an absent/untouched locked dir passes vacuously", async () => {
+  const checks = await prChecks(prFake({}), PR_ENV);
+  assertEquals(failed(checks), []);
+  assertStringIncludes(
+    detail(checks, "conventions-goldens"),
+    "no modified/deleted goldens",
+  );
+});
+
+Deno.test("pr: a rename is an M of the old path plus an A of the new — the old path still gates", async () => {
+  const checks = await prChecks(
+    prFake({
+      goldenDiff: goldenNameStatus([
+        `R100\t${GOLDEN_DIR}old-name.json\t${GOLDEN_DIR}new-name.json`,
+      ]),
+    }),
+    PR_ENV,
+  );
+  assertEquals(failed(checks), ["conventions-goldens"]);
+  assertStringIncludes(
+    detail(checks, "conventions-goldens"),
+    `${GOLDEN_DIR}old-name.json`,
+  );
+});
+
+function cutFake(over: {
+  goldenDiff?: string;
+  protocolVersion?: string;
+  protocolAtLastCut?: string;
+  windowLabels?: string[];
+}) {
+  const R = "polymorph-components/polyengine";
+  return { R, fx: fake({
+    files: { "protocol/deno.json": manifest("protocol", over.protocolVersion ?? "0.2.1") },
+    env: { GITHUB_REPOSITORY: R, GITHUB_SHA: "cut12345", VERSION: "0.5.0" },
+    gh: {
+      [`api repos/${R}/releases/latest`]: ghJson({ tag_name: "v0.4.0" }),
+      [`api repos/${R}/compare/v0.4.0...cut12345`]: ghJson({
+        total_commits: 1,
+        commits: [{ sha: "aaa1111", commit: { message: "Merge PR #300\n" } }],
+      }),
+      [`api repos/${R}/commits/aaa1111/pulls`]: ghJson([
+        { number: 300, title: "conventions tweak", labels: (over.windowLabels ?? []).map((name) => ({ name })) },
+      ]),
+      [`api repos/${R}/contents/protocol/deno.json?ref=v0.4.0`]: ghJson({
+        content: btoa(manifest("protocol", over.protocolAtLastCut ?? "0.2.1")),
+      }),
+    },
+    git: {
+      "fetch origin refs/tags/v0.4.0 --depth=1": {},
+      "diff --name-status v0.4.0..cut12345 -- runtime/tests/conventions/golden/":
+        { stdout: over.goldenDiff ?? "" },
+    },
+  }) };
+}
+
+Deno.test("cut: a modified golden in the window with no protocol bump and no conventions-fix fails", async () => {
+  const { fx } = cutFake({
+    goldenDiff: goldenNameStatus([`M\t${GOLDEN_DIR}error-model.json`]),
+  });
+  const checks = await cutChecks(fx, {
+    repo: "polymorph-components/polyengine",
+    sha: "cut12345",
+    version: "0.5.0",
+    out: null,
+  });
+  assertEquals(failed(checks), ["cut-conventions-goldens"]);
+  assertStringIncludes(
+    detail(checks, "cut-conventions-goldens"),
+    `${GOLDEN_DIR}error-model.json`,
+  );
+});
+
+Deno.test("cut: a modified golden in the window with protocol bumped past the last cut passes", async () => {
+  const { fx } = cutFake({
+    goldenDiff: goldenNameStatus([`M\t${GOLDEN_DIR}error-model.json`]),
+    protocolVersion: "0.3.0",
+    protocolAtLastCut: "0.2.1",
+  });
+  const checks = await cutChecks(fx, {
+    repo: "polymorph-components/polyengine",
+    sha: "cut12345",
+    version: "0.5.0",
+    out: null,
+  });
+  assertEquals(failed(checks), []);
+});
+
+Deno.test("cut: a modified golden with only a protocol PATCH move (no minor bump, no conventions-fix) fails — a behavior change is breaking by definition", async () => {
+  const { fx } = cutFake({
+    goldenDiff: goldenNameStatus([`M\t${GOLDEN_DIR}error-model.json`]),
+    protocolVersion: "0.2.2",
+    protocolAtLastCut: "0.2.1",
+  });
+  const checks = await cutChecks(fx, {
+    repo: "polymorph-components/polyengine",
+    sha: "cut12345",
+    version: "0.5.0",
+    out: null,
+  });
+  assertEquals(failed(checks), ["cut-conventions-goldens"]);
+  assertStringIncludes(
+    detail(checks, "cut-conventions-goldens"),
+    "not a later minor line",
+  );
+});
+
+Deno.test("cut: a modified golden in the window excused by conventions-fix on a window PR passes without a protocol bump", async () => {
+  const { fx } = cutFake({
+    goldenDiff: goldenNameStatus([`D\t${GOLDEN_DIR}stale-probe.json`]),
+    windowLabels: ["conventions-fix"],
+  });
+  const checks = await cutChecks(fx, {
+    repo: "polymorph-components/polyengine",
+    sha: "cut12345",
+    version: "0.5.0",
+    out: null,
+  });
+  assertEquals(failed(checks), []);
+  assertStringIncludes(
+    detail(checks, "cut-conventions-goldens"),
+    "excused by conventions-fix on #300",
+  );
 });

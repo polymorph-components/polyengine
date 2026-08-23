@@ -47,7 +47,7 @@
 // through the resource types registered here.
 
 import { defineBrand, defineRealmLocal, POLLABLE } from "@polyengine/protocol";
-import { suspending, ComponentException } from "@polyengine/runtime/embedder";
+import { suspending, ComponentException } from "@polyengine/protocol";
 
 /** The engine setTimeout ceiling: delays above 2^31-1 ms are clamped to
  * ~0 (node/Deno warn and fire at 1 ms). `Pollable.timer` sleeps in

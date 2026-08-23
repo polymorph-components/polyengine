@@ -3,7 +3,7 @@
 // recording").
 
 import { assertEq, assertThrows, assertTrue } from "./asserts.ts";
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import { cli, ExitError } from "../src/cli.ts";
 import type { StreamErrorValue } from "../src/io.ts";
 

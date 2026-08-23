@@ -14,9 +14,8 @@
 import {
   type ComponentArtifacts,
   instantiate,
-  Trap,
-  ComponentException,
 } from "@polyengine/runtime/embedder";
+import { Trap, ComponentException } from "@polyengine/protocol";
 import { Context, testContextImportRecord } from "./context.ts";
 import { analyzeImports, requireImportsResolved } from "./import-analysis.ts";
 import {

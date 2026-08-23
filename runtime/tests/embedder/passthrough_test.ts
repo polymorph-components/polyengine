@@ -13,7 +13,7 @@ import { assertEq } from "../support/asserts.ts";
 import { artifactsOf, guest, haveFixture, instantiateFixture } from "./support.ts";
 import type { ComponentValue, ValType } from "../../src/cabi/types.ts";
 import { SharedFutureImpl } from "../../src/task/mod.ts";
-import { Future, Stream } from "../../src/embedder/mod.ts";
+import { Future, Stream } from "../../src/embedder/streams.ts";
 import {
   hostFuture,
   hostFutureFor,

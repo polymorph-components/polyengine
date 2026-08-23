@@ -25,7 +25,7 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, haveFixture, instantiateFixture } from "./support.ts";
-import { ComponentException, isTrap, Trap } from "../../src/embedder/mod.ts";
+import { ComponentException, isTrap, Trap } from "@polyengine/protocol";
 
 const FIXTURE = "runtime/tests/embedder/platform-class.wasm";
 const ready = await haveFixture(FIXTURE);

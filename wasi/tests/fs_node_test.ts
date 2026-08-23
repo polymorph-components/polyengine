@@ -10,7 +10,7 @@
 //   * ERROR SHAPES: 0.2 err payloads are BARE enum strings ("no-entry");
 //     0.3 payloads are variant records ({ kind: "no-entry" }).
 
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import { filesystemNode } from "../src/filesystem_node.ts";
 import { FsIoError } from "../src/internal/fs_provider.ts";
 import { assertEq, assertThrows, assertTrue } from "./asserts.ts";

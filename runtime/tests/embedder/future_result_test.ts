@@ -13,7 +13,7 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { guest, haveFixture, instantiateFixture } from "./support.ts";
-import { Stream } from "../../src/embedder/mod.ts";
+import { Stream } from "../../src/embedder/streams.ts";
 
 const FIXTURE = guest("future-import");
 const have = await haveFixture(FIXTURE);

@@ -30,6 +30,7 @@ export {
   RUNTIME_COPIES,
   STREAM,
   STREAM_PRODUCER,
+  STREAM_WRITER,
   SUSPENDING,
   TRAP,
   WASI_EXIT,
@@ -50,6 +51,27 @@ export {
   Trap,
   ComponentException,
 } from "./errors.ts";
+
+// Stream/future handles (contracts/embedder-api.md §"Streams and futures";
+// amendment A22, §"The host-ABI surface and its version"): executable
+// structural interfaces, aux types, and brand predicates. The runtime's
+// concrete classes `implements` these; this package never imports them.
+export {
+  type Chunk,
+  type DirectDestination,
+  type DirectSource,
+  type DirectVerdict,
+  type ErrorContext,
+  type Future,
+  type FutureSource,
+  isErrorContext,
+  isFuture,
+  isStream,
+  isStreamWriter,
+  type Stream,
+  type StreamSource,
+  type StreamWriter,
+} from "./handles.ts";
 
 // Realm-boundary crossings (amendment A20; issue #131). The envelope TAG is
 // deliberately not exported: the form is version-internal, and an exported

@@ -1,0 +1,3 @@
+{"classified":"stream","ev":"lifted"}
+{"ev":"read","ok":true,"value":{"@u8":[7,7]}}
+{"ev":"read-after-trap","ok":false,"threw":{"@err":{"cause":{"@err":{"cause":{"@err":{"message":"<engine-worded>","tag":"trap"}},"message":"component instance 0 trapped while it held an end of this stream/future; the peer can never rendezvous again","name":"Error","tag":"error"}},"message":"open-then-trap: the peer component instance trapped, so this stream/future operation can never complete — component instance 0 trapped while it held an end of this stream/future; the peer can never rendezvous again","tag":"peerTrapped"}}}

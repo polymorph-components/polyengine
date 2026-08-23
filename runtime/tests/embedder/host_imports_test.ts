@@ -9,7 +9,7 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, haveFixture, instantiateFixture, testdata } from "./support.ts";
-import { Trap, ComponentException } from "../../src/embedder/mod.ts";
+import { ComponentException, Trap } from "@polyengine/protocol";
 import { INTERNAL_HOST_REGISTRIES } from "../../src/embedder/instantiate.ts";
 
 const ready = await haveFixture(testdata("imports"));

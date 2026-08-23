@@ -4,7 +4,7 @@
 // alongside the poll-shaped `@0.2` track (sockets_02.ts). Vocabulary
 // (codec, validation, error mapping, WIT types): sockets_shared.ts.
 
-import { ComponentException, Stream, suspending } from "@polyengine/runtime/embedder";
+import { ComponentException, isStream, suspending } from "@polyengine/protocol";
 import {
   type DatagramConn,
   dnsLookup,
@@ -1122,5 +1122,5 @@ const TRANSIENT_ACCEPT_FAILURES: ReadonlySet<SocketErrorCode["kind"]> = new Set(
  * iteration protocol itself (`for await`'s abrupt-exit `return()`).
  */
 function dropSendSource(data: TcpSendSource): void {
-  if (data instanceof Stream) data.drop();
+  if (isStream(data)) data.drop();
 }

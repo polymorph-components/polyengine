@@ -1,0 +1,2 @@
+{"ev":"ok","ok":true,"value":5}
+{"ev":"err","ok":false,"threw":{"@err":{"message":"component error: boom","payload":"boom","tag":"componentException"}}}

@@ -1,0 +1,1 @@
+{"ev":"run","ok":false,"threw":{"@err":{"message":"needs JSPI (M2 phase 3): synchronous lower of import 'host:api/math/add', whose host implementation returned a Promise; a sync-typed import may only park the frame when declared with suspending() (contracts/embedder-api.md §\"Functions and async\")","name":"NeedsJspi","tag":"error"}}}

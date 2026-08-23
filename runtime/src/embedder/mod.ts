@@ -26,40 +26,13 @@ registerRuntimeCopy({
 
 export { COPY_URL, RUNTIME_VERSION } from "./copy.ts";
 
-// The A9 vocabulary, re-exported unchanged: embedder code needs no import
-// change, and consumers that want the multi-copy-robust spellings get them
-// from the same module they already import.
-export {
-  copyCensus,
-  defineRealmLocal,
-  DROPPED,
-  ERROR_CONTEXT,
-  fromCloneable,
-  FUTURE,
-  hasBrand,
-  INVALID_HANDLE,
-  isDroppedError,
-  isInvalidHandleError,
-  isPeerTrappedError,
-  isRealmLocal,
-  isStreamProducerError,
-  isSuspending,
-  isTrap,
-  isComponentException,
-  PEER_TRAPPED,
-  PROTOCOL_GENERATION,
-  REALM_LOCAL,
-  registerRuntimeCopy,
-  RESOURCE_STATE,
-  type RuntimeCopy,
-  runtimeCopies,
-  STREAM,
-  STREAM_PRODUCER,
-  SUSPENDING,
-  toCloneable,
-  TRAP,
-  COMPONENT_EXCEPTION,
-} from "@polyengine/protocol";
+// Amendment A22 (contracts/embedder-api.md §"The host-ABI surface and its
+// version"): the runtime's exported surface is application-only. The A9
+// courtesy re-exports (error classes, predicates, brands, `suspending`,
+// realm crossing, the copy registry) are removed — host modules import that
+// vocabulary from `@polyengine/protocol` directly. The runtime still
+// registers its own copy on the census above; it just no longer hands out
+// the registry API to callers of this module.
 
 export {
   artifactsFromEnvelope,
@@ -75,41 +48,29 @@ export {
 
 export { type FuncSummary, type ImportLeaf, type PlanLike, requiredImports } from "./imports.ts";
 
-export {
-  DroppedError,
-  InvalidHandleError,
-  NameCollisionError,
-  PeerTrappedError,
-  Trap,
-  ComponentException,
-} from "./errors.ts";
+// `NameCollisionError` is the one error class that stays here: it's raised
+// while building an instantiation facade, before any handle/value exists —
+// application machinery, not host-ABI vocabulary (contracts/embedder-api.md
+// §"The host-ABI surface and its version", amendment A22).
+export { NameCollisionError } from "./errors.ts";
 
-export {
-  type Chunk,
-  // Direct-access byte edges (amendment A21, polyengine#128): the two scoped
-  // callback objects `StreamWriter.writeDirect` / `Stream.readDirect` hand
-  // out, plus their verdict type.
-  type DirectDestination,
-  type DirectSource,
-  type DirectVerdict,
-  type ElemCodec,
-  ErrorContext,
-  Future,
-  type FutureSource,
-  Stream,
-  StreamProducerError,
-  type StreamSource,
-  StreamWriter,
-} from "./streams.ts";
+export { type ElemCodec } from "./streams.ts";
+
+// `createStream<T>()` — the A22 stream-pair factory (contracts/embedder-api.md
+// §"The host-ABI surface and its version" / §"Streams and futures"): the
+// `Stream.create()` static's application-surface spelling, since the
+// concrete `Stream`/`StreamWriter` classes are no longer exported. Handle
+// TYPES are spelled against `@polyengine/protocol`'s structural interfaces.
+import { Stream as InternalStream } from "./streams.ts";
+import type { Stream as ProtocolStream, StreamWriter as ProtocolStreamWriter } from "@polyengine/protocol";
+
+export function createStream<T>(): { stream: ProtocolStream<T>; writer: ProtocolStreamWriter<T> } {
+  return InternalStream.create<T>();
+}
 
 export { GuestResource, HostResourceRegistry } from "./resources.ts";
 
 export { camelCase, type LeafName, parseLeafName, pascalCase } from "./casing.ts";
-
-// Per-declaration suspendability (contracts/embedder-api.md §"Functions and
-// async", amendment A1): declares that a sync-typed host import may return a
-// Promise, parking the calling wasm frame (JSPI engines only).
-export { suspending } from "../jspi/suspending.ts";
 
 export {
   asTrackKeySpelling,

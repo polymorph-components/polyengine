@@ -14,7 +14,7 @@ const repoRoot = normalize(
   join(dirname(fromFileUrl(import.meta.url)), "..", ".."),
 );
 
-export async function buildBundle(out?: string): Promise<string> {
+export async function buildBundle(out?: string, entry?: string): Promise<string> {
   const outPath = out ??
     join(repoRoot, "tools", "release-bundle", "dist", "polyengine-embedder.mjs");
   await Deno.mkdir(dirname(outPath), { recursive: true });
@@ -27,7 +27,7 @@ export async function buildBundle(out?: string): Promise<string> {
       "esm",
       "-o",
       outPath,
-      join(repoRoot, "tools", "release-bundle", "entry.ts"),
+      entry ?? join(repoRoot, "tools", "release-bundle", "entry.ts"),
     ],
     cwd: repoRoot,
     stdout: "inherit",

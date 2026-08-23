@@ -1,0 +1,3 @@
+{"ev":"promise","ok":true,"value":42}
+{"ev":"thenable","ok":true,"value":42}
+{"ev":"plain-value","ok":true,"value":42}

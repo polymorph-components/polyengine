@@ -66,7 +66,7 @@
 // Fetch failures are TypeErrors with prose; a small sniff table maps the
 // recognizable ones and everything else is `internal-error(message)`.
 
-import { ComponentException, isComponentException, Stream } from "@polyengine/runtime/embedder";
+import { ComponentException, isComponentException, type Stream } from "@polyengine/protocol";
 
 /**
  * The compatibility track the fragment registers on by default.

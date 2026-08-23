@@ -153,6 +153,21 @@ Standing rules:
   hit); and `cut` mode on
   `release=true`, which turns the window's labels into the minor-bump
   requirement and renders the release notes.
+- **The host ABI is versioned by `@polyengine/protocol`, gated by goldens**
+  (contracts/embedder-api.md amendment A22). The conventions suite
+  (`runtime/tests/conventions/`, rides `just test-runtime`; focused run:
+  `just test-conventions`) pins the host-facing lift/lower behavior as
+  committed transcripts under `runtime/tests/conventions/golden/`.
+  Modifying or deleting a golden asserts a host-ABI behavior change and
+  requires `breaking/protocol` in the same PR (the reviewed
+  behavior-neutral escape is the `conventions-fix` label); adding goldens
+  is free. version-guard enforces this in `pr` mode (advisory, live
+  labels) and authoritatively in `cut` mode (window-wide diff of the
+  goldens dir; M/D requires protocol on a later minor line than the last
+  cut, or a `conventions-fix` window PR). Host modules import
+  `@polyengine/protocol` at most — the runtime's exported surface is
+  application-only — so lockstep releases that leave the goldens
+  byte-identical cannot touch a host-provider package.
 - **Cutting a release.** (1) Sanity pass, the step no machine can do:
   enumerate the window — `gh pr list --search "base:main merged:>=<date of
   the last cut>"` (or `gh api repos/$R/compare/v<last>...main --jq

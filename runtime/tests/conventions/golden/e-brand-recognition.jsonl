@@ -1,0 +1,4 @@
+{"classified":"componentException","ev":"canonical"}
+{"classified":"componentException","ev":"hand-rolled"}
+{"classified":"unbranded-error","ev":"unbranded"}
+{"ev":"payloadless","value":{"@err":{"message":"component error: undefined","payload":"@undefined","tag":"componentException"}}}

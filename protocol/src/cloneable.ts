@@ -38,6 +38,7 @@ import {
   RESOURCE_STATE,
   STREAM,
   STREAM_PRODUCER,
+  STREAM_WRITER,
   TRAP,
   WASI_EXIT,
 } from "./brands.ts";
@@ -177,6 +178,13 @@ function isPassThroughExotic(v: object): boolean {
  * Realm-local check (A20): `isRealmLocal` (the pill), the stateful handle
  * brands, and resource wrappers.
  *
+ * `STREAM_WRITER` (amendment A22) is listed for consistency with the other
+ * stateful handle brands, not because it changes behavior here: every
+ * `StreamWriter` already carries the A20 pill (`defineRealmLocal` in its
+ * constructor, runtime/src/embedder/streams.ts), so `isRealmLocal(v)` above
+ * already refuses one — this is belt-and-suspenders against a hand-rolled
+ * writer that carries the brand but skipped the pill.
+ *
  * `RESOURCE_STATE` is checked with `!== undefined` rather than `hasBrand`
  * because it holds the wrapper's internal STATE object, not `true` — only the
  * key is contract, the shape stays runtime-internal (brands.ts).
@@ -184,6 +192,7 @@ function isPassThroughExotic(v: object): boolean {
 function isRealmLocalValue(v: object): boolean {
   return isRealmLocal(v) ||
     hasBrand(v, STREAM) || hasBrand(v, FUTURE) || hasBrand(v, POLLABLE) ||
+    hasBrand(v, STREAM_WRITER) ||
     (v as Record<symbol, unknown>)[RESOURCE_STATE] !== undefined;
 }
 

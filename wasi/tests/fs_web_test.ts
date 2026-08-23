@@ -14,7 +14,7 @@
 //     without `move()` falls back to copy+delete for files and fails
 //     `unsupported` for directories.
 
-import { ComponentException, isSuspending } from "@polyengine/runtime/embedder";
+import { ComponentException, isSuspending } from "@polyengine/protocol";
 import { filesystemWeb } from "../src/filesystem_web.ts";
 import { FakeDirectoryHandle } from "./support/opfs_fake.ts";
 import { assertEq, assertRejects, assertTrue } from "./asserts.ts";

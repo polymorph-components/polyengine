@@ -1,0 +1,5 @@
+{"classified":"stream","ev":"lifted"}
+{"chunk":{"@u8":[1]},"ev":"chunk"}
+{"chunk":{"@u8":[2]},"ev":"chunk"}
+{"chunk":{"@u8":[3]},"ev":"chunk"}
+{"ev":"iteration-ended"}

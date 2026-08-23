@@ -1,0 +1,3 @@
+{"ev":"requiredImports","leaves":[{"interfaceId":"host:api/res","jsName":"R","kind":"resource","leaf":"R","memberForm":"plain","path":["R"]},{"async":false,"interfaceId":"host:api/res","jsName":"make","kind":"func","leaf":"make","memberForm":"plain","params":["u32"],"path":["make"],"results":["own"]},{"async":false,"interfaceId":"host:api/res","jsName":"value","kind":"func","leaf":"value","memberForm":"plain","params":["borrow"],"path":["value"],"results":["u32"]}]}
+{"ev":"call/roundtrip","ok":true,"value":7}
+{"disposed":[7],"ev":"host-observed","made":[7]}

@@ -1,0 +1,5 @@
+{"classified":"stream","ev":"lifted"}
+{"ev":"read","ok":true,"value":{"@u8":[10]}}
+{"ev":"read","ok":true,"value":{"@u8":[20]}}
+{"ev":"read","ok":true,"value":{"@u8":[30]}}
+{"ev":"read-eos","ok":true,"value":{"@u8":[]}}
