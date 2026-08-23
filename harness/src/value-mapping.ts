@@ -368,6 +368,74 @@ export function compareValue(
   }
 }
 
+/** Bigint-safe JSON.stringify substitute for error/diagnostic messages:
+ * plain JSON.stringify throws on bigint (lifted i64 results are bigints).
+ * Maps bigint -> "<n>n" and falls back to String(v) if stringify still
+ * throws for some other reason (e.g. cyclic values). */
+export function describeValue(v: unknown): string {
+  try {
+    return JSON.stringify(
+      v,
+      (_k, val) => typeof val === "bigint" ? `${val}n` : val,
+    ) ?? String(v);
+  } catch {
+    return String(v);
+  }
+}
+
+/** Collapses a raw invoke() return by the export's *declared* arity
+ * (from the plan's FuncType.results.length, see computeExportArities in
+ * runtime-executor.ts), validating the observed shape against it per the
+ * runtime's arity convention (`resultsToHost` in
+ * runtime/src/exec/boundary.ts:327-331): 0 results -> undefined, 1 ->
+ * bare value, 2+ -> array. Throws on a shape mismatch rather than
+ * silently discarding or coercing (issue #188).
+ *
+ * Deliberate deviation from issue #188's suggested fix: for arity 1 the
+ * issue suggests rejecting an array `raw`. That's wrong — a single
+ * `list<T>`/tuple result IS legitimately a JS array, and disambiguating
+ * "one result that happens to be an array" from "N results" is exactly
+ * why computeExportArities (runtime-executor.ts:83-88) exists in the
+ * first place. So arity 1 only requires `raw !== undefined` (a
+ * ComponentValue is never undefined — runtime/src/cabi/types.ts:244-253),
+ * with no shape restriction. */
+export function collapseResultsByArity(
+  raw: unknown,
+  declaredArity: number | undefined,
+  field: string,
+): unknown[] {
+  if (declaredArity === undefined) {
+    // Defensive fallback only: the export wasn't found in the plan's
+    // arity map. No declared shape to validate against.
+    return raw === undefined ? [] : [raw];
+  }
+  if (declaredArity === 0) {
+    if (raw !== undefined) {
+      throw new Error(
+        `invoke '${field}': declared 0 results but got ${describeValue(raw)}`,
+      );
+    }
+    return [];
+  }
+  if (declaredArity === 1) {
+    if (raw === undefined) {
+      throw new Error(
+        `invoke '${field}': declared 1 result but got undefined`,
+      );
+    }
+    return [raw];
+  }
+  if (!Array.isArray(raw) || raw.length !== declaredArity) {
+    const got = Array.isArray(raw)
+      ? `array of length ${raw.length}`
+      : describeValue(raw);
+    throw new Error(
+      `invoke '${field}': declared ${declaredArity} results but got ${got}`,
+    );
+  }
+  return raw;
+}
+
 /** Compare an expected `Value[]` list against actual ComponentValue results
  * (per the runtime's arity convention: 0 results -> undefined, 1 -> bare
  * value, 2+ -> array — see `resultsToHost` in runtime/src/exec/boundary.ts). */
@@ -377,12 +445,17 @@ export function compareValues(
 ): string | undefined {
   let actualList: unknown[];
   if (expected.length === 0) {
+    // Issue #188: don't vacuously pass — an unexpected actual value here
+    // (e.g. a spurious result from an arity-0 export) must be reported.
+    if (actual !== undefined) {
+      return `expected 0 results, got ${describeValue(actual)}`;
+    }
     actualList = [];
   } else if (expected.length === 1) {
     actualList = [actual];
   } else {
     if (!Array.isArray(actual)) {
-      return `expected ${expected.length} results, got ${JSON.stringify(actual)}`;
+      return `expected ${expected.length} results, got ${describeValue(actual)}`;
     }
     actualList = actual;
   }

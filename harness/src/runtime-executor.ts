@@ -34,7 +34,7 @@ import {
   TrapError,
 } from "./executor.ts";
 import type { Value } from "./schema.ts";
-import { toComponentValue } from "./value-mapping.ts";
+import { collapseResultsByArity, toComponentValue } from "./value-mapping.ts";
 
 /** Substrings that indicate the command needs a not-yet-built runtime
  * capability (async/streams/etc, M2) rather than a genuine bug. Checked
@@ -274,8 +274,9 @@ export class RuntimeExecutor implements CommandExecutor {
       }
       throw e;
     }
-    const arity = ref.arities.get(field) ?? (raw === undefined ? 0 : 1);
-    const values = arity === 0 ? [] : arity === 1 ? [raw] : (raw as unknown[]);
+    // Validates the observed shape against the declared arity and throws
+    // loudly on mismatch instead of discarding/coercing (issue #188).
+    const values = collapseResultsByArity(raw, ref.arities.get(field), field);
     return { kind: "returned", values };
   }
 
