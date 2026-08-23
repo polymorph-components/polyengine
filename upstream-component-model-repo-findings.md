@@ -125,6 +125,20 @@ entry on resolution — see git history.)
   versions, not a component-model repo defect. Handled by docs/architecture.md §4.1/§9
   version-pinning discipline (the translator's wasmparser is the single
   validation authority).
+- **wasmparser skips case-folding when comparing `[method]`/`[static]` names**
+  (candidate bytecodealliance/wasm-tools issue; found 2026-08-22 validating our
+  #185): Explainer.md §Name Uniqueness requires strongly-unique — lowercase
+  acronyms, strip the `[...]` prefix, compare — and explicitly lists
+  `[method]foo.BAR` vs `[method]foo.bar` as a validation error. wasmparser
+  implements the fold for plain labels (`KebabStr`'s case-insensitive
+  `Eq`/`Hash`) but `ResourceFunc` derives them on the raw `a.b` string
+  (`src/validator/names.rs`; verified identical in 0.251/0.252/0.256), so
+  `[method]r.a-b` + `[method]r.a-B` in one scope validates (wasm-tools 1.247
+  `validate --features component-model`, wasmtime 47 `compile`, and our
+  translator-shim all accept; plain-label and record-field folded collisions
+  are correctly rejected). Consequence for us: spec-invalid method/static
+  case-collisions can reach the runtime's conventions layer — one of the
+  triggers tracked in #185.
 
 [WebAssembly/component-model]: https://github.com/WebAssembly/component-model
 
