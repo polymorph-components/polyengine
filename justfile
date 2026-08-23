@@ -16,7 +16,7 @@ ci: (gha::core) (gha::browser)
 # Includes the consumer smokes CI cannot run (they need the polymorph
 # checkouts; docs/consumers.md).
 # The full pre-commit pass (AGENTS.md "Gates"): everything.
-gates: build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle test-version-guard publish-check test-npm examples test-translate conformance sched-seeds shells browsers smoke-tls smoke-c0
+gates: version-guard-local build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle test-version-guard publish-check test-npm examples test-translate conformance sched-seeds shells browsers smoke-tls smoke-c0
 
 # Fast sanity: builds + native tests + type-checks, no suites.
 check: build test-rust
@@ -129,6 +129,26 @@ test-bundle: shim
 # decision logic honest before either of those sees it.
 test-version-guard:
     deno test -A tools/version-guard/
+
+# The release version guard's label-free, event-free pass
+# (tools/version-guard/check.ts `local`): lockstep agreement, monotonicity
+# against a locally-derivable last cut (git tags, falling back to jsr.io's
+# published `runtime` latest — no GitHub API, no PR context), and the
+# protocol byte-identity tear check (the #219/#232 incidents) run fatally
+# against the WORKING TREE, plus an advisory reminder if committed
+# conventions goldens changed. It exists because `pr` mode no-ops the
+# instant PR_NUMBER is unset (see below) — so neither a push run nor a
+# pre-push `just gates` ever asked "would this tear protocol?" before #232
+# shipped one straight through. `local` is the split: anyone can run it
+# with no GitHub context at all, so it goes first in `gates` — cheap, and
+# catches a versioning mistake before the expensive suites run at all.
+# Same permission shape as `version-guard-pr` (see its comment for why
+# --allow-run is not narrowed to `gh,git`) minus --allow-env: `local` reads
+# no environment variables at all (no PR_NUMBER/PR_BASE_SHA/GITHUB_*), by
+# design — that is what makes it the label-free/event-free half of the
+# split.
+version-guard-local:
+    deno run --allow-net=jsr.io --allow-run --allow-read=. tools/version-guard/check.ts local
 
 # The release version guard's early-warning pass (tools/version-guard/check.ts
 # `pr`): lockstep agreement, monotonicity against the last cut, breaking/*

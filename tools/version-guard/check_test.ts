@@ -13,6 +13,7 @@ import {
   cutChecks,
   cutGuards,
   isMinorBumped,
+  localChecks,
   main,
   parseSemver,
   prChecks,
@@ -41,6 +42,11 @@ function assertStringIncludes(got: string, needle: string): void {
 
 type FakeSpec = {
   http?: Record<string, HttpResponse>;
+  // A URL mapped here rejects fetchText's promise instead of resolving —
+  // simulating a real network failure (DNS, connection refused), which
+  // `realEffects().fetchText` would surface as a thrown error from
+  // `fetch()` itself rather than as any HTTP status.
+  httpError?: Record<string, string>;
   gh?: Record<string, { code?: number; stdout?: string; stderr?: string }>;
   git?: Record<string, { code?: number; stdout?: string; stderr?: string }>;
   files?: Record<string, string>;
@@ -58,6 +64,8 @@ function fake(spec: FakeSpec): Fake {
     logs,
     written,
     fetchText(url) {
+      const err = spec.httpError?.[url];
+      if (err) return Promise.reject(new Error(err));
       const res = spec.http?.[url];
       return Promise.resolve(res ?? { status: 404, body: "not found" });
     },
@@ -863,4 +871,134 @@ Deno.test("cut: a modified golden in the window excused by conventions-fix on a 
     detail(checks, "cut-conventions-goldens"),
     "excused by conventions-fix on #300",
   );
+});
+
+// ----- local mode ---------------------------------------------------------------
+
+function localFiles(over: {
+  lockstep?: string;
+  perPackage?: Record<string, string>;
+  protocolFiles?: Record<string, string>;
+}): Record<string, string> {
+  const lockstep = over.lockstep ?? "0.5.0";
+  const files: Record<string, string> = {
+    ...lockstepFiles(lockstep),
+    ...(over.protocolFiles ?? PROTOCOL_SRC),
+  };
+  for (const [p, v] of Object.entries(over.perPackage ?? {})) {
+    files[`${p}/deno.json`] = manifest(p, v);
+  }
+  return files;
+}
+
+function localFake(over: {
+  files?: Record<string, string>;
+  tags?: string;
+  tagsCode?: number;
+  jsrRuntime?: HttpResponse;
+  protocolMeta?: HttpResponse;
+  protocolMetaError?: string;
+  goldenDiff?: string;
+  goldenDiffCode?: number;
+}) {
+  const files = over.files ?? localFiles({});
+  const protocolVersion = JSON.parse(files["protocol/deno.json"]).version;
+  const http: Record<string, HttpResponse> = {};
+  const httpError: Record<string, string> = {};
+  if (over.jsrRuntime) {
+    http["https://jsr.io/@polyengine/runtime/meta.json"] = over.jsrRuntime;
+  }
+  const metaUrl = `https://jsr.io/@polyengine/protocol/${protocolVersion}_meta.json`;
+  if (over.protocolMetaError) {
+    httpError[metaUrl] = over.protocolMetaError;
+  } else if (over.protocolMeta) {
+    http[metaUrl] = over.protocolMeta;
+  }
+  return fake({
+    files,
+    http,
+    httpError,
+    git: {
+      "tag --list v*": { code: over.tagsCode ?? 0, stdout: over.tags ?? "v0.4.0\n" },
+      "diff --name-status origin/main...HEAD -- runtime/tests/conventions/golden/": {
+        code: over.goldenDiffCode ?? 0,
+        stdout: over.goldenDiff ?? "",
+      },
+    },
+  });
+}
+
+Deno.test("local: lockstep disagreement fails", async () => {
+  const fx = localFake({ files: localFiles({ perPackage: { wasi: "0.4.1" } }) });
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), ["lockstep"]);
+});
+
+Deno.test("local: monotonicity regression against a local git tag fails", async () => {
+  const fx = localFake({ files: localFiles({ lockstep: "0.3.0" }), tags: "v0.4.0\n" });
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), ["monotonic"]);
+  assertStringIncludes(detail(checks, "monotonic"), "local git tag v0.4.0");
+});
+
+Deno.test("local: protocol tear — published version with differing bytes fails", async () => {
+  const published = await metaFor({
+    ...PROTOCOL_SRC,
+    "protocol/src/mod.ts": "export const old = 1;\n",
+  });
+  const fx = localFake({ protocolMeta: published });
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), ["protocol-tear-identity"]);
+  assertStringIncludes(detail(checks, "protocol-tear-identity"), "content differs");
+});
+
+Deno.test("local: protocol tear — published version byte-identical passes", async () => {
+  const fx = localFake({ protocolMeta: await metaFor(PROTOCOL_SRC) });
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), []);
+  assertStringIncludes(detail(checks, "protocol-tear-identity"), "byte-identical");
+});
+
+Deno.test("local: protocol tear — unpublished version passes (pending bump)", async () => {
+  const fx = localFake({});
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), []);
+  assertStringIncludes(detail(checks, "protocol-tear-identity"), "not published");
+});
+
+Deno.test("local: a jsr.io network failure fails the tear check loudly, not silently", async () => {
+  const fx = localFake({ protocolMetaError: "getaddrinfo ENOTFOUND jsr.io" });
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), ["protocol-tear-identity"]);
+  const d = detail(checks, "protocol-tear-identity");
+  assertStringIncludes(d, "getaddrinfo ENOTFOUND jsr.io");
+  assertStringIncludes(d, "#219/#232");
+});
+
+Deno.test("local: a modified golden warns but never fails the local gate", async () => {
+  const fx = localFake({ goldenDiff: `M\t${GOLDEN_DIR}error-model.json\n` });
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), []);
+  const advisory = checks.find((c) => c.name === "conventions-goldens-advisory")!;
+  assert(advisory.ok);
+  assertStringIncludes(advisory.detail, "WARNING");
+  assertStringIncludes(advisory.detail, `${GOLDEN_DIR}error-model.json`);
+});
+
+Deno.test("local: origin/main unavailable skips the goldens advisory silently", async () => {
+  const fx = localFake({ goldenDiffCode: 1 });
+  const checks = await localChecks(fx);
+  assertEquals(checks.find((c) => c.name === "conventions-goldens-advisory"), undefined);
+});
+
+Deno.test("local: monotonicity SKIPs loudly when no local source is derivable", async () => {
+  const fx = localFake({ tagsCode: 1, tags: "" });
+  const checks = await localChecks(fx);
+  assertEquals(failed(checks), []);
+  assertStringIncludes(detail(checks, "monotonic"), "SKIP");
+});
+
+Deno.test("local: a clean tree passes end-to-end via main()", async () => {
+  const fx = localFake({});
+  assertEquals(await main(fx, ["local"]), 0);
 });

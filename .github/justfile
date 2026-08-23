@@ -44,11 +44,17 @@ _step-tolerated recipe:
     fi
 
 # The required per-push/PR matrix job (ci.yml `core`).
-# `version-guard-pr` runs FIRST and costs seconds: a versioning mistake is
-# cheap to hear about before a 40-minute matrix, and the recipe no-ops
-# outside pull_request runs (no PR_NUMBER), so pushes and `just ci` are
-# unaffected. ci.yml supplies PR_NUMBER / PR_BASE_SHA / GH_TOKEN.
+# `version-guard-local` runs first, unconditionally — label-free/event-free
+# tree checks (lockstep agreement, monotonicity, the protocol byte-identity
+# tear check) that need no PR context, so a direct push to main is covered
+# too (the #232 gap: `version-guard-pr` no-ops without PR_NUMBER, and #232
+# only got caught because it happened to go through a `pull_request` run).
+# `version-guard-pr` runs right after and costs seconds: a versioning
+# mistake is cheap to hear about before a 40-minute matrix, and the recipe
+# no-ops outside pull_request runs (no PR_NUMBER), so pushes and `just ci`
+# are unaffected. ci.yml supplies PR_NUMBER / PR_BASE_SHA / GH_TOKEN.
 core:
+    @just gha::_step version-guard-local
     @just gha::_step version-guard-pr
     @just gha::_step build
     @just gha::_step test-rust
