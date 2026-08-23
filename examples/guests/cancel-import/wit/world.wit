@@ -1,0 +1,38 @@
+package polyengine:cancel-import;
+
+/// The issue #239 corpus: a store with two live `driveAsync` loops, one of
+/// them parked in its awaiting-race. Every export is one route into that
+/// state; `ping` is the health poll whose failure surfaces the wedge.
+///
+/// The reported route was a detached (`spawn_local`) guest task dropping an
+/// in-flight async-import future — wit-bindgen's specified cancellation path,
+/// which issues the component model's `subtask.cancel`. `block-for` shows the
+/// same defect with no cancellation and no detached task at all.
+world cancel-import {
+  /// Host timer, async-typed: resolves after `ms` milliseconds. Its subtask
+  /// is the thing `start-poll-drop` and `start-race-drop` cancel.
+  import sleep: async func(ms: u64);
+
+  /// Host timer, SYNC-typed, implemented with `suspending()`: calling it
+  /// parks the calling wasm frame mid-activation until the Promise settles.
+  import block: func(ms: u64);
+
+  /// Start `sleep`, poll it once so the subtask is genuinely in flight, wait,
+  /// then DROP it from a detached task — a cancellation issued while the host
+  /// is idle. The minimal form of the reported shape.
+  export start-poll-drop: async func(hold-ms: u64, drop-after-ms: u64);
+
+  /// The same cancellation via a timeout race: two `sleep`s, loser dropped.
+  export start-race-drop: async func(slow-ms: u64, fast-ms: u64);
+
+  /// Control with no cancellation anywhere: a detached task that parks
+  /// mid-frame on `block` after the export call has already returned.
+  export start-block: async func(ms: u64);
+
+  /// The reduced form: an ordinary export call that parks mid-frame. Two
+  /// concurrent export calls are enough on their own.
+  export block-for: async func(ms: u64);
+
+  /// Cheap health poll: the export whose failure surfaces the wedge.
+  export ping: func() -> u32;
+}

@@ -20,7 +20,7 @@ TARGET=wasm32-unknown-unknown
 BUILD_DIR=guests/build
 export CARGO_TARGET_DIR="$PWD/guests/target"
 
-GUESTS="hello values resources async-probe yield-only context-user backpressure-probe stream-echo stream-pass future-user future-import resource-stream tcp-echo http-fetch test-suite fs-probe net-probe"
+GUESTS="hello values resources async-probe yield-only context-user backpressure-probe stream-echo stream-pass future-user future-import resource-stream tcp-echo http-fetch test-suite fs-probe net-probe cancel-import"
 
 # Most guests are pure computational reactors on wasm32-unknown-unknown;
 # fs-probe and net-probe build for wasm32-wasip2 ON PURPOSE — std::fs /
@@ -37,7 +37,7 @@ target_for() {
 # CM 0.3 async guests additionally need the cm-async feature).
 features_for() {
   case "$1" in
-    async-probe|yield-only|context-user|backpressure-probe|stream-echo|stream-pass|future-user|future-import|resource-stream|tcp-echo|http-fetch|test-suite)
+    async-probe|yield-only|context-user|backpressure-probe|stream-echo|stream-pass|future-user|future-import|resource-stream|tcp-echo|http-fetch|test-suite|cancel-import)
       echo "component-model,cm-async" ;;
     *) echo "component-model" ;;
   esac
