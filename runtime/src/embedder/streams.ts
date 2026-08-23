@@ -12,6 +12,10 @@ import type { ValType } from "../cabi/types.ts";
 import { despecialize } from "../cabi/types.ts";
 import type { ComponentValue } from "../cabi/types.ts";
 import {
+  type DirectDestination,
+  type DirectSessionInfo,
+  type DirectSource,
+  type DirectVerdict,
   type HostFuture,
   hostFuture,
   hostFutureFor,
@@ -144,6 +148,27 @@ function throwIfPeerTrapped(
 /** True for `stream<u8>` / `future<u8>`, whose chunks are `Uint8Array`. */
 export function isU8Element(element: ValType | null): boolean {
   return element !== null && despecialize(element).kind === "u8";
+}
+
+// Re-exported so embedders reach the A21 callback shapes from this layer too
+// (contracts/embedder-api.md §"Streams and futures", amendment A21, #128).
+export type {
+  DirectDestination,
+  DirectSource,
+  DirectVerdict,
+} from "../exec/host_streams.ts";
+
+/**
+ * A21 (#128): the direct-access byte edges are `stream<u8>` only. A
+ * zero-width element type (`t === null`) is not u8 either.
+ */
+function requireU8Direct<T>(codec: ElemCodec<T> | null, who: string): void {
+  if (codec === null || !isU8Element(codec.element)) {
+    throw new TypeError(
+      `${who} is available on stream<u8> only (embedder-api amendment A21, ` +
+        `polyengine#128); use write()/read() for other element types`,
+    );
+  }
 }
 
 /**
@@ -283,6 +308,47 @@ export class Stream<T> {
     return this.#chunk(raw);
   }
 
+  /**
+   * Consume the writer's bytes in place, without an intermediate chunk
+   * (`stream<u8>` only — contracts/embedder-api.md amendment A21,
+   * polyengine#128).
+   *
+   * At every rendezvous with a writer of nonzero capacity, `consume` runs
+   * exactly once, synchronously, with a `DirectSource` over the writer's
+   * unread bytes — guest linear memory when the peer is a guest, so the
+   * consumer's own `set()`/`subarray` copy IS the canonical-ABI copy.
+   * `"more"` keeps the session parked for the next rendezvous; `"done"` ends
+   * it. Resolves with the session's total byte count. Marking a prefix is
+   * normal: the writer re-offers the rest on its own schedule.
+   *
+   * `"done"` with zero bytes marked *retracts*: the session ends and the
+   * writer's operation stays parked, with no event delivered. `"more"` with
+   * zero marked, and a throwing callback, reject — and in both cases the
+   * writer's parked operation survives and the stream stays alive.
+   *
+   * Refusals mirror `read`: an unbound `Stream.create()` handle and a handle
+   * already passed to a guest (the A15 transfer guard) both throw, as does a
+   * non-`u8` element type.
+   */
+  async readDirect(
+    consume: (src: DirectSource) => DirectVerdict,
+  ): Promise<number> {
+    const host = this.#require();
+    const where = this.#codec?.where ?? "stream read";
+    throwIfFailed(host.value, where);
+    requireU8Direct(this.#codec, "readDirect");
+    const info: DirectSessionInfo = { endedByVerdict: false };
+    const n = await host.readable.readDirect(consume, info);
+    // A7 precision, `read`'s rule adapted: a session the CONSUMER itself
+    // ended with `"done"` genuinely completed and keeps its resolution. Any
+    // other way out (the writer dropped, the session was cancelled, the
+    // retirement walk settled us) is a settle-path this consumer did not
+    // cause — so if the peer's instance trapped, reject with the delivered
+    // count rather than fake a clean end.
+    if (!info.endedByVerdict) throwIfPeerTrapped(host.value, where, n);
+    return n;
+  }
+
   #chunk(raw: ComponentValue[] | Uint8Array): Chunk<T> {
     const codec = this.#codec!;
     if (isU8Element(codec.element)) {
@@ -413,6 +479,46 @@ export class StreamWriter<T> {
     // reject, carrying the delivered count (amendment A7). A full take
     // genuinely completed before the trap and stays a success.
     if (n < values.length) throwIfPeerTrapped(host.value, where, n);
+    return n;
+  }
+
+  /**
+   * Fill the reader's landing zone in place, without an intermediate chunk
+   * (`stream<u8>` only — contracts/embedder-api.md amendment A21,
+   * polyengine#128).
+   *
+   * At every rendezvous with a reader of nonzero capacity, `produce` runs
+   * exactly once, synchronously, with a `DirectDestination` over the reader's
+   * unfilled landing zone — guest linear memory when the peer is a guest, so
+   * the producer's own `set()` IS the canonical-ABI copy and an external byte
+   * mover (a websocket frame, a SAB ring segment, a transferred
+   * `ArrayBuffer`) never pays a second copy inside the runtime. `"more"`
+   * keeps the session parked for the next rendezvous; `"done"` ends it.
+   * Resolves with the session's total byte count.
+   *
+   * `"done"` with zero bytes marked *retracts* (the session ends, the
+   * reader's operation stays parked, no event — the speculative-park
+   * correction); `"more"` with zero marked, and a throwing callback, reject.
+   *
+   * Parks until the element type is known, exactly as `write` does — a
+   * `Stream.create()` writer has no element type until the lowering site
+   * binds one — and then requires `u8`.
+   */
+  async writeDirect(
+    produce: (dest: DirectDestination) => DirectVerdict,
+  ): Promise<number> {
+    await this.#stream.whenBound();
+    const host = hostOf(this.#stream);
+    const where = this.#stream.codec?.where ?? "stream write";
+    throwIfFailed(host.value, where);
+    requireU8Direct(this.#stream.codec, "writeDirect");
+    const info: DirectSessionInfo = { endedByVerdict: false };
+    const n = await host.writable.writeDirect(produce, info);
+    // A7 precision, `write`'s short-take rule adapted: a session the PRODUCER
+    // itself ended with `"done"` keeps its resolution; every other way out is
+    // a settle-path the producer did not cause, so a trapped peer rejects
+    // here carrying the delivered count.
+    if (!info.endedByVerdict) throwIfPeerTrapped(host.value, where, n);
     return n;
   }
 

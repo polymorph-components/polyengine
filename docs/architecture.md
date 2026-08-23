@@ -422,7 +422,12 @@ decide deliberately and document here.
   tests forced it immediately; wit-bindgen guests themselves use utf8).
 - **Numbers.** `u64`/`s64` ↔ `BigInt`; everything else ↔ `number`.
   `list<u8>` ↔ `Uint8Array` (copy; views into guest memory are never
-  exposed). Both directions are bulk copies: lift via a `Uint8Array` slice,
+  exposed — with one deliberate, scoped exception: the `stream<u8>`
+  direct-access sessions of embedder-api amendment A21 hand the callback a
+  view over the peer guest's landing zone or unread bytes, valid only for
+  that synchronous callback, so an external byte mover's last hop can BE
+  the one ABI copy). Both directions are bulk copies: lift via a
+  `Uint8Array` slice,
   lower via `Uint8Array.set` (issue #54 — the per-element interpreted store
   cost ~45 ns/byte and capped host→guest byte traffic at ~22 MB/s). Stream
   payload copies share these paths, and u8 stream chunks stay `Uint8Array`
