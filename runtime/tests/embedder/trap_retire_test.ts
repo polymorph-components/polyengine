@@ -16,7 +16,8 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
-import { PeerTrappedError, Stream, Trap } from "../../src/embedder/mod.ts";
+import { PeerTrappedError, Trap } from "@polyengine/protocol";
+import { Stream } from "../../src/embedder/streams.ts";
 import { hostStream } from "../../src/exec/mod.ts";
 
 const FIXTURE = guest("stream-pass");

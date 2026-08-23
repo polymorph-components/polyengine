@@ -28,7 +28,7 @@
 // making new ones, so refusing them would be meaningless on a filesystem
 // that never accepted a write.
 
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import { filesystemNode } from "../src/filesystem_node.ts";
 import { filesystemWeb } from "../src/filesystem_web.ts";
 import { FakeDirectoryHandle } from "./support/opfs_fake.ts";

@@ -1,0 +1,1 @@
+{"ev":"run","ok":false,"threw":{"@err":{"message":"needs JSPI (M2 phase 3): synchronous lower of import 'host:api/math/add', whose host implementation returned a Promise (the guest's wasm frame must block)","name":"NeedsJspi","tag":"error"}}}

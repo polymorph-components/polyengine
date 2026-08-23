@@ -4,12 +4,11 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
+import { DroppedError, StreamProducerError } from "@polyengine/protocol";
 import {
-  DroppedError,
   Future,
   Stream,
-  StreamProducerError,
-} from "../../src/embedder/mod.ts";
+} from "../../src/embedder/streams.ts";
 import { hostStream, hostStreamFor } from "../../src/exec/mod.ts";
 import { LiftLowerContext, mkCanonicalOptions } from "../../src/cabi/context.ts";
 import { Table } from "../../src/cabi/handles.ts";

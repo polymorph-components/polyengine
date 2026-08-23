@@ -25,6 +25,7 @@ import {
   isTrap,
   PeerTrappedError,
   STREAM,
+  STREAM_WRITER,
   StreamProducerError,
   toCloneable,
   Trap,
@@ -269,6 +270,20 @@ Deno.test("A20: a STREAM-branded value is realm-local too", () => {
     () => toCloneable({ s: stream }),
     InvalidHandleError,
     "value.s is realm-local",
+  );
+});
+
+Deno.test("A22: a STREAM_WRITER-branded value is realm-local too", () => {
+  // Belt-and-suspenders (cloneable.ts `isRealmLocalValue`): a real
+  // `StreamWriter` already refuses via the A20 pill (`defineRealmLocal` in
+  // its constructor); this covers a hand-rolled writer that carries only
+  // the brand.
+  const writer = {};
+  defineBrand(writer, STREAM_WRITER);
+  assertThrows(
+    () => toCloneable({ w: writer }),
+    InvalidHandleError,
+    "value.w is realm-local",
   );
 });
 

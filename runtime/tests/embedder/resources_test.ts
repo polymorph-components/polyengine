@@ -8,7 +8,7 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
-import { InvalidHandleError } from "../../src/embedder/mod.ts";
+import { InvalidHandleError } from "@polyengine/protocol";
 
 const ready = await haveFixture(guest("resources"));
 const IFACE = "polyengine:resources/counters";

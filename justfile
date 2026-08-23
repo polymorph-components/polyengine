@@ -80,6 +80,16 @@ test-rust:
 test-runtime: shim fixtures corpus
     cd runtime && deno task check && deno task test
 
+# The lift/lower CONVENTIONS suite alone (contracts/embedder-api.md amendment
+# A22): the executable definition of the host ABI, transcripts compared against
+# the committed goldens under `runtime/tests/conventions/golden/`. It lives
+# under runtime/tests/, so `test-runtime` already runs it — this is the focused
+# lane for working on the host boundary. Updating a golden asserts a host-ABI
+# behavior change; runtime/tests/conventions/support.ts's header carries the
+# update command and the labelling rule.
+test-conventions: shim fixtures
+    cd runtime && deno test --allow-read=..,/tmp --allow-write=/tmp --allow-env=POLYENGINE_SCHED_SEED tests/conventions/
+
 # The brand vocabulary (contracts/embedder-api.md amendment A9): dependency-
 # free, so this is the one Deno suite that needs no build artifacts at all.
 test-protocol:

@@ -1,0 +1,3 @@
+{"ev":"run","ok":true,"value":42}
+{"ev":"run/marked-but-sync","ok":true,"value":42}
+{"ev":"run/hand-rolled-mark","ok":true,"value":42}

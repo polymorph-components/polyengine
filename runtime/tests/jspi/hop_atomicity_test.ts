@@ -36,7 +36,8 @@
 // definitions.py line references for every encoding it relies on.
 import { assert, assertEquals } from "./asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";
-import { instantiate, suspending } from "../../src/embedder/mod.ts";
+import { instantiate } from "../../src/embedder/mod.ts";
+import { suspending } from "@polyengine/protocol";
 import { planNeedsSuspension } from "../../src/jspi/bridge.ts";
 import { isSupported } from "../../src/jspi/mechanics.ts";
 

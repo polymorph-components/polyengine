@@ -47,7 +47,7 @@
 //   * terminals: reported from the real streams' `isTTY` (injectable).
 //   * environment/arguments/cwd: the host process's, overridable.
 
-import { Stream } from "@polyengine/runtime/embedder";
+import { isStream } from "@polyengine/protocol";
 import {
   type CliByteSource,
   type CliErrorCode,
@@ -176,7 +176,7 @@ export function cliStdio(options: CliStdioOptions = {}): CliStdio {
       }
       return OK;
     } catch (e) {
-      if (data instanceof Stream) data.drop(); // the guest's writer must not hang
+      if (isStream(data)) data.drop(); // the guest's writer must not hang
       return { kind: "err", value: ioErrorCode(e) };
     }
   };

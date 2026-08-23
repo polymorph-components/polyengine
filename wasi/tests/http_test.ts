@@ -8,7 +8,7 @@
 // case names are the WIT spellings VERBATIM (`DNS-timeout`,
 // `internal-error` — capitals included).
 
-import { ComponentException } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 import {
   HTTP_TRACK,
   type ErrorCode,

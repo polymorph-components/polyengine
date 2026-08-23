@@ -12,7 +12,8 @@ import type {
   Shape,
   ValuesExports,
 } from "../generated/values.ts";
-import type { EmbedderInstance, ComponentException } from "../../../src/embedder/mod.ts";
+import type { EmbedderInstance } from "../../../src/embedder/mod.ts";
+import type { ComponentException } from "@polyengine/protocol";
 import type { Equal, Expect } from "./type_assert.ts";
 
 // --- record: camelCase fields -------------------------------------------

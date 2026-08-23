@@ -60,7 +60,7 @@ if (shape.startsWith("stream-")) {
   const payload = new Uint8Array(totalBytes).fill(0xa5);
 
   async function runStreamSink() {
-    const { stream, writer } = polyengine.Stream.create();
+    const { stream, writer } = polyengine.createStream();
     const call = inst.exports.streamSink(stream);
     const feed = (async () => {
       for (let off = 0; off < totalBytes; off += chunkSize) {
@@ -85,7 +85,7 @@ if (shape.startsWith("stream-")) {
   }
 
   async function runStreamPass() {
-    const { stream, writer } = polyengine.Stream.create();
+    const { stream, writer } = polyengine.createStream();
     const outP = inst.exports.streamPass(stream);
     const feed = (async () => {
       for (let off = 0; off < totalBytes; off += chunkSize) {

@@ -14,7 +14,7 @@ import {
   Future,
   Stream,
   StreamWriter,
-} from "../../src/embedder/mod.ts";
+} from "../../src/embedder/streams.ts";
 import { fromHost } from "../../src/embedder/values.ts";
 import { hostFuture } from "../../src/exec/mod.ts";
 import type { ComponentValue, ValType } from "../../src/cabi/types.ts";

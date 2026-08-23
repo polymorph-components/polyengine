@@ -19,6 +19,7 @@ const EXPECTED: Record<string, symbol> = {
   "polyengine.streamProducer/1": brands.STREAM_PRODUCER,
   "polyengine.suspending/1": brands.SUSPENDING,
   "polyengine.stream/1": brands.STREAM,
+  "polyengine.streamWriter/1": brands.STREAM_WRITER,
   "polyengine.future/1": brands.FUTURE,
   "polyengine.errorContext/1": brands.ERROR_CONTEXT,
   "polyengine.resourceState/1": brands.RESOURCE_STATE,

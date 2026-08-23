@@ -27,7 +27,8 @@
 import { filesystemWeb, type OpfsDirectoryHandle } from "../../wasi/src/filesystem_web.ts";
 import { wasi } from "../../wasi/src/mod.ts";
 import { Translator } from "@polyengine/runtime/shim";
-import { ComponentException, instantiate } from "@polyengine/runtime/embedder";
+import { instantiate } from "@polyengine/runtime/embedder";
+import { ComponentException } from "@polyengine/protocol";
 
 interface CheckResult {
   name: string;

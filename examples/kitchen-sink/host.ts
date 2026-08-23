@@ -19,9 +19,8 @@
 
 import {
   instantiate,
-  suspending,
-  ComponentException,
 } from "@polyengine/runtime/embedder";
+import { suspending, ComponentException } from "@polyengine/protocol";
 import { defaultTranslator } from "@polyengine/translator";
 
 // Tiny self-checks so the example fails loudly if the API drifts.

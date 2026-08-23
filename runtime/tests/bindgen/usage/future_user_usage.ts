@@ -10,11 +10,8 @@
 
 import { bind } from "../generated/future-user.ts";
 import type { FutureUserExports } from "../generated/future-user.ts";
-import type {
-  EmbedderInstance,
-  Future,
-  FutureSource,
-} from "../../../src/embedder/mod.ts";
+import type { EmbedderInstance } from "../../../src/embedder/mod.ts";
+import type { Future, FutureSource } from "@polyengine/protocol";
 import type { Equal, Expect } from "./type_assert.ts";
 
 type _DoubleFutureTakesFutureSource = Expect<

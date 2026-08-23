@@ -61,8 +61,10 @@ Their jco blockers map one-for-one onto this project's proven strengths
   Since amendment A9 (contracts/embedder-api.md §"Module identity"),
   cross-boundary brands are process-global symbols via `@polyengine/protocol`,
   so a violation degrades to a diagnosed inefficiency instead of a latent
-  `instanceof` failure — host modules SHOULD import `@polyengine/protocol` at
-  most, keeping runtime selection entirely with the deploying application.
+  `instanceof` failure — and since A22 (§"The host-ABI surface and its
+  version") host modules MUST import `@polyengine/protocol` at most (the
+  runtime's exported surface is application-only), keeping runtime
+  selection entirely with the deploying application.
 - **Their suites are engine sanity checks, not gates** (operator ruling,
   2026-08-10; supersedes the earlier "their suites become our gates"
   posture and the release-gate framing of the now-closed

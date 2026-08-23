@@ -25,7 +25,8 @@
 
 import { assertEq, assertTrue } from "./asserts.ts";
 import { Translator } from "@polyengine/runtime/shim";
-import { type Future, instantiate } from "@polyengine/runtime/embedder";
+import { instantiate } from "@polyengine/runtime/embedder";
+import type { Future } from "@polyengine/protocol";
 import { sockets } from "../src/sockets.ts";
 
 const FIXTURE = new URL(

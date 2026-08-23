@@ -20,6 +20,8 @@ import type {
   ErrorContext,
   ComponentException,
   Trap,
+} from "@polyengine/protocol";
+import type {
   EmbedderInstance,
   EmbedderOptions,
   InstantiateSource,

@@ -1,0 +1,5 @@
+{"ev":"probe","ok":true,"value":41}
+{"disposed":[41],"ev":"after-probe"}
+{"ev":"calib","ok":true,"value":1}
+{"ev":"calib-again","ok":true,"value":2}
+{"calibrations":2,"ev":"statics"}

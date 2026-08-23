@@ -21,12 +21,9 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
-import {
-  type DirectDestination,
-  type DirectSource,
-  PeerTrappedError,
-  Stream,
-} from "../../src/embedder/mod.ts";
+import type { DirectDestination, DirectSource } from "@polyengine/protocol";
+import { PeerTrappedError } from "@polyengine/protocol";
+import { Stream } from "../../src/embedder/streams.ts";
 
 const FIXTURE = guest("stream-pass");
 const ready = await haveFixture(FIXTURE);

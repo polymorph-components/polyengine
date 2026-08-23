@@ -85,7 +85,7 @@
 // pre-existing escaping symlinks alike are refused with `not-permitted`;
 // OPFS has no symlinks, so the web backend is immune by construction.
 
-import { ComponentException, Stream, suspending } from "@polyengine/runtime/embedder";
+import { ComponentException, isStream, suspending, type Stream } from "@polyengine/protocol";
 import { FedInputStream, IoError, OutputStream, Pollable, SinkOutputStream } from "../io.ts";
 
 /** `wasi:filesystem/types.error-code` labels. 0.2 (enum): all of these,
@@ -1075,7 +1075,7 @@ export function makeFilesystem<H>(
         }
         return OK03;
       } catch (e) {
-        if (data instanceof Stream) data.drop(); // the guest's writer must not hang
+        if (isStream(data)) data.drop(); // the guest's writer must not hang
         return {
           kind: "err",
           value: { kind: e instanceof ComponentException ? (e.payload as { kind: FsErrorCode }).kind : map(e) },
@@ -1094,7 +1094,7 @@ export function makeFilesystem<H>(
         }
         return OK03;
       } catch (e) {
-        if (data instanceof Stream) data.drop();
+        if (isStream(data)) data.drop();
         return {
           kind: "err",
           value: { kind: e instanceof ComponentException ? (e.payload as { kind: FsErrorCode }).kind : map(e) },

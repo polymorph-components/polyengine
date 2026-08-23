@@ -6,15 +6,19 @@
 // Nothing here runs. It exists to be type-checked.
 
 import {
-  ComponentException,
   type ComponentArtifacts,
+  createStream,
   instantiate,
-  isComponentException,
-  Stream,
-  suspending,
 } from "@polyengine/runtime/embedder";
 import { Translator } from "@polyengine/runtime/shim";
-import { COMPONENT_EXCEPTION, copyCensus, PROTOCOL_GENERATION } from "@polyengine/protocol";
+import {
+  COMPONENT_EXCEPTION,
+  ComponentException,
+  copyCensus,
+  isComponentException,
+  PROTOCOL_GENERATION,
+  suspending,
+} from "@polyengine/protocol";
 import { defaultTranslator } from "@polyengine/translator";
 import { wasi } from "@polyengine/wasi";
 import { runSuite } from "@polyengine/ct-runner";
@@ -32,7 +36,10 @@ export async function typeSurface(componentBytes: Uint8Array) {
 
   // A byte stream is `Stream<number>`: `Chunk<T>` widens a numeric element
   // type to `Uint8Array | number[]`, so the u8 bulk path is expressible.
-  const { stream, writer } = Stream.create<number>();
+  // `createStream` (amendment A22) is the application-surface spelling of
+  // the former `Stream.create()` static — the concrete class is no longer
+  // exported.
+  const { stream, writer } = createStream<number>();
   await writer.write(new Uint8Array([1, 2, 3]));
   await writer.close();
 

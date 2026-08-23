@@ -5,7 +5,7 @@
 // rides on (A14: the blocking declarations are marked on io.ts's
 // REGISTERED prototypes; these duck-typed impls override behavior only).
 
-import { ComponentException, isSuspending } from "@polyengine/runtime/embedder";
+import { ComponentException, isSuspending } from "@polyengine/protocol";
 import { cliStdio } from "../src/cli_stdio.ts";
 import { type CliIoResult, ExitError } from "../src/cli.ts";
 import {

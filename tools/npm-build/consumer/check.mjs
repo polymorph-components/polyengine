@@ -36,10 +36,12 @@ assert.equal(
 );
 assert.equal(protocol.PROTOCOL_GENERATION, 1, "unexpected brand generation");
 
-const thrown = new embedder.ComponentException({ kind: "smoke" });
+// `ComponentException` is host-ABI vocabulary (amendment A22): it lives on
+// `@polyengine/protocol`, not the runtime's embedder module, since A22.
+const thrown = new protocol.ComponentException({ kind: "smoke" });
 assert.ok(
   protocol.isComponentException(thrown),
-  "a runtime-minted ComponentException is not recognized by the protocol package",
+  "a protocol-minted ComponentException is not recognized by its own predicate",
 );
 assert.ok(
   thrown[Symbol.for("polyengine.componentException/1")],

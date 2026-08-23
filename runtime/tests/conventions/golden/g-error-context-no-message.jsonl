@@ -1,0 +1,2 @@
+{"ev":"probe","ok":false,"threw":{"@err":{"message":"import 'host:api/ec/relay': this error-context was minted by a DIFFERENT polyengine runtime copy and cannot be used through this one (this copy: <url>). Handles are stateful — their machinery lives in the copy that minted them (contracts/embedder-api.md amendment A9, issue #83)","name":"TypeError","tag":"error"}}}
+{"ev":"probe/unbranded","ok":false,"threw":{"@err":{"message":"import 'host:api/ec/relay': expected an ErrorContext","name":"TypeError","tag":"error"}}}

@@ -10,33 +10,49 @@
 
 use std::path::Path;
 
-fn main() {
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
-    let manifest = Path::new(&manifest_dir).join("../../runtime/deno.json");
-
-    println!("cargo:rerun-if-changed=../../runtime/deno.json");
-    println!("cargo:rerun-if-changed=build.rs");
-
-    let text = std::fs::read_to_string(&manifest).unwrap_or_else(|e| {
+fn manifest_version(manifest: &Path) -> String {
+    let text = std::fs::read_to_string(manifest).unwrap_or_else(|e| {
         panic!(
-            "bindgen build.rs: cannot read {} (needed to derive the default \
-             import base's runtime version): {e}",
+            "bindgen build.rs: cannot read {} (needed to derive a default \
+             import base's version): {e}",
             manifest.display()
         )
     });
     let json: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| {
-        panic!(
-            "bindgen build.rs: {} is not valid JSON: {e}",
-            manifest.display()
-        )
+        panic!("bindgen build.rs: {} is not valid JSON: {e}", manifest.display())
     });
-    let version = json.get("version").and_then(|v| v.as_str()).unwrap_or_else(|| {
-        panic!(
-            "bindgen build.rs: {} has no string `version` field — refusing to \
-             emit a guessed default import base",
-            manifest.display()
-        )
-    });
+    json.get("version")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| {
+            panic!(
+                "bindgen build.rs: {} has no string `version` field — refusing to \
+                 emit a guessed default import base",
+                manifest.display()
+            )
+        })
+        .to_string()
+}
 
-    println!("cargo:rustc-env=POLYENGINE_RUNTIME_VERSION={version}");
+fn main() {
+    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
+    let runtime_manifest = Path::new(&manifest_dir).join("../../runtime/deno.json");
+    // Protocol's version is independent of the lockstep runtime version
+    // (contracts/embedder-api.md §"The host-ABI surface and its version",
+    // amendment A22: "protocol's version is the host-ABI version") — the
+    // generated bindings' `@polyengine/protocol` import pins protocol's own
+    // manifest, never the runtime's.
+    let protocol_manifest = Path::new(&manifest_dir).join("../../protocol/deno.json");
+
+    println!("cargo:rerun-if-changed=../../runtime/deno.json");
+    println!("cargo:rerun-if-changed=../../protocol/deno.json");
+    println!("cargo:rerun-if-changed=build.rs");
+
+    println!(
+        "cargo:rustc-env=POLYENGINE_RUNTIME_VERSION={}",
+        manifest_version(&runtime_manifest)
+    );
+    println!(
+        "cargo:rustc-env=POLYENGINE_PROTOCOL_VERSION={}",
+        manifest_version(&protocol_manifest)
+    );
 }

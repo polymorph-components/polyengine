@@ -1,0 +1,3 @@
+{"ev":"run-next","ok":true,"value":42}
+{"ev":"run-send","ok":true,"value":4}
+{"ev":"run-recv","ok":true,"value":[10,99]}

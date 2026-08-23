@@ -20,17 +20,19 @@
 // the boundary; the STATEFUL ones (`Stream`) are refused with a named
 // cross-copy error rather than silently adapted; and an unbranded throw in a
 // multi-copy graph says so.
+//
+// Amendment A22 shrinks the SHIPPED bundle (./entry.ts) to application
+// surface only — it no longer re-exports `@polyengine/protocol` vocabulary,
+// on purpose (contracts/embedder-api.md §"The host-ABI surface and its
+// version"). This test builds copy B from ./test_entry.ts instead: the same
+// dependency graph as the shipped entry, plus protocol re-exports so this
+// test can still reach copy B's OWN classes — the premise the test pins.
+// The production artifact (built from entry.ts) is unaffected.
 
 import { buildBundle } from "./build.ts";
-import {
-  copyCensus,
-  COPY_URL,
-  instantiate,
-  isSuspending,
-  runtimeCopies,
-  Stream,
-  ComponentException,
-} from "../../runtime/src/embedder/mod.ts";
+import { COPY_URL, instantiate } from "../../runtime/src/embedder/mod.ts";
+import { ComponentException, copyCensus, isSuspending, runtimeCopies } from "@polyengine/protocol";
+import { Stream } from "../../runtime/src/embedder/streams.ts";
 import { lowerStreamSource } from "../../runtime/src/embedder/streams.ts";
 import { Translator } from "../../runtime/src/shim/mod.ts";
 
@@ -73,7 +75,10 @@ Deno.test({
   name: "A9 dual-copy pin: source + bundle copies honor the brands and refuse foreign handles",
   ignore: !ready,
   fn: async () => {
-    const out = await buildBundle();
+    const out = await buildBundle(
+      undefined,
+      new URL("./test_entry.ts", import.meta.url).pathname,
+    );
     // deno-lint-ignore no-explicit-any
     const B: any = await import(new URL(`file://${out}`).href);
 
@@ -126,7 +131,7 @@ Deno.test({
     // ---- 4. a foreign STREAM handle is refused, loudly -----------------
     // Stateful: its machinery lives in copy B. Without the brand check it
     // would fall through to producer adaptation and be pumped by value.
-    const { stream: foreignStream } = B.Stream.create();
+    const { stream: foreignStream } = B.createStream();
     assert(
       !(foreignStream instanceof Stream),
       "premise: copy B's Stream is not copy A's Stream",

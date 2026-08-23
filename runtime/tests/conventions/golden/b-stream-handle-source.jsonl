@@ -1,0 +1,7 @@
+{"classified":"stream","ev":"hop1"}
+{"ev":"hop1/read","ok":true,"value":{"@u8":[1]}}
+{"classified":"stream","ev":"hop2","sameWrapperObject":false}
+{"ev":"hop1/read-after-transfer","ok":false,"threw":{"@err":{"message":"this Stream handle has already been passed to a guest; the guest owns its readable end, so it can no longer be read from the host (issue #162)","name":"TypeError","tag":"error"}}}
+{"ev":"hop2/read","ok":true,"value":{"@u8":[2]}}
+{"ev":"hop2/read-again","ok":true,"value":{"@u8":[3]}}
+{"ev":"hop2/read-eos","ok":true,"value":{"@u8":[]}}

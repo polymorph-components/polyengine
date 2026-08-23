@@ -7,11 +7,8 @@
 
 import { bind } from "../generated/async-probe.ts";
 import type { AsyncProbeExports } from "../generated/async-probe.ts";
-import type {
-  EmbedderInstance,
-  FutureSource,
-  StreamSource,
-} from "../../../src/embedder/mod.ts";
+import type { EmbedderInstance } from "../../../src/embedder/mod.ts";
+import type { FutureSource, StreamSource } from "@polyengine/protocol";
 import type { Equal, Expect } from "./type_assert.ts";
 
 type _WaitThenDouble = Expect<

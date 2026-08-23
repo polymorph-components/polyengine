@@ -3,7 +3,7 @@
 // of these names is `@polyengine/wasi/sockets`. Address codec, wasmtime-parity
 // validation, platform error mapping, and the WIT-facing type shapes.
 
-import { ComponentException, Stream } from "@polyengine/runtime/embedder";
+import { ComponentException, type Stream } from "@polyengine/protocol";
 import type { NetAddr } from "./sockets_platform.ts";
 
 export type { NetAddr };

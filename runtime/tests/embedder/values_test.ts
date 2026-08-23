@@ -8,7 +8,7 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
-import { ComponentException } from "../../src/embedder/mod.ts";
+import { ComponentException } from "@polyengine/protocol";
 
 const ready = await haveFixture(guest("values"));
 

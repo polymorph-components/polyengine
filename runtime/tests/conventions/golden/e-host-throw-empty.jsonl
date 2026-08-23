@@ -1,0 +1,4 @@
+{"ev":"return-undefined","ok":true,"value":0}
+{"ev":"throw-componentException","ok":true,"value":1}
+{"ev":"throw-hand-rolled","ok":true,"value":1}
+{"ev":"throw-unbranded","ok":false,"threw":{"@err":{"message":"import 'host:api/fallible/check' threw TypeError: a stray platform error. An unbranded throw from a host import is a host bug and becomes a trap: signal a WIT error with `throw new ComponentException(payload)`.","tag":"trap"}}}

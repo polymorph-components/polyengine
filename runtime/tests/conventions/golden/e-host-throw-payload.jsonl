@@ -1,0 +1,3 @@
+{"ev":"ok","ok":true,"value":12}
+{"ev":"err/canonical","ok":true,"value":1004}
+{"ev":"err/hand-rolled","ok":true,"value":1004}

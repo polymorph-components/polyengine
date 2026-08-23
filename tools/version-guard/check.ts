@@ -60,6 +60,13 @@ export const PACKAGES = [...LOCKSTEP, "protocol"];
 
 const JSR_PROTOCOL = "https://jsr.io/@polyengine/protocol";
 
+/** The committed conventions-suite goldens (contracts/embedder-api.md
+ * "The conventions suite is the executable definition of the host ABI",
+ * amendment A22): the suite itself lands in a later track, so this
+ * directory does not exist yet in most trees — every check below must
+ * pass vacuously (no M/D found) when it is absent or untouched. */
+export const LOCKED_GOLDEN_DIR = "runtime/tests/conventions/golden/";
+
 export type Check = { name: string; ok: boolean; detail: string };
 
 const pass = (name: string, detail: string): Check => ({
@@ -147,6 +154,74 @@ export async function latestCutVersion(
   return { tag, version: tag.slice(1) };
 }
 
+// ----- conventions goldens (A22) -----------------------------------------------
+
+export type GoldenChange = { status: "A" | "M" | "D"; path: string };
+
+/** Parse `git diff --name-status ... -- <locked dir>` output. A rename is
+ * treated as an M of the old path plus an A of the new one (task authority:
+ * dispatch step 1) — the new content still needs the gate, but the OLD
+ * golden's disappearance is exactly what a plain M/D would flag, and a pure
+ * rename-with-no-content-change should not dodge that by virtue of the
+ * path move. A copy (`C...`) only introduces a new path, so it is an A. */
+export function parseGoldenNameStatus(output: string): GoldenChange[] {
+  const changes: GoldenChange[] = [];
+  for (const raw of output.split("\n")) {
+    const line = raw.trim();
+    if (!line) continue;
+    const parts = line.split("\t");
+    const code = parts[0];
+    if (code.startsWith("R")) {
+      const [oldPath, newPath] = [parts[1], parts[2]];
+      changes.push({ status: "M", path: oldPath });
+      changes.push({ status: "A", path: newPath });
+    } else if (code.startsWith("C")) {
+      changes.push({ status: "A", path: parts[2] ?? parts[1] });
+    } else if (code === "A" || code === "M" || code === "D") {
+      changes.push({ status: code, path: parts[1] });
+    }
+    // Other statuses (T, U, X, B) do not occur for plain committed text
+    // fixtures; ignoring them fails closed only in the sense that they
+    // neither trigger nor excuse the gate, which matches "added is free".
+  }
+  return changes;
+}
+
+const ACCEPTED_GOLDEN_LABELS = ["breaking/protocol", "conventions-fix"];
+
+/** PR-time (advisory) gate: a modified/deleted golden requires either
+ * `breaking/protocol` (the existing label/minor-bump machinery then
+ * enforces the protocol bump — not duplicated here) or `conventions-fix`
+ * (the reviewed behavior-neutral-correction escape). Added-only goldens
+ * never trigger. */
+export function conventionsGoldenPrCheck(
+  changes: GoldenChange[],
+  labels: string[],
+): Check {
+  const touched = changes.filter((c) => c.status === "M" || c.status === "D");
+  if (touched.length === 0) {
+    return pass(
+      "conventions-goldens",
+      `no modified/deleted goldens under ${LOCKED_GOLDEN_DIR}`,
+    );
+  }
+  const excused = ACCEPTED_GOLDEN_LABELS.some((l) => labels.includes(l));
+  if (excused) {
+    return pass(
+      "conventions-goldens",
+      `${touched.length} modified/deleted golden(s) (${
+        touched.map((c) => c.path).join(", ")
+      }) excused by ${ACCEPTED_GOLDEN_LABELS.filter((l) => labels.includes(l)).join(", ")}`,
+    );
+  }
+  return fail(
+    "conventions-goldens",
+    `this PR modifies or deletes committed goldens under ${LOCKED_GOLDEN_DIR} (${
+      touched.map((c) => c.path).join(", ")
+    }) — that asserts a host-ABI behavior change (contracts/embedder-api.md A22) and requires either the breaking/protocol label (the protocol minor bump it implies) or, for a reviewed behavior-neutral correction of the suite itself, the conventions-fix label`,
+  );
+}
+
 // ----- pr mode ----------------------------------------------------------------
 
 export type PrEnv = {
@@ -167,7 +242,13 @@ export type PrEnv = {
 export async function fetchBase(
   fx: Effects,
   baseSha: string,
-): Promise<{ changed: string[]; baseRuntimeVersion: string | null }> {
+): Promise<
+  {
+    changed: string[];
+    baseRuntimeVersion: string | null;
+    goldenChanges: GoldenChange[];
+  }
+> {
   await fx.run("git", ["fetch", "origin", baseSha, "--depth=1"]);
   let diff = await fx.run("git", [
     "diff",
@@ -182,6 +263,31 @@ export async function fetchBase(
       `cannot diff against the PR base ${baseSha}:\n${diff.stderr.trim()}`,
     );
   }
+  // Same base, same three-dot/two-dot fallback, scoped to the locked
+  // goldens dir and asking for rename/status detail instead of names only
+  // — the A22 gate needs to tell "added" from "modified/deleted".
+  let goldenDiff = await fx.run("git", [
+    "diff",
+    "--name-status",
+    `${baseSha}...HEAD`,
+    "--",
+    LOCKED_GOLDEN_DIR,
+  ]);
+  if (goldenDiff.code !== 0) {
+    goldenDiff = await fx.run("git", [
+      "diff",
+      "--name-status",
+      baseSha,
+      "HEAD",
+      "--",
+      LOCKED_GOLDEN_DIR,
+    ]);
+  }
+  if (goldenDiff.code !== 0) {
+    throw new Error(
+      `cannot diff the locked goldens against the PR base ${baseSha}:\n${goldenDiff.stderr.trim()}`,
+    );
+  }
   const show = await fx.run("git", ["show", `${baseSha}:runtime/deno.json`]);
   const baseRuntimeVersion = show.code === 0
     ? JSON.parse(show.stdout)?.version ?? null
@@ -189,6 +295,7 @@ export async function fetchBase(
   return {
     changed: diff.stdout.split("\n").map((l) => l.trim()).filter(Boolean),
     baseRuntimeVersion,
+    goldenChanges: parseGoldenNameStatus(goldenDiff.stdout),
   };
 }
 
@@ -267,7 +374,10 @@ export async function prChecks(fx: Effects, env: PrEnv): Promise<Check[]> {
   // head), so it holds before the first cut too. A minor bump without a
   // label is either a missing label or an unintended bump; a PATCH bump
   // needs no label (that is the routine post-cut manifest-bump PR).
-  const { changed, baseRuntimeVersion } = await fetchBase(fx, env.baseSha);
+  const { changed, baseRuntimeVersion, goldenChanges } = await fetchBase(
+    fx,
+    env.baseSha,
+  );
   if (baseRuntimeVersion === null) {
     checks.push(fail(
       "minor-bump-labelled",
@@ -301,6 +411,13 @@ export async function prChecks(fx: Effects, env: PrEnv): Promise<Check[]> {
     protocolBreaking: breaking.includes("protocol"),
     changed,
   }));
+
+  // 8. A22: modifying/deleting a locked conventions golden asserts a
+  // host-ABI behavior change (contracts/embedder-api.md "The conventions
+  // suite is the executable definition of the host ABI"). Advisory here,
+  // same trust model as the breaking labels; authoritative gate is in cut
+  // mode below.
+  checks.push(conventionsGoldenPrCheck(goldenChanges, labels));
 
   return checks;
 }
@@ -554,12 +671,52 @@ export async function protocolVersionAtRef(
   return JSON.parse(atob(content.replace(/\n/g, ""))).version;
 }
 
+/** The locked-golden name-status diff for the whole release window, `git
+ * diff --name-status <lastTag>..<sha> -- <locked dir>`. The release
+ * checkout is shallow (actions/checkout@v4 default depth), so the last
+ * cut's tag is fetched first — mirroring fetchBase's PR-base fetch — with
+ * the same three-dot-unavailable fallback (two-dot local comparison; here
+ * there is no merge-base ambiguity to begin with, so `..` is exact rather
+ * than a fallback in the same sense, but the two-call shape matches the
+ * rest of this file's style). */
+export async function cutGoldenChanges(
+  fx: Effects,
+  lastTag: string,
+  sha: string,
+): Promise<GoldenChange[]> {
+  await fx.run("git", ["fetch", "origin", `refs/tags/${lastTag}`, "--depth=1"]);
+  let diff = await fx.run("git", [
+    "diff",
+    "--name-status",
+    `${lastTag}..${sha}`,
+    "--",
+    LOCKED_GOLDEN_DIR,
+  ]);
+  if (diff.code !== 0) {
+    diff = await fx.run("git", [
+      "diff",
+      "--name-status",
+      lastTag,
+      sha,
+      "--",
+      LOCKED_GOLDEN_DIR,
+    ]);
+  }
+  if (diff.code !== 0) {
+    throw new Error(
+      `cannot diff the locked goldens for ${lastTag}..${sha}:\n${diff.stderr.trim()}`,
+    );
+  }
+  return parseGoldenNameStatus(diff.stdout);
+}
+
 export function cutGuards(input: {
   version: string;
   lastCutVersion: string;
   protocolVersion: string;
   protocolAtLastCut: string;
   window: ReleaseWindow;
+  goldenChanges: GoldenChange[];
 }): Check[] {
   const checks: Check[] = [];
   const { version, lastCutVersion, window } = input;
@@ -607,6 +764,49 @@ export function cutGuards(input: {
     ));
   }
 
+  // A22, authoritative: any M/D under the locked conventions goldens in
+  // this window asserts a host-ABI behavior change. The escape is either
+  // protocol on a LATER MINOR LINE than at the last cut (a behavior change
+  // is breaking by definition, so a patch move does not satisfy; a
+  // breaking/protocol PR forces the bump via cut-protocol-labels above, so
+  // this does not duplicate that enforcement — it catches the change that
+  // shipped with no label at all) or a conventions-fix label anywhere in
+  // the window (the reviewed behavior-neutral-correction escape,
+  // contracts/embedder-api.md A22).
+  const touchedGoldens = input.goldenChanges.filter((c) =>
+    c.status === "M" || c.status === "D"
+  );
+  if (touchedGoldens.length === 0) {
+    checks.push(pass(
+      "cut-conventions-goldens",
+      `no modified/deleted goldens under ${LOCKED_GOLDEN_DIR} in this window`,
+    ));
+  } else if (isMinorBumped(input.protocolVersion, input.protocolAtLastCut)) {
+    checks.push(pass(
+      "cut-conventions-goldens",
+      `${touchedGoldens.length} modified/deleted golden(s) (${
+        touchedGoldens.map((c) => c.path).join(", ")
+      }); protocol ${input.protocolVersion} is a later minor line than the last cut's ${input.protocolAtLastCut}`,
+    ));
+  } else {
+    const excusedBy = window.prs.find((pr) => pr.labels.includes("conventions-fix"));
+    if (excusedBy) {
+      checks.push(pass(
+        "cut-conventions-goldens",
+        `${touchedGoldens.length} modified/deleted golden(s) (${
+          touchedGoldens.map((c) => c.path).join(", ")
+        }) excused by conventions-fix on #${excusedBy.number}`,
+      ));
+    } else {
+      checks.push(fail(
+        "cut-conventions-goldens",
+        `this window modifies or deletes committed goldens under ${LOCKED_GOLDEN_DIR} (${
+          touchedGoldens.map((c) => c.path).join(", ")
+        }) but protocol ${input.protocolVersion} is not a later minor line than the last cut's ${input.protocolAtLastCut}, and no PR in this window carries conventions-fix — a golden change asserts a host-ABI behavior change (contracts/embedder-api.md A22): label the PR breaking/protocol (and bump protocol's minor), or conventions-fix for a reviewed behavior-neutral correction`,
+      ));
+    }
+  }
+
   return checks;
 }
 
@@ -652,6 +852,7 @@ export async function cutChecks(
     protocolVersion: await readManifestVersion(fx, "protocol"),
     protocolAtLastCut: await protocolVersionAtRef(fx, input.repo, cut.tag),
     window,
+    goldenChanges: await cutGoldenChanges(fx, cut.tag, input.sha),
   });
   if (input.out) await fx.writeFile(input.out, renderNotes(window));
   checks.push(pass(
