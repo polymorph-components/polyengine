@@ -18,6 +18,7 @@ const EXPECTED: Record<string, symbol> = {
   "polyengine.invalidHandle/1": brands.INVALID_HANDLE,
   "polyengine.streamProducer/1": brands.STREAM_PRODUCER,
   "polyengine.suspending/1": brands.SUSPENDING,
+  "polyengine.deferCancel/1": brands.DEFER_CANCEL,
   "polyengine.stream/1": brands.STREAM,
   "polyengine.streamWriter/1": brands.STREAM_WRITER,
   "polyengine.future/1": brands.FUTURE,

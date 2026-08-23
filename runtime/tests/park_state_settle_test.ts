@@ -281,6 +281,7 @@ function mkImportWorld(input: {
     stats: newStats(),
     mode: input.mode,
     suspendable: input.suspendable,
+    deferCancel: false,
   }) as (...args: number[]) => unknown;
   return { ...w, rt, handle, handleIndex, call };
 }

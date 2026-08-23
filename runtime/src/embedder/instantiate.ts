@@ -24,7 +24,12 @@ import {
   instantiateComponent,
 } from "../exec/mod.ts";
 import { camelCase, parseLeafName, pascalCase } from "./casing.ts";
-import { isSuspending, suspending } from "../jspi/suspending.ts";
+import {
+  deferCancel,
+  isDeferCancel,
+  isSuspending,
+  suspending,
+} from "../jspi/suspending.ts";
 import { Translator } from "../shim/mod.ts";
 import { copyCensus, isTrap, isComponentException } from "@polyengine/protocol";
 import { NameCollisionError, ComponentException } from "./errors.ts";
@@ -49,6 +54,24 @@ import {
 } from "./values.ts";
 import { ImportResolver } from "./version.ts";
 import { type ElemCodec, Future, Stream } from "./streams.ts";
+
+/**
+ * Relay the per-declaration host-import marks from the embedder's function
+ * onto the wrapper the executor will actually receive, and return the
+ * wrapper.
+ *
+ * Every `#dispatcher` arm re-wraps the embedder's function in a closure, so a
+ * brand left on the original is INVISIBLE to `buildLoweredImport` — for A1
+ * that surfaced as a `NeedsJspi`, for A23 (`deferCancel()`) it would be a
+ * silently discarded commit, which is precisely the failure the brand exists
+ * to prevent. Both marks are relayed by the same helper so a third one cannot
+ * be added to one arm and forgotten in the other three.
+ */
+function relayMarks<F extends CallableFunction>(from: unknown, to: F): F {
+  if (isSuspending(from)) suspending(to);
+  if (isDeferCancel(from)) deferCancel(to);
+  return to;
+}
 
 /** Per-element codec for a `future<T>` returned in function-result position. */
 function elementCodec(
@@ -578,9 +601,10 @@ class Facade {
       }
       return impl(...raw);
     };
-    // A1 brand relay, layer 2 of 2 (see #dispatcher): the executor reads the
-    // brand off this wrapper, which is what lands in its hostImports record.
-    return isSuspending(dispatch) ? suspending(wrapper) : wrapper;
+    // A1/A23 brand relay, layer 2 of 2 (see #dispatcher): the executor reads
+    // the brands off this wrapper, which is what lands in its hostImports
+    // record.
+    return relayMarks(dispatch, wrapper);
   }
 
   /** A host-implemented resource type: register the class, own the mapping. */
@@ -634,8 +658,9 @@ class Facade {
             `${describe(fn)}); expected '${camelCase(m.name)}'`,
         );
       }
-      // A1: the `suspending()` brand rides the dispatch closure so #wrapLeaf
-      // can relay it onto the value the executor actually receives.
+      // A1/A23: the `suspending()` and `deferCancel()` brands ride the
+      // dispatch closure so #wrapLeaf can relay them onto the value the
+      // executor actually receives.
       //
       // A2 receiver rule: an interface member is invoked with its containing
       // object as receiver (matching the static arm's `apply(cls)`), so a
@@ -649,7 +674,7 @@ class Facade {
       const receiver = leaf.path.length === 0 ? undefined : provider;
       const dispatch: (args: unknown[]) => unknown = (args) =>
         (fn as RawFn).apply(receiver, args);
-      return isSuspending(fn) ? suspending(dispatch) : dispatch;
+      return relayMarks(fn, dispatch);
     }
     const clsName = pascalCase(m.resource);
     // World-level member leaves resolved the class itself (`#provider`);
@@ -701,7 +726,7 @@ class Facade {
           }
           return (fn as RawFn).apply(self, rest);
         };
-        return isSuspending(protoFn) ? suspending(dispatch) : dispatch;
+        return relayMarks(protoFn, dispatch);
       }
       case "static": {
         const fn = (cls as Record<string, unknown>)[camelCase(m.member)];
@@ -716,7 +741,7 @@ class Facade {
         // at wrap time.
         const dispatch: (args: unknown[]) => unknown = (args) =>
           (fn as RawFn).apply(cls, args);
-        return isSuspending(fn) ? suspending(dispatch) : dispatch;
+        return relayMarks(fn, dispatch);
       }
     }
   }

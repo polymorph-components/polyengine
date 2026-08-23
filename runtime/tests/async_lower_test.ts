@@ -35,6 +35,9 @@ import {
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
 import { BLOCKED, createSubtaskCancel } from "../src/intrinsics/async_builtins.ts";
+// A23: the cancel-discard opt-out, read off the host function exactly as
+// `executor.ts buildLoweredImport` reads it from the embedder's imports record.
+import { deferCancel, isDeferCancel } from "../src/jspi/suspending.ts";
 import { Trap } from "../src/cabi/mod.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -105,6 +108,9 @@ function mkFixture(hostFn: (...a: unknown[]) => unknown): Fixture {
     stats: newStats(),
     mode: "plain",
     suspendable: false,
+    // Mirrors `buildLoweredImport`: the brand is read off the host value, so a
+    // fixture whose host fn is wrapped in `deferCancel()` gets the opt-out.
+    deferCancel: isDeferCancel(hostFn),
   }) as (...args: number[]) => unknown;
 
   const task = new Task(FT, TASK_OPTS, inst, () => [], () => {});
@@ -233,6 +239,7 @@ Deno.test("sync lower of a Promise-returning host import needs JSPI", () => {
     opts,
     hostFn: () => Promise.resolve(1),
     stats: newStats(),
+    deferCancel: false,
     // Plain mode: the A1 park arm is jspi-only, so this stays the guard pin
     // for the no-JSPI path. The marked+jspi park itself is pinned by
     // tests/embedder/suspending_imports_test.ts.
@@ -268,16 +275,21 @@ Deno.test("sync lower of a Promise-returning host import needs JSPI", () => {
   );
 });
 
-Deno.test("async lower: subtask.cancel on a pending host call returns BLOCKED", async () => {
+Deno.test("A23: deferCancel() opts a host import out of discard — subtask.cancel returns BLOCKED", async () => {
   // definitions.py `canon_subtask_cancel` (line 2469): the request is passed
   // to the callee's `on_cancel`; if the callee does not resolve promptly, the
   // async form returns BLOCKED and the subtask stays live.
   //
-  // A host import has no cancellation channel, so its `on_cancel` accepts and
-  // ignores the request (see boundary.ts). Before that handler existed, this
-  // legal call crashed with an internal AssertionError.
+  // That is what a `deferCancel()`-branded import does — accept and ignore
+  // (contracts/embedder-api.md amendment A23; polyengine#241). It was the
+  // behavior of EVERY host import before A23; it is now the opt-in for imports
+  // with a commit point, where reporting CANCELLED_BEFORE_RETURNED would lie
+  // about a write that lands anyway. The default is discard, pinned in
+  // tests/host_import_cancel_test.ts.
   let settle!: (v: number) => void;
-  const f = mkFixture(() => new Promise<number>((r) => (settle = r)));
+  const f = mkFixture(
+    deferCancel(() => new Promise<number>((r) => (settle = r))),
+  );
   const packed = f.asGuest(() => f.call(1, 64)) as number;
   const [, subtaski] = unpackSubtaskResult(packed);
   const subtask = f.inst.handles.get(subtaski) as Subtask;
@@ -290,8 +302,9 @@ Deno.test("async lower: subtask.cancel on a pending host call returns BLOCKED", 
   assertEq(subtask.resolved(), false);
   assertEq(subtask.state, SubtaskState.STARTED);
 
-  // Cancellation is a request, not a guarantee: the host call still settles,
-  // and the subtask resolves RETURNED exactly as it would have.
+  // For a deferred import cancellation is a request, not a guarantee: the host
+  // call still settles, and the subtask resolves RETURNED exactly as it would
+  // have.
   settle(99);
   await new Promise((r) => setTimeout(r, 0));
   assertEq(f.store.hostFailure, undefined);
@@ -308,9 +321,15 @@ Deno.test("async lower: subtask.cancel on a pending host call returns BLOCKED", 
   assertEq(subtask.resolveDelivered(), true);
 });
 
-Deno.test("async lower: a second subtask.cancel traps", () => {
+Deno.test("async lower: a second subtask.cancel traps (deferCancel: already cancelled)", () => {
   // definitions.py line 2475: `trap_if(subtask.cancellation_requested)`.
-  const f = mkFixture(() => new Promise<number>(() => {}));
+  //
+  // Reaching that trap needs a subtask that is still UNRESOLVED after its
+  // first cancel — under A23 only a `deferCancel()` import leaves one, since
+  // the default discard resolves and delivers on the first cancel (the
+  // resolveDelivered trap, pinned in the test below). Keeping this arm on the
+  // brand keeps the reference-parity property pinned rather than retiring it.
+  const f = mkFixture(deferCancel(() => new Promise<number>(() => {})));
   const packed = f.asGuest(() => f.call(1, 64)) as number;
   const [, subtaski] = unpackSubtaskResult(packed);
   const cancel = createSubtaskCancel({ async: true }, f.inst);
@@ -324,6 +343,34 @@ Deno.test("async lower: a second subtask.cancel traps", () => {
   assert(raised instanceof Trap, `expected a Trap, got ${raised}`);
   assert(
     String(raised).includes("already cancelled"),
+    `unexpected message: ${raised}`,
+  );
+});
+
+Deno.test("A23: a second subtask.cancel after a DISCARD traps on the delivered resolution", () => {
+  // definitions.py line 2473: `trap_if(subtask.resolve_delivered())`, checked
+  // BEFORE the cancellation_requested trap. The default (unbranded) import
+  // discards on the first cancel — resolving CANCELLED_BEFORE_RETURNED and
+  // delivering it through the built-in's `finish()` tail — so the second
+  // cancel names a subtask whose resolution is already delivered and hits this
+  // trap instead. Both orderings of the reference's guards stay pinned.
+  const f = mkFixture(() => new Promise<number>(() => {}));
+  const packed = f.asGuest(() => f.call(1, 64)) as number;
+  const [, subtaski] = unpackSubtaskResult(packed);
+  const cancel = createSubtaskCancel({ async: true }, f.inst);
+  assertEq(
+    f.asGuest(() => cancel(subtaski)),
+    SubtaskState.CANCELLED_BEFORE_RETURNED,
+  );
+  let raised: unknown;
+  try {
+    f.asGuest(() => cancel(subtaski));
+  } catch (e) {
+    raised = e;
+  }
+  assert(raised instanceof Trap, `expected a Trap, got ${raised}`);
+  assert(
+    String(raised).includes("already delivered"),
     `unexpected message: ${raised}`,
   );
 });

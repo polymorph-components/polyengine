@@ -55,6 +55,19 @@ export const STREAM_PRODUCER: unique symbol = Symbol.for(
 export const SUSPENDING: unique symbol = Symbol.for(
   "polyengine.suspending/1",
 );
+/**
+ * The per-declaration cancel-discard opt-out (amendment A23).
+ *
+ * Unmarked host imports answer a guest `subtask.cancel` with the reference's
+ * prompt-cancel shape — `on_cancel = () => on_resolve(None)` — and DISCARD the
+ * promise's eventual settlement. A marked import runs to completion instead:
+ * the request is accepted and ignored, and the guest observes the real result.
+ * Unlike `polyengine.suspending/1` this brand is NOT mode evidence — it
+ * changes no calling convention, only what a cancellation does.
+ */
+export const DEFER_CANCEL: unique symbol = Symbol.for(
+  "polyengine.deferCancel/1",
+);
 /** `Stream.prototype` — embedder stream handles (stateful: foreign = refused). */
 export const STREAM: unique symbol = Symbol.for("polyengine.stream/1");
 /** `Future.prototype` — embedder future handles (stateful: foreign = refused). */

@@ -356,8 +356,9 @@ class PeerTrappedError extends Error {  // A7: a stream/future op whose peer ins
   import is typed to return `T` synchronously. Returning a Promise from a
   sync-typed import parks the calling **wasm frame** and is a *declared*
   capability (amendment A1): wrap the function in `suspending()` (defined
-  in `@polyengine/protocol` since A9; re-exported unchanged from the embedder
-  surface). The marker
+  in `@polyengine/protocol` since A9; imported from there directly — the
+  A9-era embedder-surface re-export was removed by A22, whose rule is that
+  the runtime's exported surface is application-only). The marker
   - is per-declaration — only marked imports are handed to wasm as
     `WebAssembly.Suspending`, so unmarked imports keep the plain calling
     convention and sync-only components keep their zero-cost pin;
@@ -406,6 +407,45 @@ class PeerTrappedError extends Error {  // A7: a stream/future op whose peer ins
   half of a host stream/future still hangs until the embedder acts (never
   a trap — see Streams and futures), and a settlement-time failure
   surfaces on the next call into the instance, as before.
+- **Guest cancellation of an in-flight host import discards by default**
+  (amendment A23, 2026-08-23, polyengine#241). A guest may cancel an
+  in-flight async-typed import (`subtask.cancel`; wit-bindgen reaches it
+  by dropping the import's future — its specified cancellation path). A
+  JS host function offers no cancellation channel, so the runtime answers
+  on its behalf, and the default answer is the reference's prompt-cancel
+  host — `on_cancel = () => on_resolve(None)`, the shape `Store.invoke`
+  expects a callee to hand back (definitions.py line 572): the subtask
+  resolves `CANCELLED_BEFORE_RETURNED` immediately, both cancel forms
+  return without blocking, and the host call's eventual settlement is
+  **discarded** — the value is never lowered, a rejection is not reported
+  anywhere (the guest renounced the call; there is no addressee), and the
+  call stops counting as guest-wakeable for deadlock detection. The host
+  operation itself is NOT interrupted: a Promise cannot be aborted from
+  outside, so its side effects still run to completion. Discard is a
+  statement about delivery, not about execution. (An embedder-supplied
+  abort channel — notifying the host that its result was discarded — is
+  deliberately out of A23's scope; see polyengine#241.)
+- **`deferCancel()` opts an import out of discard** (A23): a marked import
+  must run to completion — a cancellation request is accepted and ignored,
+  the async cancel form answers `BLOCKED`, the sync form parks under jspi
+  (on a non-JSPI engine it is refused at the call site, `NeedsJspi`, per
+  the A1 engine floor), and the
+  guest observes `RETURNED` with the real result when the promise settles
+  (the pre-A23 behavior, now per-declaration). Mark imports with a commit
+  point — a flush, a commit, anything where "cancelled" would let the
+  guest believe nothing happened while the write lands. Two spellings, one
+  brand (`polyengine.deferCancel/1`), exactly as `suspending()`: the
+  direct call (`flush: deferCancel(fn)` — the only form available in
+  record literals) and a stage-3 method decorator (`@deferCancel` on
+  instance or static methods, with the same loud refusals of non-method
+  positions and of the legacy `experimentalDecorators` convention;
+  constructors are never markable). Defined in `@polyengine/protocol` and
+  imported from there directly, like `suspending()` (A22: the runtime's
+  exported surface is application-only). The mark is tolerated
+  and inert on sync-typed imports: their parks never mint a subtask
+  handle, so they cannot be cancelled at all and the no-discard guarantee
+  holds vacuously. Independent of `suspending()`; both brands may sit on
+  one function.
 
 ## Resources
 
@@ -912,6 +952,7 @@ equivalent of a semver major:
 | `polyengine.invalidHandle/1` | `InvalidHandleError.prototype` | resource-wrapper misuse |
 | `polyengine.streamProducer/1` | `StreamProducerError.prototype` | producer-side failures |
 | `polyengine.suspending/1` | the marked function / class prototype (A1/A2) | suspendable sync imports |
+| `polyengine.deferCancel/1` | the marked function (A23) | imports exempt from cancel-discard |
 | `polyengine.stream/1` | `Stream.prototype` | embedder stream handles |
 | `polyengine.streamWriter/1` | `StreamWriter.prototype` (A22) | embedder stream writer handles |
 | `polyengine.future/1` | `Future.prototype` | embedder future handles |

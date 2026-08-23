@@ -380,6 +380,20 @@ the site (`runtime/src/intrinsics/async_builtins.ts`, the determinacy park
 in `createSubtaskCancel`); regression pinned across seeds by
 `runtime/tests/cancel_bracket_race_test.ts`.
 
+**Host-import cancellation resolves promptly by default (A23).** The
+reference leaves a host callee's `on_cancel` to the embedding
+(`Store.invoke`, definitions.py line 572); wasmtime hosts hand back a
+future whose drop *is* cancellation. A JS Promise offers no such channel,
+so polyengine's lowered host imports answer with the reference's
+prompt-cancel shape — `on_cancel = () => on_resolve(None)` — resolving the
+subtask CANCELLED_BEFORE_RETURNED and discarding the promise's eventual
+settlement (never lowered, rejections unreported, deregistered from
+deadlock accounting). This is a reference-legal host behavior, not a
+divergence; the per-declaration `deferCancel()` brand
+(contracts/embedder-api.md A23) restores run-to-completion for imports
+with commit points. The host operation itself is never interrupted — only
+delivery is cancelled.
+
 Named divergence (2026-08-20, [#165](https://github.com/polymorph-components/polyengine/issues/165),
 adjudicated-accept): **`enter-sync-call` checks the callee's reentrance gate
 but does not take it.** A FACT sync guest→guest call performs the

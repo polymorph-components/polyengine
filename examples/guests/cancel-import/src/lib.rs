@@ -23,6 +23,18 @@
 //! `Drop` impl on `WaitableOperation` (`rt/async_support/waitable.rs`) issues
 //! the component model's `subtask.cancel`, synchronously, because "that's the
 //! only way for this to be sound" in Rust.
+//!
+//! `cancel-inflight`/`cancel-defer`/`cancel-defer-ifc` extend this corpus for
+//! amendment A23 (contracts/embedder-api.md; polyengine#241): the guest-side
+//! shape (poll once, drop, return) is identical across all three — what
+//! differs is which import the drop targets, and hence what the HOST does
+//! with the cancel. `sleep` (undecorated) gets the A23 default: discard, the
+//! export returns promptly. `sleep-defer`/`timers.sleep-defer` are branded
+//! `deferCancel()` host-side (protocol/src/defer_cancel.ts): the cancel
+//! parks until the import resolves naturally, so the export returns after
+//! ~ms — the pre-A23 behavior, opted back in per-declaration. The `timers`
+//! variant additionally proves the conventions layer's `relayMarks` carries
+//! the brand across an interface-member wrapper, not just a bare one.
 
 wit_bindgen::generate!({
     world: "cancel-import",
@@ -85,6 +97,34 @@ impl Guest for Component {
     /// drivers on one store with no detached task in sight.
     async fn block_for(ms: u64) {
         block(ms);
+    }
+
+    /// A23 probe over the undecorated (discard-by-default) import: poll once,
+    /// drop, return. No detached task needed — the point is how fast THIS
+    /// export call itself returns.
+    async fn cancel_inflight(ms: u64) {
+        let mut f = Box::pin(sleep(ms));
+        // `Box::pin`, not `pin!`: dropping a `Pin<&mut _>` drops the
+        // pointer, not the future, and the cancellation never happens (see
+        // the module doc's `start_poll_drop` note).
+        let _ = futures::poll!(f.as_mut());
+        drop(f);
+    }
+
+    /// Same shape over `sleep-defer` (branded `deferCancel` host-side): the
+    /// drop's cancel parks until the import resolves naturally.
+    async fn cancel_defer(ms: u64) {
+        let mut f = Box::pin(sleep_defer(ms));
+        let _ = futures::poll!(f.as_mut());
+        drop(f);
+    }
+
+    /// Same shape over `timers.sleep-defer` — the interface-member brand
+    /// relay.
+    async fn cancel_defer_ifc(ms: u64) {
+        let mut f = Box::pin(timers::sleep_defer(ms));
+        let _ = futures::poll!(f.as_mut());
+        drop(f);
     }
 
     /// The health poll. Cheap, synchronous, and unrelated to everything above.
