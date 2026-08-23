@@ -1,6 +1,6 @@
 {
   "name": "@polyengine/ct-runner",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "exports": {
     ".": "./src/mod.ts",
     "./imports": "./src/import-analysis.ts",
