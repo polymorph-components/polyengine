@@ -557,7 +557,9 @@ export async function driveStoreAsync(
  * have always produced concurrent loops, and the host-stream pump's stand-down
  * below is cooperative, so a *bounded overlap window* remains by construction
  * (an export call can start while the pump is parked mid-`await`; the pump
- * only notices at its next `done()` evaluation). The invariant is:
+ * notices at its next `done()` evaluation, which the driver-arrival one-shot
+ * below now makes prompt — before issue #239 it was "whenever the host happens
+ * to answer", i.e. not bounded at all). The invariant is:
  *
  *   **no activation is resumed twice for one settlement, and no activation is
  *   resumed with a value from a settlement it has already consumed.**
@@ -626,6 +628,53 @@ export function whenStoreDriverIdle(store: Store): Promise<void> {
     driverIdle.set(store, w);
   }
   return w.p;
+}
+
+// ---------------------------------------------------------------------------
+// Driver arrival: closing the overlap window (issue #239)
+// ---------------------------------------------------------------------------
+//
+// The stand-down above ("the pumps are *fallback* drivers") is evaluated only
+// at a driver's next `done()`, so the doc's "bounded overlap window" is really
+// bounded by whatever the incumbent driver is parked on — and its longest park
+// is `Promise.race([...parked tags, ...pendingHostCalls])`, i.e. HOST-CONTROLLED
+// time. That is a stall in its own right, and it is fatal in combination with
+// the SPECULATIVE resume entry the race holds: `Store.pendingResumptions` is a
+// store-wide scheduling gate, so a second driver on the same store spins at
+// `driveAsync`'s top and dies at the 10,000-hop internal-bug assert in ~311ms
+// (issue #239 — the same-store half of the cross-store stall #210 fixed; see
+// `tests/cross_store_driver_test.ts`, whose header describes this gate being
+// "held for the entire duration of a guest's wait on a slow host import").
+//
+// So drivers announce themselves: every `driveAsync` that finds itself the
+// second (or later) loop on a store fires this one-shot, which every driver
+// races alongside its parked tags. The incumbent wakes within a microtask,
+// drops the speculative entry on its way out of the race, and re-evaluates
+// `done()` — which is exactly the stand-down the pumps were always supposed to
+// perform, now prompt instead of "whenever the host happens to answer".
+const driverArrivals = new WeakMap<Store, { p: Promise<null>; r: () => void }>();
+
+/** A one-shot that resolves (to `null`, the race's "nothing settled" value)
+ * when another driver starts on `store`. */
+function armDriverArrival(store: Store): Promise<null> {
+  let n = driverArrivals.get(store);
+  if (n === undefined) {
+    let r!: () => void;
+    const p = new Promise<null>((res) => (r = () => res(null)));
+    n = { p, r };
+    driverArrivals.set(store, n);
+  }
+  return n.p;
+}
+
+function fireDriverArrival(store: Store): void {
+  const n = driverArrivals.get(store);
+  if (n === undefined) return;
+  // Deleted before resolving so the next `armDriverArrival` mints a fresh,
+  // unresolved one-shot: a driver that wakes on this and re-parks must not
+  // pick the settled promise back up and spin.
+  driverArrivals.delete(store);
+  n.r();
 }
 
 // ---------------------------------------------------------------------------
@@ -782,7 +831,13 @@ async function driveAsync(
   done: () => boolean,
   what: string,
 ): Promise<void> {
-  driverDepth.set(store, storeDriverDepth(store) + 1);
+  const depth = storeDriverDepth(store) + 1;
+  driverDepth.set(store, depth);
+  // An incumbent driver may be parked in the awaiting-race holding the
+  // speculative resume entry — a store-wide gate this loop would otherwise
+  // spin on until the 10,000-hop assert (issue #239). Announce ourselves so it
+  // stands down within a microtask.
+  if (depth > 1) fireDriverArrival(store);
   try {
   let claimHops = 0;
   for (;;) {
@@ -1026,9 +1081,14 @@ async function driveAsync(
         // Every awaiting thread's settle is deferred on a non-enterable
         // instance. The way out is the lock holder finishing, and the only
         // await-spanning host-entry lock is the async-dtor bracket, which
-        // registers in `pendingHostCalls` — so park on those.
+        // registers in `pendingHostCalls` — so park on those, plus the
+        // driver-arrival one-shot: every park in this loop races it, so the
+        // stand-down below is prompt wherever we happen to be waiting.
         if (store.pendingHostCalls.size > 0) {
-          await Promise.race([...store.pendingHostCalls]).catch(() => {});
+          await Promise.race([
+            ...store.pendingHostCalls,
+            armDriverArrival(store),
+          ]).catch(() => {});
           continue;
         }
         // Per the issue #156 analysis this is unreachable (a spanning lock
@@ -1061,12 +1121,46 @@ async function driveAsync(
       // await — which takes a fresh entry of its own — had that entry
       // clobbered early, re-opening the window it exists to close. With a set
       // we can name exactly what we added.
-      store.addPendingResumption(chosen);
+      //
+      // SOLE DRIVER ONLY, AND ONLY UNTIL ONE ARRIVES (issue #239). The entry
+      // is a claim over a window this loop cannot bound: the race settles when
+      // the HOST answers, which may be never. As a store-wide scheduling gate
+      // (`Store.tick` refuses; every driver yields at its top) that is a wedge
+      // the moment a second driver exists — it spins at the top of its own
+      // loop and dies at the 10,000-hop assert in ~311ms, an internal-bug
+      // detector firing on a perfectly ordinary suspended guest. Two concurrent
+      // export calls with one slow suspending import were enough; the reported
+      // shape was a detached guest task cancelling an in-flight import, which
+      // parks mid-frame with no export call outstanding and leaves the
+      // settlement pump holding this entry.
+      //
+      // What the entry protects — "the engine may run `chosen`'s wasm during
+      // this await" — it protects by refusing OTHER `Store.tick` callers, and
+      // this loop is not one of them while it awaits. The tick callers that
+      // can reach a store mid-race are another `driveAsync` loop and
+      // `HostActivity.pump`'s synchronous drain (exec/host_streams.ts) — the
+      // latter is not gated by driver depth, so scoping the entry to "sole
+      // driver" does hand it a window the entry used to close at depth >= 2.
+      // What holds regardless is the invariant the `driverDepth` note names:
+      // a genuine resumption is preceded by `SuspensionPoint.resume`'s OWN
+      // entry (jspi/bridge.ts, minted before the settle), and every
+      // resumption site here re-checks membership, promise identity and
+      // `dispatchableTail` synchronously — mechanisms (a) and (b), which is
+      // where that note already puts the weight.
+      const sole = storeDriverDepth(store) === 1;
+      if (sole) store.addPendingResumption(chosen);
       let winner: AwaitWinner | null;
       try {
-        winner = await Promise.race([chosenTag, ...others]);
+        // `armDriverArrival` rides the race for every driver, not just the one
+        // holding the entry: waking on a new arrival is also how a fallback
+        // pump reaches its next `done()` — i.e. its stand-down — promptly.
+        winner = await Promise.race([
+          chosenTag,
+          ...others,
+          armDriverArrival(store),
+        ]);
       } finally {
-        store.removePendingResumption(chosen);
+        if (sole) store.removePendingResumption(chosen);
       }
       // Resume whichever thread actually settled -- not necessarily the one we
       // claimed. Resuming only the claimed thread would spin: its promise may
@@ -1108,7 +1202,18 @@ async function driveAsync(
     // not ours — this is genuine, unavoidable nondeterminism at the boundary
     // (the reference has the same freedom in `Store.tick`). Everything
     // *inside* the component stays deterministic per scheduler.ts.
-    await Promise.race([...store.pendingHostCalls]).catch(() => {});
+    //
+    // The driver-arrival one-shot rides here too. This is the routine park of
+    // a quiet guest with a real host call outstanding — no speculative entry
+    // is held, so there is no wedge to break, but a fallback pump parked here
+    // would otherwise not reach its `done()` (i.e. its stand-down) until the
+    // HOST answered, leaving two loops interleaving `serviceSettled`/`tick`
+    // for that whole window. That interleaving is what the `driverDepth` note
+    // above calls out as bad for throughput and blame.
+    await Promise.race([
+      ...store.pendingHostCalls,
+      armDriverArrival(store),
+    ]).catch(() => {});
   }
   } finally {
     const left = storeDriverDepth(store) - 1;

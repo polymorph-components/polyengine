@@ -1,0 +1,22 @@
+[package]
+name = "guest-cancel-import"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = { version = "=0.60.0", features = ["async-spawn", "inter-task-wakeup"] }
+futures = { version = "0.3", default-features = false, features = ["async-await"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+
+# Opt out of the repository's root cargo workspace.
+[workspace]
