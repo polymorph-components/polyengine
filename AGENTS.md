@@ -140,8 +140,12 @@ Standing rules:
   edits are expected and load-bearing: noticing at cut time that a merged PR
   was mislabelled and fixing the label there is a supported workflow, and
   the cut re-reads the whole window. `tools/version-guard/check.ts`
-  enforces them in three places (`just test-version-guard` covers its
-  logic): `pr` mode in `gha::core` (lockstep agreement, monotonicity,
+  enforces them in four places (`just test-version-guard` covers its
+  logic): `local` mode, first in `just gates` and an unconditional
+  `gha::core` step (label-free tree checks — lockstep agreement,
+  monotonicity, the protocol byte-identity tear check — so pre-push runs
+  and direct pushes are covered without PR context; the #232 lesson);
+  `pr` mode in `gha::core` (lockstep agreement, monotonicity,
   label ↔ minor-bump agreement both ways, protocol-tear warning — an early
   warning only, since label edits deliberately do not re-trigger CI);
   `publish` mode in release.yml's publish step, both modes (in-tree

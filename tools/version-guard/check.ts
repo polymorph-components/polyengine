@@ -525,12 +525,26 @@ export async function publishChecks(
   fx: Effects,
   version: string,
 ): Promise<Check[]> {
+  return [await protocolIdentityCheck(fx, version, "protocol-identity")];
+}
+
+/** The shared core of the byte-identity tear guard, parameterized on the
+ * check name so `publish` mode (name "protocol-identity") and `local` mode
+ * (name "protocol-tear-identity", wrapped with network-error handling
+ * below) share one implementation rather than drifting. */
+async function protocolIdentityCheck(
+  fx: Effects,
+  version: string,
+  name: string,
+): Promise<Check> {
   const manifest = await jsrProtocolManifest(fx, version);
   if (manifest === null) {
-    return [pass(
-      "protocol-identity",
-      `@polyengine/protocol@${version} is not published — this run publishes it`,
-    )];
+    return pass(
+      name,
+      `@polyengine/protocol@${version} is not published — a pending bump${
+        name === "protocol-identity" ? "; this run publishes it" : ""
+      }`,
+    );
   }
 
   const problems: string[] = [];
@@ -557,17 +571,17 @@ export async function publishChecks(
   }
 
   if (problems.length === 0) {
-    return [pass(
-      "protocol-identity",
+    return pass(
+      name,
       `in-tree protocol is byte-identical to the published @polyengine/protocol@${version} (${publishedPaths.length} files)`,
-    )];
+    );
   }
-  return [fail(
-    "protocol-identity",
+  return fail(
+    name,
     `in-tree protocol differs from the published @polyengine/protocol@${version} — bump protocol/deno.json (or revert the protocol change). This run would SKIP protocol as already-published and publish its dependents against the registry's older copy:\n  ${
       problems.join("\n  ")
     }`,
-  )];
+  );
 }
 
 // ----- cut mode ---------------------------------------------------------------
@@ -864,6 +878,193 @@ export async function cutChecks(
   return checks;
 }
 
+// ----- local mode ---------------------------------------------------------------
+//
+// The gap `local` closes (the #232 incident): `pr` mode exits 0 the instant
+// PR_NUMBER is unset, so neither a push run nor a developer's pre-push `just
+// gates` ever asked "would this tear protocol?" — only the CI `pull_request`
+// run does, and PR #232 only heard about its own tear from that run. `local`
+// is label-free and event-free by construction (no PR labels exist to read,
+// no PR base to diff against) so every check here answers a question
+// nothing outside the working tree + (optionally) the network is needed
+// for. It is advisory only on the one thing labels genuinely own (goldens);
+// everything else it can decide alone, it enforces.
+
+/** The offline-capable "last cut" answer for local monotonicity: local git
+ * tags first (no network at all — a normal non-shallow clone carries them),
+ * falling back to JSR's published `runtime` `latest` (network to jsr.io,
+ * which `local` already has permission for, but no GitHub token) when no
+ * `v*` tags are reachable, e.g. a shallow checkout that never fetched tags.
+ * Returns null — not a throw — when neither source answers, so
+ * monotonicity can skip loudly instead of failing on an environment
+ * question `pr`/`cut` mode (which read `releases/latest` from the GitHub
+ * API) already answer authoritatively in CI. */
+export async function localLastCutVersion(
+  fx: Effects,
+): Promise<{ version: string; source: string } | null> {
+  const tags = await fx.run("git", ["tag", "--list", "v*"]);
+  if (tags.code === 0) {
+    const versions = tags.stdout
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((t) => t.slice(1))
+      .filter((v) => {
+        try {
+          parseSemver(v);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+    if (versions.length > 0) {
+      versions.sort(compareSemver);
+      const version = versions[versions.length - 1];
+      return { version, source: `local git tag v${version}` };
+    }
+  }
+  try {
+    const latest = await jsrProtocolLatestFor(fx, "runtime");
+    if (latest) {
+      return { version: latest, source: "jsr.io @polyengine/runtime latest" };
+    }
+  } catch {
+    // Genuinely unavailable (no network, or jsr.io down) — fall through to
+    // null so the caller SKIPs rather than fails: an environment question,
+    // not a versioning mistake.
+  }
+  return null;
+}
+
+/** `jsrProtocolLatest` generalized to any JSR package under @polyengine —
+ * `runtime` publishes on every cut (unlike `protocol`, which can lag), so
+ * its `latest` is exactly the last-cut version when local tags are
+ * unavailable. */
+async function jsrProtocolLatestFor(
+  fx: Effects,
+  pkg: string,
+): Promise<string | null> {
+  const res = await fx.fetchText(`https://jsr.io/@polyengine/${pkg}/meta.json`);
+  if (res.status === 404) return null;
+  if (res.status !== 200) {
+    throw new Error(`jsr.io @polyengine/${pkg} meta.json: HTTP ${res.status}`);
+  }
+  const latest = JSON.parse(res.body)?.latest;
+  return typeof latest === "string" ? latest : null;
+}
+
+/** Check 3 (fatal, the #232 catch), wrapping `protocolIdentityCheck` so a
+ * network failure reaching jsr.io reports as a named, explained FAIL
+ * instead of an uncaught exception: this check exists specifically to
+ * catch a tear before it reaches CI, so "can't tell" must read as "didn't
+ * pass", not as a silent skip that defeats the point of running it
+ * locally. */
+async function protocolTearLocalCheck(
+  fx: Effects,
+  protocolVersion: string,
+): Promise<Check> {
+  try {
+    return await protocolIdentityCheck(fx, protocolVersion, "protocol-tear-identity");
+  } catch (e) {
+    return fail(
+      "protocol-tear-identity",
+      `cannot reach jsr.io to check whether @polyengine/protocol@${protocolVersion} is already published: ${
+        e instanceof Error ? e.message : String(e)
+      } — this check exists to catch a protocol/src change shipping against a stale already-published copy before it reaches CI (the #219/#232 tear); a network failure means "can't tell", which this local gate treats as fatal rather than silently passing. Re-run once jsr.io is reachable`,
+    );
+  }
+}
+
+/** Check 4 (advisory, never fatal): local can see the diff but not the
+ * labels a reviewer will attach, so it can only remind, not enforce — the
+ * authoritative gate is `cut` mode's `cut-conventions-goldens`. Skips
+ * silently (returns null) when `origin/main` cannot be diffed against
+ * (e.g. no `origin` remote, or it hasn't been fetched) rather than
+ * guessing at a merge-base that may not exist locally. */
+async function conventionsGoldensAdvisory(fx: Effects): Promise<Check | null> {
+  const diff = await fx.run("git", [
+    "diff",
+    "--name-status",
+    "origin/main...HEAD",
+    "--",
+    LOCKED_GOLDEN_DIR,
+  ]);
+  if (diff.code !== 0) return null;
+  const touched = parseGoldenNameStatus(diff.stdout).filter((c) =>
+    c.status === "M" || c.status === "D"
+  );
+  if (touched.length === 0) {
+    return pass(
+      "conventions-goldens-advisory",
+      `no modified/deleted goldens under ${LOCKED_GOLDEN_DIR} vs origin/main`,
+    );
+  }
+  // Never fatal: `ok: true` with a WARNING-prefixed detail, so the run
+  // still exits 0 but the reminder is loud in the log.
+  return pass(
+    "conventions-goldens-advisory",
+    `WARNING: this branch modifies or deletes committed goldens (${
+      touched.map((c) => c.path).join(", ")
+    }) under ${LOCKED_GOLDEN_DIR} — the PR must carry breaking/protocol (with protocol's minor bumped) or conventions-fix; local mode cannot see labels, so it can only remind, not enforce`,
+  );
+}
+
+export async function localChecks(fx: Effects): Promise<Check[]> {
+  const checks: Check[] = [];
+
+  // 1. Lockstep agreement — same rule as `pr` mode check 1.
+  const versions = new Map<string, string>();
+  for (const pkg of LOCKSTEP) {
+    versions.set(pkg, await readManifestVersion(fx, pkg));
+  }
+  const lockstep = versions.get("runtime")!;
+  const disagreeing = [...versions].filter(([, v]) => v !== lockstep);
+  if (disagreeing.length > 0) {
+    checks.push(fail(
+      "lockstep",
+      `the lockstep manifests disagree: ${
+        [...versions].map(([p, v]) => `${p}=${v}`).join(" ")
+      } — all four of ${LOCKSTEP.join(", ")} must carry the same NEXT version`,
+    ));
+  } else {
+    checks.push(pass("lockstep", `${LOCKSTEP.join(", ")} all at ${lockstep}`));
+  }
+
+  // 2. Monotonicity against the last cut, from a label-free source.
+  const cut = await localLastCutVersion(fx);
+  if (!cut) {
+    checks.push(pass(
+      "monotonic",
+      "SKIP — no locally-derivable last-cut version (no v* git tags, and jsr.io @polyengine/runtime latest is unreachable or unpublished); `pr`/`cut` mode in CI answer this authoritatively via the GitHub API",
+    ));
+  } else if (compareSemver(lockstep, cut.version) > 0) {
+    checks.push(pass(
+      "monotonic",
+      `lockstep ${lockstep} > last cut ${cut.version} (source: ${cut.source})`,
+    ));
+  } else {
+    checks.push(fail(
+      "monotonic",
+      `lockstep manifests are at ${lockstep}, not ahead of the last cut ${cut.version} (source: ${cut.source}) — the manifests must carry the NEXT release; bump the four ${
+        LOCKSTEP.join("/")
+      } manifests (and RUNTIME_VERSION in runtime/src/embedder/copy.ts)`,
+    ));
+  }
+
+  // 3. The #232 catch: protocol-tear by byte-identity, fatal here (unlike
+  // `pr` mode's softer heuristic, which only fires when protocol/src is in
+  // the PR's diff — `local` has no PR diff to consult, so it always checks
+  // identity directly, exactly like `publish` mode does at the real gate).
+  const protocolVersion = await readManifestVersion(fx, "protocol");
+  checks.push(await protocolTearLocalCheck(fx, protocolVersion));
+
+  // 4. Conventions-goldens reminder — advisory, never fatal.
+  const advisory = await conventionsGoldensAdvisory(fx);
+  if (advisory) checks.push(advisory);
+
+  return checks;
+}
+
 // ----- main -------------------------------------------------------------------
 
 function report(fx: Effects, mode: string, checks: Check[]): number {
@@ -907,6 +1108,9 @@ export async function main(fx: Effects, argv: string[]): Promise<number> {
         repo: required("GITHUB_REPOSITORY"),
       }));
     }
+    case "local": {
+      return report(fx, "local", await localChecks(fx));
+    }
     case "publish": {
       // The override exists for rehearsing the failure path against the
       // real registry (point it at an older published version and watch
@@ -928,7 +1132,7 @@ export async function main(fx: Effects, argv: string[]): Promise<number> {
       );
     }
     default:
-      fx.log(`usage: check.ts <pr|publish|cut> [--out <path>] [--protocol-version <v>]`);
+      fx.log(`usage: check.ts <pr|local|publish|cut> [--out <path>] [--protocol-version <v>]`);
       return 2;
   }
 }
