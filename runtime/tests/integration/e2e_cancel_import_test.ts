@@ -23,7 +23,7 @@
 import { assertEq } from "../support/asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";
 import { instantiateComponent } from "../../src/exec/mod.ts";
-import { deferCancel, suspending } from "@polyengine/protocol";
+import { abortable, deferCancel, suspending } from "@polyengine/protocol";
 
 const root = new URL("../../../", import.meta.url);
 
@@ -51,7 +51,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+// Scoped per instantiation (per test), per the dispatch: A24's `abortable()`
+// import must observe the abort exactly once per discard and never on a
+// natural-completion path, and giving each instance its own counter keeps
+// concurrently-run tests from bleeding into one another.
 async function instantiate() {
+  let abortsObserved = 0;
   const imports = {
     // Plain async import: a Promise settles through the task core with no
     // JSPI involved.
@@ -70,13 +75,30 @@ async function instantiate() {
     timers: {
       "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
     },
+    // A24 (contracts/embedder-api.md amendment A24): branding an async-typed
+    // import `abortable()` hands the host a per-call `AbortSignal` appended
+    // after the WIT-declared `ms` param, aborted one microtask after a guest
+    // cancellation discards the call. The listener clears the timer, so a
+    // discard never leaves a stray `setTimeout` running — no trailing wait
+    // needed for it in the tests below.
+    "sleep-abort": abortable((ms: bigint, signal: AbortSignal) =>
+      new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, Number(ms));
+        signal.addEventListener("abort", () => {
+          clearTimeout(t);
+          abortsObserved++;
+          reject(new DOMException("sleep-abort discarded", "AbortError"));
+        });
+      })
+    ),
   };
-  return await instantiateComponent({
+  const component = await instantiateComponent({
     plan,
     componentBytes: guestWasm,
     adapters,
     imports,
   });
+  return { component, getAbortsObserved: () => abortsObserved };
 }
 
 // deno-lint-ignore no-explicit-any
@@ -119,7 +141,7 @@ const SLOW = 1000;
 Deno.test(
   "cancel-import #239: two concurrent export calls — blockFor + ping polls",
   async () => {
-    const component = await instantiate();
+    const { component } = await instantiate();
     const e = component.exports as Exports;
 
     // Start a slow, mid-frame-parking export call WITHOUT awaiting it: this
@@ -145,7 +167,7 @@ Deno.test(
 Deno.test(
   "cancel-import #239: detached task parks mid-frame, no export call outstanding",
   async () => {
-    const component = await instantiate();
+    const { component } = await instantiate();
     const e = component.exports as Exports;
 
     // `start-block` spawns a detached task and returns almost immediately
@@ -181,7 +203,7 @@ Deno.test(
 Deno.test(
   "cancel-import #239: detached task cancels an in-flight import (subtask.cancel)",
   async () => {
-    const component = await instantiate();
+    const { component } = await instantiate();
     const e = component.exports as Exports;
 
     // `start-poll-drop(hold, dropAfter)` spawns a detached task and returns
@@ -224,7 +246,7 @@ Deno.test(
 Deno.test(
   "cancel-import #239: detached task races two imports, drops the loser",
   async () => {
-    const component = await instantiate();
+    const { component } = await instantiate();
     const e = component.exports as Exports;
 
     // `start-race-drop(slow, fast)` spawns a detached task and returns
@@ -271,7 +293,7 @@ const A23_SLOW = 1200;
 Deno.test(
   "cancel-import A23: discard-by-default returns promptly, not after natural resolution",
   async () => {
-    const component = await instantiate();
+    const { component } = await instantiate();
     const e = component.exports as Exports;
 
     const start = performance.now();
@@ -300,7 +322,7 @@ Deno.test(
 Deno.test(
   "cancel-import A23: deferCancel() opt-out still runs the cancelled import to completion",
   async () => {
-    const component = await instantiate();
+    const { component } = await instantiate();
     const e = component.exports as Exports;
 
     const start = performance.now();
@@ -330,7 +352,7 @@ Deno.test(
     // cancellation path (discard, nor deferCancel-parked) leaves the store
     // in a bad state (`store.hostFailure`-class wedge) for a THIRD call on
     // the same instance to trip over.
-    const component = await instantiate();
+    const { component } = await instantiate();
     const e = component.exports as Exports;
 
     await e["cancel-inflight"](BigInt(A23_SLOW));
@@ -339,5 +361,86 @@ Deno.test(
 
     // Outlive cancel-inflight's discarded host timer before returning.
     await delay(A23_SLOW + 100);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// A24 (contracts/embedder-api.md amendment A24; polyengine#241): the
+// `abortable()` mark hands the host a per-call `AbortSignal`, aborted one
+// microtask after a guest cancellation discards the call — proved at the raw
+// exec layer against a real wit-bindgen guest.
+// ---------------------------------------------------------------------------
+
+// Long enough that "returned promptly" (< 400ms) and "ran to natural
+// completion" (>= 100ms) are unambiguous on typical CI timing jitter.
+const A24_SLOW = 1200;
+
+Deno.test(
+  "cancel-import A24: abortable() import observes the abort when its call is discarded",
+  async () => {
+    const { component, getAbortsObserved } = await instantiate();
+    const e = component.exports as Exports;
+
+    const start = performance.now();
+    await e["cancel-abort"](BigInt(A24_SLOW));
+    const elapsed = performance.now() - start;
+
+    assertTrue(
+      elapsed < 400,
+      `A24 regression: cancel-abort(${A24_SLOW}) took ${elapsed}ms (>= 400ms) — ` +
+        `an abortable()-branded import's cancel must still discard promptly ` +
+        `(A23), the same as an unmarked import; A24 only adds the signal.`,
+    );
+
+    // The abort is scheduled a microtask after the cancel built-in returns
+    // (contracts/embedder-api.md amendment A24), not synchronously inside
+    // it — flush a few ticks before checking that the host actually
+    // observed it. A regression here means the host never learned its
+    // result was discarded and the dropped timer just kept running
+    // unaborted (the exact gap A24 closes over plain A23 discard).
+    await delay(20);
+    assertEq(
+      getAbortsObserved(),
+      1,
+      "A24 regression: the abortable()-branded import's AbortSignal never " +
+        "fired after its subtask was discarded by the guest's cancellation " +
+        "— cancel-import's `sleep-abort` should have had its AbortSignal " +
+        "aborted exactly once.",
+    );
+
+    // The AbortError rejection this provokes is a late settlement on an
+    // already-cancelled subtask (A23's resolved-subtask guards) — it must
+    // stay inert through the real composition, not surface as a store
+    // failure that wedges a later call.
+    await assertPing(e, "after cancel-abort's discard+abort");
+
+    // Leak hygiene: the abort listener clears the timer on discard, so
+    // there is no stray `setTimeout` to outlive here (unlike A23's plain
+    // discard, whose dropped timer keeps running to natural completion).
+  },
+);
+
+Deno.test(
+  "cancel-import A24: abortable() import run to natural completion never aborts",
+  async () => {
+    const { component, getAbortsObserved } = await instantiate();
+    const e = component.exports as Exports;
+
+    const start = performance.now();
+    await e["run-abortable"](150n);
+    const elapsed = performance.now() - start;
+
+    assertTrue(
+      elapsed >= 100,
+      `run-abortable(150) took only ${elapsed}ms — expected it to await ` +
+        `sleep-abort to natural completion (no cancellation on this path)`,
+    );
+    assertEq(
+      getAbortsObserved(),
+      0,
+      "A24 regression: the abortable()-branded import's AbortSignal fired " +
+        "on a call that ran to natural completion with no guest " +
+        "cancellation anywhere — the signal must fire only on discard.",
+    );
   },
 );

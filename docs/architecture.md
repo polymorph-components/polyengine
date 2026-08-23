@@ -392,7 +392,14 @@ deadlock accounting). This is a reference-legal host behavior, not a
 divergence; the per-declaration `deferCancel()` brand
 (contracts/embedder-api.md A23) restores run-to-completion for imports
 with commit points. The host operation itself is never interrupted — only
-delivery is cancelled.
+delivery is cancelled. Amendment A24 closes that gap for hosts that can be
+stopped: an import marked `abortable()` receives a fresh `AbortSignal`
+appended after its WIT-declared parameters on every call, and the runtime
+aborts it a microtask after the discard — never synchronously inside
+`canon_subtask_cancel`, so a host abort listener never runs inside a live
+guest activation. Whatever settlement the abort provokes (typically an
+`AbortError` rejection) arrives with the subtask already resolved and lands
+on A23's resolved-subtask guards, discarded like any other late settlement.
 
 Named divergence (2026-08-20, [#165](https://github.com/polymorph-components/polyengine/issues/165),
 adjudicated-accept): **`enter-sync-call` checks the callee's reentrance gate

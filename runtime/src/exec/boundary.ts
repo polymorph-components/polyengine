@@ -2116,9 +2116,25 @@ export function createLoweredImport(input: {
    * instead of taking the default discard.
    */
   deferCancel: boolean;
+  /**
+   * Host fn carries the `abortable()` brand (embedder-api.md A24): every call
+   * receives a fresh `AbortSignal` appended after the WIT-declared params, and
+   * the runtime aborts it when — and only when — the call is discarded by a
+   * guest cancellation.
+   */
+  abortable: boolean;
 }): CoreFn {
-  const { name, ft, opts, hostFn, stats, mode, suspendable, deferCancel } =
-    input;
+  const {
+    name,
+    ft,
+    opts,
+    hostFn,
+    stats,
+    mode,
+    suspendable,
+    deferCancel,
+    abortable,
+  } = input;
   const inst = opts.instance;
   const store = inst.store;
 
@@ -2223,8 +2239,20 @@ export function createLoweredImport(input: {
     // with an internal AssertionError, which is neither reference behaviour
     // nor a sanctioned incompleteness signal.
     subtask.onCancel = () => {};
+    // A24 (contracts/embedder-api.md §"Functions and async"): a marked import
+    // is handed a fresh `AbortSignal` after its WIT-declared parameters. The
+    // mark controls the SIGNATURE UNCONDITIONALLY — a marked function receives
+    // a signal on every call, including the paths where it can never fire
+    // (sync-typed, eager resolve, `deferCancel`) — so the host's arity is a
+    // property of its declaration, not of how a particular call happened to
+    // go. `new AbortController()` is evaluated only for marked imports, which
+    // keeps bare engine shells with no `AbortController` off this path for the
+    // whole unmarked corpus.
+    const controller = abortable ? new AbortController() : null;
     const args = onStart();
-    const raw = hostFn(...args);
+    const raw = controller === null
+      ? hostFn(...args)
+      : hostFn(...args, controller.signal);
     const toResults = (v: unknown): ComponentValue[] =>
       ft.results.length === 0 ? [] : [v as ComponentValue];
 
@@ -2404,6 +2432,30 @@ export function createLoweredImport(input: {
         subtask.onCancel = () => {
           store.pendingHostCalls.delete(promise);
           onResolve(null);
+          if (controller !== null) {
+            // A24: tell the host its result was discarded, so it can stop the
+            // underlying operation — clear a timer, abort a fetch, close a
+            // dial. Reachable only from this arm by construction: a
+            // `deferCancel()` import never discards, so its signal never
+            // fires.
+            //
+            // Deferred one microtask. This closure runs SYNCHRONOUSLY inside
+            // `canon_subtask_cancel`, i.e. inside a live guest activation, and
+            // host abort listeners must not execute there — that is the
+            // issue-#24 attribution class, plus arbitrary re-entrancy into a
+            // guest mid-built-in. `Promise.resolve().then`, not
+            // `queueMicrotask`: the latter does not exist in bare engine
+            // shells (see jspi/bridge.ts's SENTINEL_TICK note).
+            //
+            // The resulting order is: the guest observes
+            // CANCELLED_BEFORE_RETURNED first, the host observes the abort a
+            // tick later. Any settlement the abort provokes (typically an
+            // `AbortError` rejection) arrives at the settle continuation above
+            // with the subtask already resolved, so it lands on the A23
+            // resolved-subtask guards and is discarded like any other late
+            // settlement — never a `store.hostFailure`.
+            Promise.resolve().then(() => controller.abort());
+          }
         };
       }
     } else {

@@ -94,6 +94,7 @@ Deno.test(
       mode: "plain",
       suspendable: false,
       deferCancel: false,
+      abortable: false,
     }) as (...args: number[]) => unknown;
 
     const task = new Task(FT, TASK_OPTS, inst, () => [], () => {});

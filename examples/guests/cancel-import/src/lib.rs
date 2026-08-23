@@ -35,6 +35,13 @@
 //! ~ms — the pre-A23 behavior, opted back in per-declaration. The `timers`
 //! variant additionally proves the conventions layer's `relayMarks` carries
 //! the brand across an interface-member wrapper, not just a bare one.
+//!
+//! `cancel-abort`/`run-abortable` extend the corpus again for amendment A24
+//! (contracts/embedder-api.md; polyengine#241): `sleep-abort` is branded
+//! `abortable()` host-side (protocol/src/abortable.ts), so the host is
+//! handed a per-call `AbortSignal` it can use to actually stop the work a
+//! discarded cancellation would otherwise leave running. The guest-side
+//! shape is identical to `cancel_inflight`: poll once, drop, return.
 
 wit_bindgen::generate!({
     world: "cancel-import",
@@ -125,6 +132,22 @@ impl Guest for Component {
         let mut f = Box::pin(timers::sleep_defer(ms));
         let _ = futures::poll!(f.as_mut());
         drop(f);
+    }
+
+    /// A24 probe (contracts/embedder-api.md amendment A24): mirrors
+    /// `cancel_inflight` exactly, but over `sleep-abort` — the host-side
+    /// `abortable()`-branded import — so the host receives the discard as an
+    /// `AbortSignal` firing, not merely as an uncollected promise.
+    async fn cancel_abort(ms: u64) {
+        let mut f = Box::pin(sleep_abort(ms));
+        let _ = futures::poll!(f.as_mut());
+        drop(f);
+    }
+
+    /// A24 control: run `sleep-abort` to natural completion, no cancellation
+    /// anywhere — the host's `AbortSignal` must never fire on this path.
+    async fn run_abortable(ms: u64) {
+        sleep_abort(ms).await;
     }
 
     /// The health poll. Cheap, synchronous, and unrelated to everything above.

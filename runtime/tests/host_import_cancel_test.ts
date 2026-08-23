@@ -48,7 +48,12 @@ import {
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
 import { BLOCKED, createSubtaskCancel } from "../src/intrinsics/async_builtins.ts";
-import { deferCancel, isDeferCancel } from "../src/jspi/suspending.ts";
+import {
+  abortable,
+  deferCancel,
+  isAbortable,
+  isDeferCancel,
+} from "../src/jspi/suspending.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
@@ -117,6 +122,9 @@ function mkFixture(hostFn: (...a: unknown[]) => unknown): Fixture {
     // Read off the host value exactly as `executor.ts buildLoweredImport`
     // reads it from the embedder's imports record.
     deferCancel: isDeferCancel(hostFn),
+    // A24 likewise: the mark is read off the host value, and it is what makes
+    // `createLoweredImport` append a fresh `AbortSignal` to every call.
+    abortable: isAbortable(hostFn),
   }) as (...args: number[]) => unknown;
 
   const task = new Task(FT, TASK_OPTS, inst, () => [], () => {});
@@ -334,4 +342,163 @@ Deno.test("A23: subtask.drop succeeds after a discard", () => {
   assert(removed === subtask, "the handle table returned our subtask");
   removed.drop();
   assertEq([...f.inst.handles].length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// A24: the per-call AbortSignal (contracts/embedder-api.md §"Functions and
+// async"; polyengine#241)
+// ---------------------------------------------------------------------------
+//
+// A23's discard is about DELIVERY: the host operation runs on, and a
+// discarded dial keeps dialing. `abortable()` hands the host the platform's
+// own cancellation vocabulary — every call of a marked import gets a fresh
+// `AbortSignal`, and the runtime aborts it when, and only when, the call is
+// discarded. Two properties these tests exist to keep apart: the SIGNATURE is
+// unconditional (a marked import always receives a signal), the ABORT is
+// discard-only and DEFERRED one microtask past the cancel built-in — host
+// listeners must never run inside a live guest activation.
+
+/** Record what the host actually received, call by call. */
+function recorder(result: () => unknown) {
+  const seen: { count: number; last: unknown } = { count: 0, last: undefined };
+  const fn = function (...a: unknown[]) {
+    seen.count = a.length;
+    seen.last = a[a.length - 1];
+    return result();
+  };
+  return { seen, fn };
+}
+
+Deno.test("A24: a marked import receives WIT arity + 1, the extra arg an unaborted AbortSignal", () => {
+  // The signature is the mark's unconditional half: `FT` declares one param,
+  // so a marked host fn is called with two — the lifted `u32` and the signal.
+  const d = deferred<number>();
+  const r = recorder(() => d.promise);
+  const f = mkFixture(abortable(r.fn));
+  inFlight(f);
+
+  assertEq(r.seen.count, FT.params.length + 1);
+  assert(
+    r.seen.last instanceof AbortSignal,
+    `expected an AbortSignal, got ${typeof r.seen.last}`,
+  );
+  // Nothing has been cancelled, so the signal is inert at call time.
+  assertEq((r.seen.last as AbortSignal).aborted, false);
+});
+
+Deno.test("A24: an UNMARKED import receives exactly WIT arity (no stray signal)", () => {
+  // The control for the test above: the mark is what appends the signal, so
+  // an unmarked import's arity must not move. A stray trailing argument would
+  // land on a host implementation that declared an optional parameter and
+  // silently change its behaviour.
+  const d = deferred<number>();
+  const r = recorder(() => d.promise);
+  const f = mkFixture(r.fn);
+  inFlight(f);
+
+  assertEq(r.seen.count, FT.params.length);
+  assertEq(r.seen.last, 1);
+});
+
+Deno.test("A24: a discard aborts the signal — one microtask LATER, never inside the built-in", async () => {
+  // The ordering guarantee. `onCancel` runs synchronously inside
+  // `canon_subtask_cancel`, i.e. inside a live guest activation; running host
+  // abort listeners there is the issue-#24 attribution class plus arbitrary
+  // re-entrancy. So the guest sees CANCELLED_BEFORE_RETURNED first and the
+  // host sees the abort a tick later.
+  const d = deferred<number>();
+  const r = recorder(() => d.promise);
+  const f = mkFixture(abortable(r.fn));
+  const { subtaski } = inFlight(f);
+  const signal = r.seen.last as AbortSignal;
+
+  const rc = f.asGuest(() =>
+    createSubtaskCancel({ async: true }, f.inst)(subtaski)
+  );
+  assertEq(rc, SubtaskState.CANCELLED_BEFORE_RETURNED);
+  // SYNCHRONOUSLY after the built-in returned: still unaborted. This is the
+  // assertion that pins the deferral rather than merely the abort.
+  assertEq(signal.aborted, false);
+
+  await Promise.resolve();
+  assertEq(signal.aborted, true);
+});
+
+Deno.test("A24: an AbortError rejection provoked by the abort is inert", async () => {
+  // The composition with A23's guards: the host reacts to the abort by
+  // rejecting, and that rejection belongs to a call the guest renounced. It
+  // reaches the settle continuation with the subtask already resolved, so it
+  // is discarded like any other late settlement — never `store.hostFailure`,
+  // which would fail whatever unrelated embedder call came next.
+  const d = deferred<number>();
+  const r = recorder(() => d.promise);
+  const f = mkFixture(abortable(r.fn));
+  const { subtaski, subtask } = inFlight(f);
+  const signal = r.seen.last as AbortSignal;
+  signal.addEventListener("abort", () => {
+    d.reject(new DOMException("the dial was aborted", "AbortError"));
+  });
+
+  f.asGuest(() => createSubtaskCancel({ async: true }, f.inst)(subtaski));
+  await flush();
+
+  assertEq(signal.aborted, true);
+  assertEq(f.store.hostFailure, undefined);
+  assertEq(f.store.pendingHostCalls.size, 0);
+  assertEq(subtask.state, SubtaskState.CANCELLED_BEFORE_RETURNED);
+});
+
+Deno.test("A24: deferCancel + abortable — cancellation never discards, so the signal never fires", async () => {
+  // The inert composition the contract calls out. A `deferCancel()` import's
+  // cancellation is accepted and ignored (BLOCKED, then the real result), so
+  // no discard ever happens and the signal — minted, because the signature is
+  // unconditional — stays unaborted for the life of the call.
+  const d = deferred<number>();
+  const r = recorder(() => d.promise);
+  const f = mkFixture(abortable(deferCancel(r.fn)));
+  const { subtaski, subtask } = inFlight(f);
+  const signal = r.seen.last as AbortSignal;
+  assertEq(r.seen.count, FT.params.length + 1);
+
+  const rc = f.asGuest(() =>
+    createSubtaskCancel({ async: true }, f.inst)(subtaski)
+  );
+  assertEq(rc, BLOCKED);
+  for (let i = 0; i < 5; i++) await Promise.resolve();
+  assertEq(signal.aborted, false);
+
+  d.resolve(7);
+  await flush();
+
+  assertEq(signal.aborted, false);
+  assertEq(f.store.hostFailure, undefined);
+  assertEq(subtask.state, SubtaskState.RETURNED);
+  assertEq(new DataView(f.memory.buffer).getUint32(64, true), 7);
+  const [code, index, payload] = subtask.getPendingEvent();
+  assertEq(code, EventCode.SUBTASK);
+  assertEq(index, subtaski);
+  assertEq(payload, SubtaskState.RETURNED);
+});
+
+Deno.test("A24: no cancellation, no abort — a marked import settles normally", async () => {
+  // Discard-only, stated positively: an ordinary call of a marked import runs
+  // to its natural settlement with the signal untouched, and delivers.
+  const d = deferred<number>();
+  const r = recorder(() => d.promise);
+  const f = mkFixture(abortable(r.fn));
+  const { subtaski, subtask } = inFlight(f);
+  const signal = r.seen.last as AbortSignal;
+
+  d.resolve(9);
+  await flush();
+
+  assertEq(signal.aborted, false);
+  assertEq(f.store.hostFailure, undefined);
+  assertEq(f.store.pendingHostCalls.size, 0);
+  assertEq(subtask.state, SubtaskState.RETURNED);
+  assertEq(new DataView(f.memory.buffer).getUint32(64, true), 9);
+  const [code, index, payload] = subtask.getPendingEvent();
+  assertEq(code, EventCode.SUBTASK);
+  assertEq(index, subtaski);
+  assertEq(payload, SubtaskState.RETURNED);
 });

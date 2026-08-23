@@ -150,6 +150,7 @@ Deno.test("#147: a host-entry realloc that lowers an import traps", () => {
     mode: "plain",
     suspendable: false,
     deferCancel: false,
+    abortable: false,
   }) as () => unknown;
   // The guest's realloc reaches out of the component while lowering.
   h.duringRealloc = () => void importCall();
@@ -192,6 +193,7 @@ Deno.test("#147: import-result lowering runs realloc inside the may_leave window
     mode: "plain",
     suspendable: false,
     deferCancel: false,
+    abortable: false,
   }) as (retptr: number) => unknown;
 
   // Driven from inside a lifted export's core function: that is the guest,
@@ -231,6 +233,7 @@ Deno.test("#147: an import-result realloc that lowers an import traps", () => {
     mode: "plain",
     suspendable: false,
     deferCancel: false,
+    abortable: false,
   }) as () => unknown;
   const importCall = createLoweredImport({
     name: "returns-string",
@@ -241,6 +244,7 @@ Deno.test("#147: an import-result realloc that lowers an import traps", () => {
     mode: "plain",
     suspendable: false,
     deferCancel: false,
+    abortable: false,
   }) as (retptr: number) => unknown;
   h.duringRealloc = () => void inner();
 

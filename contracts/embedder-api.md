@@ -446,6 +446,31 @@ class PeerTrappedError extends Error {  // A7: a stream/future op whose peer ins
   handle, so they cannot be cancelled at all and the no-discard guarantee
   holds vacuously. Independent of `suspending()`; both brands may sit on
   one function.
+- **`abortable()` hands an import a per-call `AbortSignal`, aborted on
+  discard** (amendment A24, 2026-08-23, polyengine#241). A23's discard is
+  a statement about delivery; the host operation itself keeps running — a
+  discarded socket connect keeps connecting, a discarded timer keeps its
+  callback armed. `abortable(fn)` opts an import into the platform's own
+  cancellation vocabulary: every call receives a fresh `AbortSignal`
+  appended after the WIT-declared parameters
+  (`dial: abortable((addr, signal) => fetch(url, { signal }))`), and the
+  runtime aborts that signal when — and only when — the call's subtask is
+  discarded by a guest cancellation. The mark controls the SIGNATURE
+  unconditionally (a marked function always receives a signal, so its
+  arity is stable); the abort is discard-only. Ordering: the abort is
+  scheduled on a microtask after the cancel built-in returns, never
+  synchronously inside it — host listeners must not run inside a live
+  guest activation — so the guest observes `CANCELLED_BEFORE_RETURNED`
+  first and the host observes the abort a tick later. Any settlement the
+  abort provokes (an `AbortError` rejection, a partial value) lands on
+  A23's resolved-subtask guards and is discarded like any other late
+  settlement. Two spellings, one brand (`polyengine.abortable/1`), exactly
+  as the other marks; defined in `@polyengine/protocol` and imported from
+  there directly (A22). Inert wherever discard cannot happen — sync-typed
+  imports (no subtask handle), `deferCancel` imports (cancellation never
+  discards), calls that resolve eagerly — the signal simply never fires.
+  The signal fires only for guest-initiated cancellation; instance
+  teardown does not abort in-flight calls (future amendment material).
 
 ## Resources
 
@@ -953,6 +978,7 @@ equivalent of a semver major:
 | `polyengine.streamProducer/1` | `StreamProducerError.prototype` | producer-side failures |
 | `polyengine.suspending/1` | the marked function / class prototype (A1/A2) | suspendable sync imports |
 | `polyengine.deferCancel/1` | the marked function (A23) | imports exempt from cancel-discard |
+| `polyengine.abortable/1` | the marked function (A24) | imports receiving a per-call AbortSignal |
 | `polyengine.stream/1` | `Stream.prototype` | embedder stream handles |
 | `polyengine.streamWriter/1` | `StreamWriter.prototype` (A22) | embedder stream writer handles |
 | `polyengine.future/1` | `Future.prototype` | embedder future handles |

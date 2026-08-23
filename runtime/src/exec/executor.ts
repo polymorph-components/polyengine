@@ -17,6 +17,7 @@ import {
   assertModeConsistent,
   type SuspendingImport,
   chooseMode,
+  isAbortable,
   isDeferCancel,
   isSuspending,
   planNeedsSuspension,
@@ -1244,6 +1245,12 @@ class Executor {
     // whether the CoreFn gets wrapped), so nothing downstream has to read a
     // brand off a replaced function identity.
     const deferCancel = isDeferCancel(value);
+    // A24 (same section): does this import want a per-call `AbortSignal`?
+    // Read exactly like `deferCancel` above and for the same reason — the
+    // brand is consumed inside `createLoweredImport`, which mints the
+    // controller and appends the signal itself, so no function identity is
+    // replaced downstream of the read.
+    const abortable_ = isAbortable(value);
     // The Suspending-wrap decision is taken in `importValue`, which sees the
     // trampoline only AFTER `createTrampoline`'s trap-recording wrapper has
     // replaced this function's identity — a brand on the CoreFn would die
@@ -1261,6 +1268,7 @@ class Executor {
       mode: this.suspensionMode,
       suspendable,
       deferCancel,
+      abortable: abortable_,
     });
   }
 
