@@ -625,7 +625,7 @@ Deno.test("cut: end to end — window scan, guards, and the notes fragment", asy
       }),
     },
     git: {
-      "fetch origin refs/tags/v0.4.0 --depth=1": {},
+      "fetch origin +refs/tags/v0.4.0:refs/tags/v0.4.0 --depth=1": {},
       "diff --name-status v0.4.0..cut12345 -- runtime/tests/conventions/golden/":
         { stdout: "" },
     },
@@ -797,7 +797,7 @@ function cutFake(over: {
       }),
     },
     git: {
-      "fetch origin refs/tags/v0.4.0 --depth=1": {},
+      "fetch origin +refs/tags/v0.4.0:refs/tags/v0.4.0 --depth=1": {},
       "diff --name-status v0.4.0..cut12345 -- runtime/tests/conventions/golden/":
         { stdout: over.goldenDiff ?? "" },
     },

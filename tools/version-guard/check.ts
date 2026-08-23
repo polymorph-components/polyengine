@@ -698,7 +698,18 @@ export async function cutGoldenChanges(
   lastTag: string,
   sha: string,
 ): Promise<GoldenChange[]> {
-  await fx.run("git", ["fetch", "origin", `refs/tags/${lastTag}`, "--depth=1"]);
+  // The full-refspec form is load-bearing: without a DESTINATION
+  // (`:refs/tags/…`) the fetch drops the objects into FETCH_HEAD but
+  // creates no local ref, so the tag NAME stays unresolvable and the diff
+  // below fails with "bad revision" (the v0.5.0 cut, first dispatch). The
+  // PR-base fetch this mirrors gets away with a bare source because a raw
+  // sha resolves from the object store alone; a tag name needs a ref.
+  await fx.run("git", [
+    "fetch",
+    "origin",
+    `+refs/tags/${lastTag}:refs/tags/${lastTag}`,
+    "--depth=1",
+  ]);
   let diff = await fx.run("git", [
     "diff",
     "--name-status",
