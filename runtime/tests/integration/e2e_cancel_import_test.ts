@@ -23,7 +23,7 @@
 import { assertEq } from "../support/asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";
 import { instantiateComponent } from "../../src/exec/mod.ts";
-import { suspending } from "@polyengine/protocol";
+import { deferCancel, suspending } from "@polyengine/protocol";
 
 const root = new URL("../../../", import.meta.url);
 
@@ -61,6 +61,15 @@ async function instantiate() {
     // wasm frame mid-activation until the Promise settles — the #239 A1
     // park shape.
     block: suspending((ms: bigint) => delay(Number(ms))),
+    // A23 opt-out (contracts/embedder-api.md amendment A23): branding an
+    // async-typed import `deferCancel` keeps the pre-A23 run-to-completion
+    // behavior on cancel, per-declaration.
+    "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
+    // Interface-scoped sibling, exercising the raw executor's brand read at
+    // an interface-member leaf (`buildLoweredImport` path walk).
+    timers: {
+      "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
+    },
   };
   return await instantiateComponent({
     plan,
@@ -76,6 +85,10 @@ type Exports = any;
 const WEDGE_ASSERTION =
   "driveAsync: a resumed-activation claim was never released " +
   "(the activation neither parked, finished, nor trapped)";
+
+function assertTrue(cond: boolean, msg: string): void {
+  if (!cond) throw new Error(msg);
+}
 
 async function assertPing(e: Exports, where: string): Promise<void> {
   let value: unknown;
@@ -176,15 +189,16 @@ Deno.test(
     //   t=0:         sleep(hold) starts (S1), polled once so it is genuinely
     //                in flight.
     //   t=dropAfter: the task wakes and DROPS S1's future -> `subtask.cancel`.
-    //                This runtime's host-import subtasks have a no-op
-    //                `on_cancel` (runtime/src/exec/boundary.ts, search
-    //                `subtask.onCancel = () => {}`), so the cancel does NOT
-    //                return promptly — it parks the guest until S1 resolves
-    //                NATURALLY, i.e. at t=hold.
-    //   t=hold:      the cancel returns; the task then runs its tail
-    //                `sleep(hold)`.
-    //   t=2*hold:    the detached task finally ends.
-    // With hold=SLOW=1000, dropAfter=100: the detached task ends at t=2000.
+    //                `sleep` is undecorated, so this gets the A23 default
+    //                (contracts/embedder-api.md amendment A23): discard.
+    //                The subtask resolves CANCELLED_BEFORE_RETURNED at once
+    //                and the cancel returns PROMPTLY, at t=dropAfter — it no
+    //                longer waits for S1 to resolve naturally.
+    //   t=dropAfter: the task then runs its tail `sleep(hold)`.
+    //   t=dropAfter+hold: the detached task finally ends.
+    // With hold=SLOW=1000, dropAfter=100: the detached task ends at t=1100.
+    // (S1's host timer still fires at t=hold=1000 regardless — discard is
+    // about delivery, not execution — but nothing observes it.)
     const dropAfter = 100;
     await e["start-poll-drop"](BigInt(SLOW), BigInt(dropAfter));
 
@@ -200,9 +214,9 @@ Deno.test(
       await assertPing(e, `poll ${i} after start-poll-drop's cancel point`);
     }
 
-    // Remaining guest time: 2*SLOW - 500 = 1500ms. Wait 1650ms (150ms
-    // margin) so the detached task has provably ended before the test
-    // returns.
+    // Remaining guest time under A23: dropAfter + hold - 500 = 1100 - 500 =
+    // 600ms. The old pre-A23 wait (1650ms) still comfortably covers that —
+    // over-waiting is fine, kept as-is rather than trimmed.
     await delay(1650);
   },
 );
@@ -219,13 +233,13 @@ Deno.test(
     //            `futures::future::select`.
     //   t=fast:  the fast sleep wins the select; the still-in-flight slow
     //            future (the loser) is dropped at the end of its scope ->
-    //            `subtask.cancel`. Same no-op-`on_cancel` defect as
-    //            start-poll-drop above: the cancel parks the guest until
-    //            the loser resolves NATURALLY, at t=slow.
-    //   t=slow:  the cancel returns; the task then runs its tail
-    //            `sleep(slow)`.
-    //   t=2*slow: the detached task finally ends.
-    // With slow=SLOW=1000, fast=100: the detached task ends at t=2000.
+    //            `subtask.cancel`. `sleep` is undecorated, so this gets the
+    //            A23 default: discard, resolving CANCELLED_BEFORE_RETURNED
+    //            at once — the cancel returns PROMPTLY at t=fast, no longer
+    //            waiting for the loser to resolve naturally.
+    //   t=fast:  the task then runs its tail `sleep(slow)`.
+    //   t=fast+slow: the detached task finally ends.
+    // With slow=SLOW=1000, fast=100: the detached task ends at t=1100.
     const fast = 100;
     await e["start-race-drop"](BigInt(SLOW), BigInt(fast));
 
@@ -234,9 +248,96 @@ Deno.test(
       await assertPing(e, `poll ${i} while start-race-drop is racing/dropping`);
     }
 
-    // 5 polls * 50ms = 250ms elapsed. Remaining guest time: 2*SLOW - 250 =
-    // 1750ms. Wait 1900ms (150ms margin) so the detached task has provably
-    // ended before the test returns.
+    // 5 polls * 50ms = 250ms elapsed. Remaining guest time under A23:
+    // fast + slow - 250 = 1100 - 250 = 850ms. The old pre-A23 wait (1900ms)
+    // still comfortably covers that — kept as-is rather than trimmed.
     await delay(1900);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// A23 (contracts/embedder-api.md amendment A23; polyengine#241): the
+// per-declaration cancel-discard opt-out, proved at the raw exec layer.
+// `cancel-inflight`/`cancel-defer`/`cancel-defer-ifc` are a straight-line
+// export (no detached task, no ping-polling): poll `sleep`/`sleep-defer`
+// once, drop it, return. What's under test is how long THIS export call
+// itself takes.
+// ---------------------------------------------------------------------------
+
+// Long enough that "returned promptly" (< 400ms) and "waited for natural
+// resolution" (>= 800ms) are unambiguous on typical CI timing jitter.
+const A23_SLOW = 1200;
+
+Deno.test(
+  "cancel-import A23: discard-by-default returns promptly, not after natural resolution",
+  async () => {
+    const component = await instantiate();
+    const e = component.exports as Exports;
+
+    const start = performance.now();
+    await e["cancel-inflight"](BigInt(A23_SLOW));
+    const elapsed = performance.now() - start;
+
+    assertTrue(
+      elapsed < 400,
+      `A23 regression: cancel-inflight(${A23_SLOW}) took ${elapsed}ms (>= 400ms) — ` +
+        `an undecorated import's cancel must discard and resolve ` +
+        `CANCELLED_BEFORE_RETURNED promptly (contracts/embedder-api.md ` +
+        `amendment A23), not stall until the dropped subtask's host promise ` +
+        `settles naturally. A regression here means the discard path in ` +
+        `createLoweredImport's async arm (runtime/src/exec/boundary.ts) has ` +
+        `been lost and cancellation is back to run-to-completion for every ` +
+        `import.`,
+    );
+
+    // Leak hygiene: discard is about DELIVERY, not EXECUTION — the dropped
+    // host timer still fires at ~A23_SLOW regardless. Outlive it before the
+    // test returns (the sanitizer runs with --trace-leaks).
+    await delay(A23_SLOW + 100);
+  },
+);
+
+Deno.test(
+  "cancel-import A23: deferCancel() opt-out still runs the cancelled import to completion",
+  async () => {
+    const component = await instantiate();
+    const e = component.exports as Exports;
+
+    const start = performance.now();
+    await e["cancel-defer"](BigInt(A23_SLOW));
+    const elapsed = performance.now() - start;
+
+    assertTrue(
+      elapsed >= 800,
+      `A23 opt-out regression: cancel-defer(${A23_SLOW}) took only ${elapsed}ms ` +
+        `— an import branded deferCancel() (protocol/src/defer_cancel.ts) must ` +
+        `keep the pre-A23 behavior: cancelling it answers BLOCKED and the ` +
+        `guest waits for the natural result, so this export should not ` +
+        `return before the host timer it dropped actually settles.`,
+    );
+    assertTrue(
+      elapsed < 5000,
+      `cancel-defer(${A23_SLOW}) took ${elapsed}ms — expected it to complete, ` +
+        `not hang indefinitely`,
+    );
+  },
+);
+
+Deno.test(
+  "cancel-import A23: ping is healthy after both discard and deferCancel cancellations",
+  async () => {
+    // A fresh instance isn't the point here — the point is that neither
+    // cancellation path (discard, nor deferCancel-parked) leaves the store
+    // in a bad state (`store.hostFailure`-class wedge) for a THIRD call on
+    // the same instance to trip over.
+    const component = await instantiate();
+    const e = component.exports as Exports;
+
+    await e["cancel-inflight"](BigInt(A23_SLOW));
+    await e["cancel-defer"](BigInt(A23_SLOW));
+    await assertPing(e, "after cancel-inflight + cancel-defer");
+
+    // Outlive cancel-inflight's discarded host timer before returning.
+    await delay(A23_SLOW + 100);
   },
 );

@@ -16,6 +16,7 @@
 export {
   defineBrand,
   defineRealmLocal,
+  DEFER_CANCEL,
   DROPPED,
   ERROR_CONTEXT,
   FUTURE,
@@ -81,6 +82,8 @@ export {
   toCloneable,
   type ToCloneableOptions,
 } from "./cloneable.ts";
+
+export { deferCancel, isDeferCancel } from "./defer_cancel.ts";
 
 export { anySuspendingImport, isSuspending, suspending } from "./suspending.ts";
 

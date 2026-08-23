@@ -17,6 +17,7 @@ import {
   assertModeConsistent,
   type SuspendingImport,
   chooseMode,
+  isDeferCancel,
   isSuspending,
   planNeedsSuspension,
   suspendingImport,
@@ -1236,6 +1237,13 @@ class Executor {
     const ft = this.funcType(decl.type, `import '${label}'`);
     const opts = this.resolveOptions(decl.options);
     const suspendable = isSuspending(value);
+    // A23 (contracts/embedder-api.md §"Functions and async"): does this import
+    // opt out of cancel-discard? Unlike `suspendable` above, this needs no
+    // executor-state detour — the brand is consumed by `createLoweredImport`
+    // itself (it only decides which `onCancel` the lowered import installs, not
+    // whether the CoreFn gets wrapped), so nothing downstream has to read a
+    // brand off a replaced function identity.
+    const deferCancel = isDeferCancel(value);
     // The Suspending-wrap decision is taken in `importValue`, which sees the
     // trampoline only AFTER `createTrampoline`'s trap-recording wrapper has
     // replaced this function's identity — a brand on the CoreFn would die
@@ -1252,6 +1260,7 @@ class Executor {
       stats: this.stats,
       mode: this.suspensionMode,
       suspendable,
+      deferCancel,
     });
   }
 

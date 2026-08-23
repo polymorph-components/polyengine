@@ -2110,8 +2110,15 @@ export function createLoweredImport(input: {
   mode: SuspensionMode;
   /** Host fn carries the `suspending()` brand (embedder-api.md A1). */
   suspendable: boolean;
+  /**
+   * Host fn carries the `deferCancel()` brand (embedder-api.md A23): the
+   * import must run to completion, so a cancellation is accepted and ignored
+   * instead of taking the default discard.
+   */
+  deferCancel: boolean;
 }): CoreFn {
-  const { name, ft, opts, hostFn, stats, mode, suspendable } = input;
+  const { name, ft, opts, hostFn, stats, mode, suspendable, deferCancel } =
+    input;
   const inst = opts.instance;
   const store = inst.store;
 
@@ -2194,15 +2201,23 @@ export function createLoweredImport(input: {
     // definitions.py assigns the callee's `OnCancel` here:
     //   `subtask.on_cancel = callee(on_start, on_resolve, caller = ...)`
     //
-    // A host import is a plain JS function and offers no cancellation
-    // channel — there is nothing to forward a request to. The faithful model
-    // is therefore a handler that *accepts and ignores* the request, which is
-    // exactly what the reference permits: `canon_subtask_cancel` (line 2469)
-    // calls `on_cancel` and then re-checks `subtask.resolved()`; a callee that
-    // declines to cancel promptly leaves the subtask unresolved, and the async
-    // form returns BLOCKED while the sync form waits. The subtask still
-    // resolves normally when the promise settles — cancellation is a request,
-    // not a guarantee.
+    // The `OnCancel` is the CALLEE's to supply: `Store.invoke` takes it back
+    // from the callee it invoked (`on_cancel = f(on_start, on_resolve, caller
+    // = None)`, definitions.py line 572), i.e. the reference expects the
+    // embedding to hand back the cancellation behaviour of whatever it is
+    // hosting. A wasmtime host gets a real one for free — dropping a Rust
+    // future IS cancellation. A JS Promise has no such channel, so polyengine
+    // answers on the host's behalf; amendment A23 makes the DEFAULT answer the
+    // reference's prompt-cancel host (`on_cancel = () => on_resolve(None)`),
+    // installed by the async arm below.
+    //
+    // The no-op assigned HERE is only the placeholder for paths where
+    // `subtask.cancel` is unreachable, so no answer can ever be demanded of
+    // it: an eagerly-resolving callee never mints a subtask handle (the
+    // fast-path return below is a bare state), and a sync-typed import's A1
+    // park never mints one either. It is also the FINAL handler for a
+    // `deferCancel()`-branded import — accept and ignore, the pre-A23
+    // behaviour, now per-declaration.
     //
     // Leaving `on_cancel` null instead made a *legal* `subtask.cancel` crash
     // with an internal AssertionError, which is neither reference behaviour
@@ -2340,6 +2355,15 @@ export function createLoweredImport(input: {
       const promise = Promise.resolve(raw).then(
         (v) => {
           store.pendingHostCalls.delete(promise);
+          // A23: the subtask may already be resolved when the host promise
+          // settles — the discard `onCancel` below resolved it
+          // CANCELLED_BEFORE_RETURNED (the only pre-settle resolver on this
+          // arm). The value has no addressee, and `onResolve` would run
+          // straight into its `state === STARTED` assert ("on_resolve on a
+          // subtask that never started") and park that AssertionError on
+          // `store.hostFailure`, poisoning whatever unrelated embedder call
+          // came next.
+          if (subtask.resolved()) return;
           try {
             onResolve(toResults(v));
           } catch (e) {
@@ -2348,10 +2372,40 @@ export function createLoweredImport(input: {
         },
         (e) => {
           store.pendingHostCalls.delete(promise);
+          // Same guard, different reason: a rejection of a RENOUNCED call is
+          // not a host failure. The guest cancelled and was told so; surfacing
+          // the rejection would fail an unrelated later call with the error of
+          // an operation nobody is waiting for.
+          if (subtask.resolved()) return;
           store.hostFailure = e;
         },
       );
       store.pendingHostCalls.add(promise);
+      if (!deferCancel) {
+        // A23 DISCARD (contracts/embedder-api.md §"Functions and async";
+        // polyengine#241) — the reference's prompt-cancel host,
+        // `on_cancel = () => on_resolve(None)` (definitions.py canon_lower's
+        // null branch, line ~2267).
+        //
+        // This runs synchronously inside `canon_subtask_cancel`, which already
+        // set `cancellationRequested` before calling us (the assert in
+        // `onResolve`'s null branch relies on that ordering). `onResolve(null)`
+        // arms the SUBTASK event — a delivery-time thunk — and resolves
+        // CANCELLED_BEFORE_RETURNED, so the built-in's `finish()` tail consumes
+        // the event, `deliverResolve` releases the lenders (the #106 class,
+        // discharged exactly as a RETURNED delivery would), and BOTH cancel
+        // forms return the state without blocking. The null path lowers
+        // nothing, so there is no realloc re-entry from inside a built-in.
+        //
+        // The renounced call can no longer wake the guest, so it must stop
+        // counting as externally-wakeable for the driver's deadlock probe:
+        // deregister it NOW. (The settle continuation above also deletes;
+        // `Set.delete` is idempotent.)
+        subtask.onCancel = () => {
+          store.pendingHostCalls.delete(promise);
+          onResolve(null);
+        };
+      }
     } else {
       onResolve(toResults(raw));
     }

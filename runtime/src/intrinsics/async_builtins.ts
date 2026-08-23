@@ -543,8 +543,11 @@ export function createSubtaskCancel(
         // rule (fact_calls.ts). A callee with a pending (undeliverable)
         // cancel sits parked non-cancellably, which is determinate, so the
         // genuine BLOCKED answer is still immediate. Host-import subtasks
-        // carry no callee task: their onCancel is a no-op and their state
-        // cannot be mid-hop, so the pre-jspi immediate answer stands.
+        // carry no callee task, and their state cannot be mid-hop: the
+        // default (A23) onCancel resolves them before this branch is ever
+        // reached, and a `deferCancel` import's no-op onCancel leaves them
+        // simply unresolved — either way the pre-jspi immediate answer
+        // stands.
         //
         // NAMED DIVERGENCE (docs/architecture.md §6, #92): this park makes
         // the async built-in non-atomic — other ready threads may run while

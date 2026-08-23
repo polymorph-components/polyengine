@@ -11,6 +11,16 @@
 // Layering: this module was import-free on purpose (jspi/ stays standalone);
 // A9 relaxes that to "imports `@polyengine/protocol` only" — the protocol package
 // is itself dependency-free, so jspi/ still pulls in no runtime machinery.
-// The embedder surface re-exports `suspending` from `@polyengine/runtime/embedder`.
 
-export { anySuspendingImport, isSuspending, suspending } from "@polyengine/protocol";
+// A23 (`deferCancel`/`isDeferCancel`) rides the same re-export: it is the
+// other per-declaration host-import mark, it lives in the same dependency-free
+// package, and `exec/executor.ts` reads both through `jspi/mod.ts`.
+// (Host modules import both marks from `@polyengine/protocol` directly —
+// the embedder surface stopped re-exporting the vocabulary at A22.)
+export {
+  anySuspendingImport,
+  deferCancel,
+  isDeferCancel,
+  isSuspending,
+  suspending,
+} from "@polyengine/protocol";

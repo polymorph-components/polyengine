@@ -17,6 +17,17 @@ world cancel-import {
   /// parks the calling wasm frame mid-activation until the Promise settles.
   import block: func(ms: u64);
 
+  /// Host timer, async-typed, branded `deferCancel` host-side: the A23
+  /// opt-out (contracts/embedder-api.md amendment A23). Cancelling it defers
+  /// to natural resolution — the pre-A23 behavior, now per-declaration.
+  import sleep-defer: async func(ms: u64);
+
+  /// Interface-scoped sibling of `sleep-defer`, exercising the conventions
+  /// layer's brand relay for interface members (instantiate.ts relayMarks).
+  import timers: interface {
+    sleep-defer: async func(ms: u64);
+  }
+
   /// Start `sleep`, poll it once so the subtask is genuinely in flight, wait,
   /// then DROP it from a detached task — a cancellation issued while the host
   /// is idle. The minimal form of the reported shape.
@@ -32,6 +43,19 @@ world cancel-import {
   /// The reduced form: an ordinary export call that parks mid-frame. Two
   /// concurrent export calls are enough on their own.
   export block-for: async func(ms: u64);
+
+  /// A23 probe: start `sleep(ms)`, poll once (subtask in flight), DROP it,
+  /// return. Discard-by-default (A23) makes this return promptly; the host
+  /// times how long it takes.
+  export cancel-inflight: async func(ms: u64);
+
+  /// Same shape over `sleep-defer`: the drop's synchronous cancel parks the
+  /// frame until the import resolves naturally, so this returns after ~ms —
+  /// the A23 opt-out pinned end to end.
+  export cancel-defer: async func(ms: u64);
+
+  /// Same shape over `timers.sleep-defer` (interface-member brand relay).
+  export cancel-defer-ifc: async func(ms: u64);
 
   /// Cheap health poll: the export whose failure surfaces the wedge.
   export ping: func() -> u32;

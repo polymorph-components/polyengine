@@ -93,6 +93,7 @@ Deno.test(
       stats: newStats(),
       mode: "plain",
       suspendable: false,
+      deferCancel: false,
     }) as (...args: number[]) => unknown;
 
     const task = new Task(FT, TASK_OPTS, inst, () => [], () => {});
