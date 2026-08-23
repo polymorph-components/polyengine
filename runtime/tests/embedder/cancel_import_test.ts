@@ -21,7 +21,7 @@
 // default instead of the deferred one.
 
 import { guest, haveFixture, instantiateFixture } from "./support.ts";
-import { deferCancel } from "@polyengine/protocol";
+import { abortable, deferCancel } from "@polyengine/protocol";
 
 function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
@@ -47,7 +47,52 @@ async function instantiateGuest() {
     timers: {
       "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
     },
+    // Never exercised by the A23 tests below, but the plan requires every
+    // declared import to be provided — abortable() only controls arity,
+    // not whether the import must be present.
+    "sleep-abort": abortable((ms: bigint, _signal: AbortSignal) =>
+      delay(Number(ms))
+    ),
   });
+}
+
+// A24 (contracts/embedder-api.md amendment A24; polyengine#241) through the
+// conventions facade. Scoped per instantiation: each test gets its own
+// counters/flags so they can't bleed into one another.
+function instantiateAbortableGuest() {
+  let abortsObserved = 0;
+  let signalWellFormed = false;
+  const instancePromise = instantiateFixture(guest("cancel-import"), {
+    sleep: (ms: bigint) => delay(Number(ms)),
+    block: (_ms: bigint) => {
+      throw new Error("cancel-import A24 tests never call `block`");
+    },
+    "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
+    timers: {
+      "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
+    },
+    // A24: this is the regression pin for the conventions facade's
+    // trailing-arg forwarding (instantiate.ts "CONTRACT (A24)"). Without
+    // that forwarding loop, `signal` arrives `undefined` here and this
+    // listener wire-up throws on `signal.addEventListener` — the test fails
+    // loudly either way.
+    "sleep-abort": abortable((ms: bigint, signal: AbortSignal) => {
+      signalWellFormed = signal instanceof AbortSignal;
+      return new Promise<void>((resolve, reject) => {
+        const t = setTimeout(resolve, Number(ms));
+        signal.addEventListener("abort", () => {
+          clearTimeout(t);
+          abortsObserved++;
+          reject(new DOMException("sleep-abort discarded", "AbortError"));
+        });
+      });
+    }),
+  });
+  return {
+    instancePromise,
+    getAbortsObserved: () => abortsObserved,
+    getSignalWellFormed: () => signalWellFormed,
+  };
 }
 
 Deno.test({
@@ -133,5 +178,87 @@ Deno.test({
     );
 
     await c.exports.ping();
+  },
+});
+
+// ---------------------------------------------------------------------------
+// A24 (contracts/embedder-api.md amendment A24; polyengine#241) through the
+// conventions facade: this is the regression pin for `instantiate.ts`'s
+// "CONTRACT (A24)" trailing-arg forwarding hunk. Without it, the host's
+// `signal` parameter is `undefined`, the abort listener never wires up, and
+// `abortsObserved` stays 0 — see the negative control in the dispatch report.
+// ---------------------------------------------------------------------------
+
+const A24_SLOW = 1200;
+
+Deno.test({
+  name:
+    "A24: cancelAbort's AbortSignal fires on discard, well-formed, through the facade",
+  ignore: !ready,
+  fn: async () => {
+    const { instancePromise, getAbortsObserved, getSignalWellFormed } =
+      instantiateAbortableGuest();
+    const c = await instancePromise;
+
+    const start = performance.now();
+    await c.exports.cancelAbort(BigInt(A24_SLOW));
+    const elapsed = performance.now() - start;
+
+    assertTrue(
+      elapsed < 400,
+      `A24 regression: cancelAbort(${A24_SLOW}) took ${elapsed}ms (>= 400ms) ` +
+        `— an abortable()-branded import's cancel must still discard ` +
+        `promptly, the same as an unmarked import.`,
+    );
+
+    // The abort lands a microtask after the cancel built-in returns
+    // (contracts/embedder-api.md amendment A24) — flush a few ticks.
+    await delay(20);
+    assertTrue(
+      getAbortsObserved() === 1,
+      "A24 regression: cancelAbort's AbortSignal never fired through the " +
+        "conventions facade after its subtask was discarded. Without " +
+        "instantiate.ts's CONTRACT (A24) trailing-arg forwarding, the " +
+        "host's `signal` parameter is undefined and this listener never " +
+        "wires up in the first place — the facade silently drops the " +
+        "signal the mark exists to deliver.",
+    );
+    assertTrue(
+      getSignalWellFormed(),
+      "A24 regression: the import received something other than a real " +
+        "AbortSignal through the conventions facade — `signal instanceof " +
+        "AbortSignal` was false.",
+    );
+
+    // Inert through the real composition: the store must stay healthy.
+    await c.exports.ping();
+
+    // Leak hygiene: the abort listener clears the timer on discard — no
+    // stray `setTimeout` to outlive here.
+  },
+});
+
+Deno.test({
+  name:
+    "A24: runAbortable completes naturally through the facade, never aborts",
+  ignore: !ready,
+  fn: async () => {
+    const { instancePromise, getAbortsObserved } = instantiateAbortableGuest();
+    const c = await instancePromise;
+
+    const start = performance.now();
+    await c.exports.runAbortable(150n);
+    const elapsed = performance.now() - start;
+
+    assertTrue(
+      elapsed >= 100,
+      `runAbortable(150) took only ${elapsed}ms — expected it to await ` +
+        `sleep-abort to natural completion (no cancellation on this path)`,
+    );
+    assertTrue(
+      getAbortsObserved() === 0,
+      "A24 regression: the AbortSignal fired on a call that ran to " +
+        "natural completion with no guest cancellation anywhere.",
+    );
   },
 });

@@ -111,6 +111,7 @@ function mkFixture(hostFn: (...a: unknown[]) => unknown): Fixture {
     // Mirrors `buildLoweredImport`: the brand is read off the host value, so a
     // fixture whose host fn is wrapped in `deferCancel()` gets the opt-out.
     deferCancel: isDeferCancel(hostFn),
+    abortable: false,
   }) as (...args: number[]) => unknown;
 
   const task = new Task(FT, TASK_OPTS, inst, () => [], () => {});
@@ -240,6 +241,7 @@ Deno.test("sync lower of a Promise-returning host import needs JSPI", () => {
     hostFn: () => Promise.resolve(1),
     stats: newStats(),
     deferCancel: false,
+    abortable: false,
     // Plain mode: the A1 park arm is jspi-only, so this stays the guard pin
     // for the no-JSPI path. The marked+jspi park itself is pinned by
     // tests/embedder/suspending_imports_test.ts.

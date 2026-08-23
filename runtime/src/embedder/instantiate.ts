@@ -25,7 +25,9 @@ import {
 } from "../exec/mod.ts";
 import { camelCase, parseLeafName, pascalCase } from "./casing.ts";
 import {
+  abortable,
   deferCancel,
+  isAbortable,
   isDeferCancel,
   isSuspending,
   suspending,
@@ -70,6 +72,7 @@ import { type ElemCodec, Future, Stream } from "./streams.ts";
 function relayMarks<F extends CallableFunction>(from: unknown, to: F): F {
   if (isSuspending(from)) suspending(to);
   if (isDeferCancel(from)) deferCancel(to);
+  if (isAbortable(from)) abortable(to);
   return to;
 }
 
@@ -825,6 +828,16 @@ class Facade {
       const args = ft.params.map((p, i) =>
         toHost(raw[i] as ComponentValue, p, o, scope)
       );
+      // CONTRACT (A24): anything the executor appended PAST the WIT-declared
+      // params is a runtime-minted extra, not a component value — today
+      // exactly the `abortable()` signal `createLoweredImport` adds for a
+      // marked import. It is forwarded verbatim (no `toHost` conversion: it
+      // has no `ValType` and must reach the host as the platform object it
+      // is). Without this the facade would silently drop the signal and a
+      // marked import's `signal` parameter would be forever `undefined` —
+      // the failure the mark exists to prevent. The slice is empty for every
+      // unmarked import, so no existing path changes shape.
+      for (let i = ft.params.length; i < raw.length; i++) args.push(raw[i]);
       let out: unknown;
       try {
         out = dispatch(args);

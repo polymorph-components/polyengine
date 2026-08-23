@@ -68,6 +68,21 @@ export const SUSPENDING: unique symbol = Symbol.for(
 export const DEFER_CANCEL: unique symbol = Symbol.for(
   "polyengine.deferCancel/1",
 );
+/**
+ * The per-declaration abort-on-discard mark (amendment A24).
+ *
+ * A marked host import receives a fresh `AbortSignal` appended after its
+ * WIT-declared parameters on EVERY call (the mark controls the signature
+ * unconditionally), and the runtime aborts that signal — one microtask after
+ * the guest's cancel built-in returns — when a guest cancellation discards the
+ * call under A23. Like `polyengine.deferCancel/1` and unlike
+ * `polyengine.suspending/1` this brand is NOT mode evidence: it changes no
+ * calling convention the runtime must plan for, only what the host is told
+ * when its result is thrown away.
+ */
+export const ABORTABLE: unique symbol = Symbol.for(
+  "polyengine.abortable/1",
+);
 /** `Stream.prototype` — embedder stream handles (stateful: foreign = refused). */
 export const STREAM: unique symbol = Symbol.for("polyengine.stream/1");
 /** `Future.prototype` — embedder future handles (stateful: foreign = refused). */

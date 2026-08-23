@@ -12,14 +12,17 @@
 // A9 relaxes that to "imports `@polyengine/protocol` only" — the protocol package
 // is itself dependency-free, so jspi/ still pulls in no runtime machinery.
 
-// A23 (`deferCancel`/`isDeferCancel`) rides the same re-export: it is the
-// other per-declaration host-import mark, it lives in the same dependency-free
-// package, and `exec/executor.ts` reads both through `jspi/mod.ts`.
-// (Host modules import both marks from `@polyengine/protocol` directly —
+// A23 (`deferCancel`/`isDeferCancel`) and A24 (`abortable`/`isAbortable`)
+// ride the same re-export: they are the other per-declaration host-import
+// marks, they live in the same dependency-free package, and
+// `exec/executor.ts` reads all three through `jspi/mod.ts`.
+// (Host modules import the marks from `@polyengine/protocol` directly —
 // the embedder surface stopped re-exporting the vocabulary at A22.)
 export {
+  abortable,
   anySuspendingImport,
   deferCancel,
+  isAbortable,
   isDeferCancel,
   isSuspending,
   suspending,

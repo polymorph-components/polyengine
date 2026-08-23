@@ -57,6 +57,18 @@ world cancel-import {
   /// Same shape over `timers.sleep-defer` (interface-member brand relay).
   export cancel-defer-ifc: async func(ms: u64);
 
+  /// Host timer, async-typed, branded `abortable` host-side (A24): the host
+  /// receives a per-call AbortSignal after the WIT params and clears its
+  /// timer when the guest's cancellation discards the call.
+  import sleep-abort: async func(ms: u64);
+
+  /// A24 probe: start `sleep-abort(ms)`, poll once (in flight), DROP it,
+  /// return. Discard makes this prompt; the host observes the abort.
+  export cancel-abort: async func(ms: u64);
+
+  /// Control: run `sleep-abort(ms)` to natural completion (no cancel).
+  export run-abortable: async func(ms: u64);
+
   /// Cheap health poll: the export whose failure surfaces the wedge.
   export ping: func() -> u32;
 }

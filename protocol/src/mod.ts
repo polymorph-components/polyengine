@@ -14,6 +14,7 @@
 // `@polyengine/runtime/embedder` re-exports all of it unchanged.
 
 export {
+  ABORTABLE,
   defineBrand,
   defineRealmLocal,
   DEFER_CANCEL,
@@ -82,6 +83,8 @@ export {
   toCloneable,
   type ToCloneableOptions,
 } from "./cloneable.ts";
+
+export { abortable, isAbortable } from "./abortable.ts";
 
 export { deferCancel, isDeferCancel } from "./defer_cancel.ts";
 
