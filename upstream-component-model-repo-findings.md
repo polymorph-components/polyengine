@@ -149,7 +149,11 @@ entry on resolution — see git history.)
   post-#703 Explainer.md before filing. Consequence for us: spec-invalid
   method/static and interface-name case-collisions can reach the runtime's
   conventions layer — one of the triggers tracked in #185; translator-side
-  enforcement is #238.
+  enforcement is #238. **Deferred 2026-08-25 (operator): parked until the
+  wasmtime 49 toolchain bump** — upstream is actively reworking this corner
+  post-#703, so re-verify the bundled wasmparser then (probes in #238); if it
+  folds, the bump closes #238 and this entry dies, otherwise implement
+  shim-side and re-raise the filing question.
 
 [WebAssembly/component-model]: https://github.com/WebAssembly/component-model
 
