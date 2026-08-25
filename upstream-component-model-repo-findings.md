@@ -125,20 +125,31 @@ entry on resolution — see git history.)
   versions, not a component-model repo defect. Handled by docs/architecture.md §4.1/§9
   version-pinning discipline (the translator's wasmparser is the single
   validation authority).
-- **wasmparser skips case-folding when comparing `[method]`/`[static]` names**
-  (candidate bytecodealliance/wasm-tools issue; found 2026-08-22 validating our
-  #185): Explainer.md §Name Uniqueness requires strongly-unique — lowercase
+- **wasmparser skips case-folding when comparing `[method]`/`[static]` and
+  interface names** (candidate bytecodealliance/wasm-tools issue; found
+  2026-08-22 validating our #185, extended 2026-08-25; fix tracked on our side
+  as #238): Explainer.md §Name Uniqueness requires strongly-unique — lowercase
   acronyms, strip the `[...]` prefix, compare — and explicitly lists
   `[method]foo.BAR` vs `[method]foo.bar` as a validation error. wasmparser
   implements the fold for plain labels (`KebabStr`'s case-insensitive
-  `Eq`/`Hash`) but `ResourceFunc` derives them on the raw `a.b` string
-  (`src/validator/names.rs`; verified identical in 0.251/0.252/0.256), so
-  `[method]r.a-b` + `[method]r.a-B` in one scope validates (wasm-tools 1.247
-  `validate --features component-model`, wasmtime 47 `compile`, and our
-  translator-shim all accept; plain-label and record-field folded collisions
-  are correctly rejected). Consequence for us: spec-invalid method/static
-  case-collisions can reach the runtime's conventions layer — one of the
-  triggers tracked in #185.
+  `Eq`/`Hash`) but `ResourceFunc` *and* `InterfaceName` derive them on the raw
+  string (`src/validator/names.rs`; verified identical in 0.251/0.252/0.256
+  and on wasm-tools `main` as of 2026-08-25), so `[method]r.a-b` +
+  `[method]r.a-B` in one scope validates, as does `test:i/x-y` + `test:i/x-Y`
+  (wasm-tools 1.247 `validate --features component-model`, wasmtime 47
+  `compile`, and our translator-shim all accept; plain-label and record-field
+  folded collisions are correctly rejected). Searched both upstream trackers
+  2026-08-25: no existing issue covers it. Spec-side note: upstream
+  WebAssembly/component-model#703 (merged 2026-08-18, after our submodule pin)
+  rewrote strongly-unique as canonicalize-then-compare per
+  WebAssembly/component-model#702 (non-transitivity); the acronym fold is
+  retained and applies to all names — the new invalid-examples list adds
+  `[static]foo-BAR.FOO-bar` and `foo:bar/BAZ` — so the divergence conclusion
+  is unchanged under both wordings. Re-verify wording/line numbers against
+  post-#703 Explainer.md before filing. Consequence for us: spec-invalid
+  method/static and interface-name case-collisions can reach the runtime's
+  conventions layer — one of the triggers tracked in #185; translator-side
+  enforcement is #238.
 
 [WebAssembly/component-model]: https://github.com/WebAssembly/component-model
 
