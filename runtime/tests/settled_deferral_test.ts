@@ -1,22 +1,17 @@
-// Driver-level coverage for issue #156: a settled activation tail whose
-// instance is not host-enterable is DEFERRED IN PLACE, and `driveAsync` must
-// park (not spin) until the lock releases.
+// Driver-level coverage for issue #156, INVERTED by polyengine#173 (CM#705).
 //
-// Shape manufactured below — the reachable one from the issue's analysis:
+// #156's shape: instance B's thread parked on an already-settled
+// `awaitValue` (tail queued in `store.settled`) while sibling instance A held
+// a host entry, which under the shared synthetic per-instantiation root made
+// B non-enterable — so B's tail was DEFERRED IN PLACE and `driveAsync` had to
+// park (not spin) until the lock released.
 //
-//   * instance B's thread is parked on an `awaitValue` promise that has
-//     already settled, so its tail sits in `store.settled`;
-//   * sibling instance A is entered from the host (`enterFrom(null)`), which
-//     under the shared synthetic per-instantiation root locks B too;
-//   * the only way out is an outstanding host call whose settle releases the
-//     lock — the async-dtor bracket's shape, registered in
-//     `store.pendingHostCalls` with its `.then` attached BEFORE insertion,
-//     mirroring `callDtorGated`.
-//
-// Pre-fix this either crashed (`resumeWith`'s enterability assert, reached
-// through `serviceSettled`) or spun the driver hot with no await in the
-// cycle. The host promise resolves from a `setTimeout(0)`, so passing
-// requires the loop to genuinely park across a macrotask.
+// Deferral can no longer occur: definitions.py @ 2f13265 has no
+// `may_enter`/`enter_from`/`leave_to`, the runtime takes no bracket anywhere,
+// and `dispatchableTail` is constant-true for a live instance. The pin below
+// is the merged behavior — the tail dispatches immediately, with an unrelated
+// outstanding host call in flight, and the driver still reaches quiescence
+// (the outstanding call must not be mistaken for a reason to wedge).
 
 import { assertEq } from "./support/asserts.ts";
 import { driveStoreAsync } from "../src/exec/boundary.ts";
@@ -53,7 +48,7 @@ function spawn(
   return thread;
 }
 
-Deno.test("driveAsync: a deferred tail parks the loop until the host entry leaves", async () => {
+Deno.test("driveAsync: a sibling's tail dispatches immediately (CM#705)", async () => {
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -76,23 +71,21 @@ Deno.test("driveAsync: a deferred tail parks the loop until the host entry leave
   await Promise.resolve();
   assertEq(store.settled.length, 1, "B's tail is queued");
 
-  // A holds a host entry, which locks the shared root (and therefore B).
-  a.enterFrom(null);
-  assertEq(b.mayEnterFrom(null), false);
+  // A is mid-host-entry. Post-CM#705 that constrains nothing about B.
+  void a;
 
-  // The outstanding host call whose settle releases the lock. `.then` is
-  // registered BEFORE insertion, as `callDtorGated` does, so the driver's
-  // race sees an entry that self-removes.
+  // An outstanding host call, registered exactly as `callDtorGated` did
+  // (`.then` attached BEFORE insertion, so the driver's race sees an entry
+  // that self-removes). Demonstrably a macrotask away: the driver must park,
+  // not spin, while it is outstanding.
   let releaseHostCall!: () => void;
   const hostCall = new Promise<void>((r) => {
     releaseHostCall = r;
   });
   const gated = hostCall.then(() => {
-    a.leaveTo(null);
     store.pendingHostCalls.delete(gated);
   });
   store.pendingHostCalls.add(gated);
-  // Demonstrably a macrotask away: the driver must park, not spin.
   setTimeout(() => releaseHostCall(), 0);
 
   await driveStoreAsync(

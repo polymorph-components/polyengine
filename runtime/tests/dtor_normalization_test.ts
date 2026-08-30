@@ -18,7 +18,11 @@
 //      #156 class.
 //
 // Both are structural consequences of the missing Task/Thread, and both are
-// gone now that the dtor runs through `createLiftedFunction`.
+// gone now that the dtor runs through `createLiftedFunction`. CM#705
+// (polyengine#173) has since removed the gate itself, so neither shape is
+// even expressible any more; the pins below are restated in terms of what is
+// still observable — the dtor's own task, scheduler resumability, and the
+// fact that a dtor may re-enter a LIVE instance at all.
 
 import { ResourceTypeInfo } from "../src/cabi/mod.ts";
 import {
@@ -26,7 +30,7 @@ import {
   Store,
   storeQuiescent,
 } from "../src/task/mod.ts";
-import { currentTask } from "../src/task/scheduler.ts";
+import { currentTask, entryRefusal } from "../src/task/scheduler.ts";
 import { blockCurrentActivation } from "../src/jspi/mod.ts";
 import { driveStoreAsync, hostDtorCall } from "../src/exec/boundary.ts";
 import { assertEq } from "./support/asserts.ts";
@@ -63,11 +67,11 @@ Deno.test("#160: a dtor parked on a scheduler-resumable suspension point complet
 
   hostDtorCall(rt, 77);
 
-  // The park happened, and the entry bracket was RELEASED at it: the impl is
-  // host-enterable, which is precisely what lets `tick` resume the point
-  // below. Pre-#160 this was `false` and the store wedged here forever.
+  // The park happened, and `tick` can resume the point below. Pre-#160 the
+  // held bracket made the impl non-enterable and the store wedged forever;
+  // post-#705 nothing can make it non-enterable except poisoning.
   assertEq(finished, false);
-  assertEq(impl.mayEnterFrom(null), true);
+  assertEq(entryRefusal(impl, null, "base"), null);
   assertEq(store.waiting.length >= 1, true);
   // NOT advertised as external work: the settlement needs this scheduler.
   assertEq(store.pendingHostCalls.size, 0);
@@ -78,33 +82,41 @@ Deno.test("#160: a dtor parked on a scheduler-resumable suspension point complet
   assertEq(finished, true);
   assertEq(store.waiting.length, 0);
   assertEq(storeQuiescent(store), true);
-  assertEq(impl.mayEnterFrom(null), true);
+  assertEq(entryRefusal(impl, null, "base"), null);
   assertEq(store.hostFailure, undefined);
 });
 
-Deno.test("#160/#156: a sibling instance stays enterable while a dtor is in flight", async () => {
+Deno.test("#160/#173: a dtor may run while its own instance is LIVE", async () => {
+  // REPLACES the "#160/#156: a sibling instance stays enterable" pin, which
+  // is trivial now (nothing can be non-enterable). The stronger merged
+  // property: `canon_resource_drop` lifts the dtor with no gate at all
+  // (definitions.py @ 2f13265), so a dtor whose implementing instance is in
+  // the middle of a host-initiated activation is valid and both complete.
   const store = new Store();
   const impl = new ComponentInstanceState(1, store);
-  const sibling = new ComponentInstanceState(2, store);
-  let resolveDtor: () => void = () => {};
 
-  const rt = new ResourceTypeInfo(
+  // A first dtor activation of `impl`, parked mid-flight.
+  let resolveFirst: () => void = () => {};
+  const slow = new ResourceTypeInfo(
     impl,
-    (() => new Promise<void>((r) => (resolveDtor = r))) as unknown as (
+    (() => new Promise<void>((r) => (resolveFirst = r))) as unknown as (
       rep: number,
     ) => void,
   );
-  hostDtorCall(rt, 5);
+  hostDtorCall(slow, 5);
 
-  // Pre-#160 the held `enterFrom(null)` locked the synthetic root shared by
-  // the component's instances, so this was `false` for as long as the dtor
-  // ran — an unrelated export call on `sibling` would have trapped with
-  // "cannot enter component instance".
-  assertEq(sibling.mayEnterFrom(null), true);
-  assertEq(impl.mayEnterFrom(null), true);
+  // A SECOND, synchronous dtor of the same instance, entered while the first
+  // is still in flight. Pre-#705 this was refused ("cannot enter component
+  // instance"); now it simply runs.
+  let ranNested = 0;
+  const quick = new ResourceTypeInfo(impl, (() => {
+    ranNested += 1;
+  }) as unknown as (rep: number) => void);
+  hostDtorCall(quick, 6);
+  assertEq(ranNested, 1, "the nested dtor ran; nothing was refused");
 
-  resolveDtor();
-  await driveStoreAsync(store, () => storeQuiescent(store), "sibling drain");
-  assertEq(sibling.mayEnterFrom(null), true);
-  assertEq(impl.mayEnterFrom(null), true);
+  resolveFirst();
+  await driveStoreAsync(store, () => storeQuiescent(store), "dtor drain");
+  assertEq(entryRefusal(impl, null, "base"), null);
+  assertEq(store.hostFailure, undefined);
 });

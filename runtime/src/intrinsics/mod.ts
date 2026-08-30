@@ -470,72 +470,35 @@ function createTrampolineBody(
         async_?: number,
         calleeInstance?: number,
       ) => {
-        // Reference reentrance gate. Every guest->guest call in
-        // definitions.py routes through the callee's lift wrapper:
-        //   canon_lower (line 2312) calls
-        //     `callee(on_start, on_resolve, caller = thread.task.inst)`,
-        //   and `callee` is `Store.lift`'s `func_inst` (lines 578-585), whose
-        //   first act is
-        //     `trap_if(not inst.may_enter_from(caller))`   (line 581)
-        //   with `entering_set(caller) = callee.self_and_ancestors()
-        //                                - caller.self_and_ancestors()`
-        //   (lines 230-234).
-        // A sync fused adapter is an *optimization* of that path, so the gate
-        // belongs here (issue #99).
+        // ENTRY REFUSAL at the fused sync-call boundary.
         //
-        // Note on the shape of the entering set, which is what makes this
-        // check safe for the legal shapes:
-        //   * caller == callee, or either an ancestor of the other -> the
-        //     entering set is empty and this never traps. Those pairs never
-        //     reach this trampoline anyway: FACT emits an unconditional
-        //     `CannotEnterComponent` trap for them at compile time
-        //     (wasmtime-environ 47.0.3 `fact/trampoline.rs:120-127`), which
-        //     is what `test/async/trap-on-reenter.wast` cases 2 and 3 pin.
-        //   * an *idle* sibling -> `mayEnter` is true, no trap. This is what
-        //     `test/async/sync-barges-in.wast` needs: an async callee that is
-        //     merely blocked has already run `leave_to` (its `canon_lift`
-        //     returned), so a sync sibling may barge in.
-        //   * an *entered* sibling -> trap, which is the A -> C -> A cycle.
+        // The reference's reentrance gate is GONE (CM#705; definitions.py @
+        // 2f13265 has no `may_enter`/`entering_set`/`enter_from`): a
+        // guest->guest call through `Store.lift` now runs `canon_lift`
+        // unconditionally, and host-mediated reentrance — host -> A.f -> C.g
+        // -> host import -> host invokes C.g — is simply valid. wasmtime's
+        // fused adapters agreed all along: `enter_guest_sync_call`
+        // (47.0.3 `runtime/component/concurrent.rs:1723`) performs no
+        // reentrance check, and `fact/trampoline.rs:120-127` decides the
+        // caller==callee / ancestor pairs statically at compile time (what
+        // `test/async/trap-on-reenter.wast` cases 2 and 3 pin — a translation
+        // -time trap, not this site).
         //
-        // CONTRACT / reachability: a pure guest-to-guest sibling cycle is
-        // unreachable by construction, because component instance imports
-        // form a DAG (a callee must be instantiated before its caller, so it
-        // cannot hold an import of its caller; `wasm-tools` rejects the
-        // mutual-import composition outright). wasmtime relies on exactly
-        // that to elide the runtime check in fused adapters -- see the
-        // comment in `may_enter`, wasmtime 47.0.3
-        // `runtime/component/concurrent.rs:1876-1886`, and
-        // `enter_guest_sync_call` (concurrent.rs:1723) which performs no
-        // reentrance check at all. The gate is kept anyway because the
-        // reference mandates it and no corpus test pins the permissive
-        // behaviour; it is cheap, and it is the honest place for the
-        // invariant to be asserted rather than assumed.
+        // polyengine#165 recorded the omitted enter/leave bracket as a named
+        // divergence "pending the pin advance". The pin advance happened
+        // (polyengine#173): the divergence is CLOSED, because there is no
+        // bracket left to omit.
         //
-        // Deliberately *not* done here: `enter_from` / `leave_to` around the
-        // bracket. The reference locks the callee for the duration, which
-        // would additionally trap host-mediated reentrance (host -> A.f ->
-        // C.g -> host import -> host invokes C.g).
-        //
-        // ADJUDICATED 2026-08-20 (polyengine#165; named divergence in
-        // docs/architecture.md section 6): accepted — the bracket stays
-        // omitted. Three grounds: wasmtime parity (`enter_guest_sync_call`
-        // checks nothing); taking the bracket would create a guest-to-guest
-        // lock spanning suspension points, reintroducing the await-spanning
-        // -lock class removed by #156/#160; and upstream is deleting the
-        // trap outright — CM PR #705 ("CABI: remove the may_enter
-        // flag/trap") makes previously-trapping reentrance valid, so this
-        // divergence is a trailing indicator of the removal and
-        // self-resolves at the submodule pin advance (migration map:
-        // polyengine#173). Until that pin advance the reference's checks polyengine
-        // DOES enforce stay in force.
+        // What survives here is polyengine's per-instance poisoning: a
+        // callee that trapped is a corpse and may never be entered again,
+        // and the refusal names the original trap (polyengine#145). That is
+        // the whole content of this check.
         if (
           typeof callerInstance === "number" &&
           typeof calleeInstance === "number"
         ) {
           const callerInst = ctx.componentInstance(callerInstance >>> 0);
           const calleeInst = ctx.componentInstance(calleeInstance >>> 0);
-          // A poisoned callee's refusal names the original trap (polyengine#145).
-          // Check-only: no `enterFrom` here, so no bracket to break.
           const refusal = entryRefusal(
             calleeInst,
             callerInst,

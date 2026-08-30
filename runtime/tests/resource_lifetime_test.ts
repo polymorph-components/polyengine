@@ -1,7 +1,8 @@
 // Resource destructor gating and host-side lend tracking (issues #85, #86).
 //
-// Authority: definitions.py `canon_resource_drop` (line 2318) and the
-// `Store.lift` entry gate it routes the dtor through (lines 579-584), plus
+// Authority: definitions.py `canon_resource_drop` (@ 2f13265) and the
+// `Store.lift` it routes the dtor through — which post-CM#705 carries NO
+// entry gate, so dtor reentrance into a live instance is valid — plus
 // the lend bookkeeping of `Subtask.add_lender` / `deliver_resolve`
 // (lines 890, 902) and the `num_lends` traps in `lift_own` /
 // `canon_resource_drop` (lines 1508, 2325).
@@ -13,7 +14,11 @@ import {
 } from "../src/cabi/mod.ts";
 import { ComponentInstanceState, Store, storeQuiescent } from "../src/task/mod.ts";
 import { driveStoreAsync, hostDtorCall } from "../src/exec/boundary.ts";
-import { setOnInstancePoisoned } from "../src/task/scheduler.ts";
+import {
+  isInstancePoisoned,
+  notifyInstancePoisoned,
+  setOnInstancePoisoned,
+} from "../src/task/scheduler.ts";
 // Side-effecting import: registers `retireInstanceAsyncEnds` as the poisoning
 // hook (#66). Without it the seam is null and the poison walk is a no-op.
 import { retireInstanceAsyncEnds } from "../src/task/streams.ts";
@@ -82,7 +87,10 @@ function mkPair(): {
 // #85 — dtor gating
 // ---------------------------------------------------------------------------
 
-Deno.test("#85: dropping a cross-instance own traps while the impl is entered", () => {
+Deno.test("#85/#173: dropping a cross-instance own while the impl is LIVE succeeds", () => {
+  // INVERTED by polyengine#173 (CM#705): `canon_resource_drop` lifts the dtor
+  // through a `Store.lift` that no longer gates, so a drop whose implementing
+  // instance is mid-execution is valid and the dtor simply runs.
   const { caller, impl } = mkPair();
   let ran = 0;
   const rt = new ResourceTypeInfo(impl, () => {
@@ -90,54 +98,47 @@ Deno.test("#85: dropping a cross-instance own traps while the impl is entered", 
   });
   const h = canonResourceNew(caller, rt, 42);
 
-  // The implementing instance is mid-execution (someone is inside it).
-  impl.enterFrom(null);
-  assertTrap(
-    () => canonResourceDrop(caller, rt, h),
-    "cannot enter component instance",
-  );
-  assertEq(ran, 0);
-  // The gate was refused, not taken: the impl is still merely *entered*, not
-  // poisoned, and leaving it restores enterability.
-  impl.leaveTo(null);
-  assertEq(impl.mayEnter, true);
+  void impl;
+  canonResourceDrop(caller, rt, h);
+  assertEq(ran, 1, "the dtor ran; nothing was refused");
 });
 
-Deno.test("#85: a dtor-less resource is gated too (the reference's `or lambda`)", () => {
+Deno.test("#85/#173: a dtor-less drop into a live impl succeeds too", () => {
   const { caller, impl } = mkPair();
   const rt = new ResourceTypeInfo(impl, null);
   const h = canonResourceNew(caller, rt, 7);
-  impl.enterFrom(null);
-  assertTrap(
-    () => canonResourceDrop(caller, rt, h),
-    "cannot enter component instance",
-  );
+  void impl;
+  canonResourceDrop(caller, rt, h);
 });
 
-Deno.test("#85: same-instance drop is exempt even while the instance is entered", () => {
-  const { caller } = mkPair();
-  let ran = 0;
-  // impl === the dropping instance: `entering_set(caller)` is empty.
-  const rt = new ResourceTypeInfo(caller, () => {
-    ran += 1;
+Deno.test("#85: a POISONED impl still refuses the drop", () => {
+  // The surviving refusal: polyengine's per-instance corpse divergence.
+  withPoisonSpy(() => {
+    const { caller, impl } = mkPair();
+    const rt = new ResourceTypeInfo(impl, () => {});
+    const h = canonResourceNew(caller, rt, 43);
+    notifyInstancePoisoned(impl, new Error("earlier boom"));
+    assertTrap(
+      () => canonResourceDrop(caller, rt, h),
+      "cannot enter component instance",
+    );
   });
-  const h = canonResourceNew(caller, rt, 5);
-  caller.enterFrom(null); // the guest is of course running while it drops
-  canonResourceDrop(caller, rt, h);
-  assertEq(ran, 1);
-  assertEq(caller.mayEnter, false); // unchanged by the drop
 });
 
-Deno.test("#85: a cross-instance drop takes and releases the gate", () => {
-  const { caller, impl } = mkPair();
-  const seenInside: boolean[] = [];
-  const rt = new ResourceTypeInfo(impl, () => {
-    seenInside.push(impl.mayEnter);
+Deno.test("#85: a same-instance drop is admissible even against its own marker", () => {
+  // `entryRefusal`'s vacuous pass (`caller !== callee`): a guest dropping a
+  // handle to its OWN resource is never refused by its own poison marker.
+  withPoisonSpy(() => {
+    const { caller } = mkPair();
+    let ran = 0;
+    const rt = new ResourceTypeInfo(caller, () => {
+      ran += 1;
+    });
+    const h = canonResourceNew(caller, rt, 5);
+    notifyInstancePoisoned(caller, new Error("earlier boom"));
+    canonResourceDrop(caller, rt, h);
+    assertEq(ran, 1);
   });
-  const h = canonResourceNew(caller, rt, 1);
-  canonResourceDrop(caller, rt, h);
-  assertEq(seenInside, [false]); // entered for the duration
-  assertEq(impl.mayEnter, true); // and left afterwards
 });
 
 Deno.test("#85: a trapping dtor poisons the impl instance and retires its ends", () => {
@@ -155,13 +156,12 @@ Deno.test("#85: a trapping dtor poisons the impl instance and retires its ends",
       caught = e;
     }
     assertEq(caught === boom, true);
-    // `leave_to` is not reached: the impl is unenterable forever.
-    assertEq(impl.mayEnter, false);
+    // The impl is a corpse; the dropping instance is untouched.
+    assertEq(isInstancePoisoned(impl), true);
+    assertEq(isInstancePoisoned(caller), false);
     assertEq(seen.length, 1);
     assertEq(seen[0].inst === impl, true);
     assertEq(seen[0].cause === boom, true);
-    // ... and the dropping instance is untouched by *this* bracket.
-    assertEq(caller.mayEnter, true);
   });
 });
 
@@ -177,21 +177,21 @@ Deno.test("#85: a guest-initiated dtor that does not finish synchronously traps"
       () => canonResourceDrop(caller, rt, h),
       "did not complete synchronously",
     );
-    assertEq(impl.mayEnter, false);
+    assertEq(isInstancePoisoned(impl), true);
     assertEq(seen.length, 1);
   });
 });
 
-Deno.test("#160: a host-initiated async dtor does NOT hold the gate", async () => {
+Deno.test("#160: a host-initiated async dtor is not external work", async () => {
   // REVISED from the #85 pin "holds the gate until it settles". That
   // behaviour was the bug: the held `enterFrom(null)` bracket made the impl
   // instance non-enterable for the whole activation, so `Store.tick`'s
   // enterability filter could never resume a suspension point belonging to
-  // the dtor itself (#160). A host-initiated dtor is now a full canonical
-  // lift (definitions.py `canon_resource_drop` line 2319), whose bracket is
-  // released at the first park — so the instance is host-enterable while the
-  // dtor is in flight, and the completion promise is NOT a `pendingHostCalls`
-  // entry (it is not external work).
+  // the dtor itself (#160). A host-initiated dtor is a full canonical lift
+  // (definitions.py `canon_resource_drop`), and post-CM#705 (polyengine#173)
+  // there is no gate left to hold at all. What still needs pinning: the
+  // completion promise is NOT a `pendingHostCalls` entry (it is not external
+  // work), and the store drains cleanly.
   const { store, impl } = mkPair();
   let resolveDtor: () => void = () => {};
   const rt = new ResourceTypeInfo(
@@ -201,12 +201,11 @@ Deno.test("#160: a host-initiated async dtor does NOT hold the gate", async () =
     ) => void,
   );
   hostDtorCall(rt, 11);
-  assertEq(impl.mayEnter, true);
-  assertEq(impl.mayEnterFrom(null), true);
+  assertEq(isInstancePoisoned(impl), false);
   assertEq(store.pendingHostCalls.size, 0);
   resolveDtor();
   await driveStoreAsync(store, () => storeQuiescent(store), "dtor drain");
-  assertEq(impl.mayEnter, true);
+  assertEq(isInstancePoisoned(impl), false);
   assertEq(store.pendingHostCalls.size, 0);
   assertEq(store.hostFailure, undefined);
 });
@@ -229,7 +228,7 @@ Deno.test("#85/#160: a rejected host-initiated dtor poisons and lands on hostFai
       .catch(() => {});
     await Promise.resolve();
     assertEq(store.hostFailure === boom, true);
-    assertEq(impl.mayEnter, false);
+    assertEq(isInstancePoisoned(impl), true);
     assertEq(seen.length, 1);
     store.hostFailure = undefined;
   });
@@ -319,7 +318,7 @@ Deno.test("#86: a trapping backstop dtor poisons the impl and records the failur
     simulateFinalizationForTest(w);
     // ... but is no longer swallowed either (the former `catch {}`).
     assertEq(store.hostFailure === boom, true);
-    assertEq(impl.mayEnter, false);
+    assertEq(isInstancePoisoned(impl), true);
     assertEq(seen.length, 1);
     store.hostFailure = undefined;
   });

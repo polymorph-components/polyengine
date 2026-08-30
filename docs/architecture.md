@@ -51,9 +51,11 @@ contracts throughout the repo. Related documents:
   (a) something external forces it — the official suite's `assert_trap`
   matches message text, which is de facto wasmtime wording — or (b) it is
   free by construction (the translation frontend *is* wasmtime-environ, §4).
-  Behavior mandated by the spec/reference (e.g. instance poisoning on trap,
+  Behavior mandated by the spec/reference (e.g. the borrow-lending traps,
   per definitions.py) is spec conformance, not wasmtime-matching, even when
-  wasmtime exhibits it too. The tie-breaking authority for semantic
+  wasmtime exhibits it too. (Instance poisoning on trap was this until
+  CM#705 deleted the `may_enter` bracket it fell out of; per-instance
+  poisoning is now a named divergence, §6.) The tie-breaking authority for semantic
   questions is the spec + `definitions.py`, with wasmtime as corroborating
   evidence — never the other way around. **One bounded exception**
   (operator decision, 2026-08-09): where `definitions.py` contradicts the
@@ -271,9 +273,13 @@ Platform-neutral core (dependencies: `WebAssembly` JS API, `TextEncoder`/
 3. Resource machinery: slab handle tables, own/borrow tracking (`num_lends`,
    borrow invalidation at call return), dtor invocation (§7), FACT intrinsic
    implementations.
-4. Reentrance gates: `may_enter`/`may_leave` enforcement — **JSPI happily
-   permits reentry that the Component Model forbids**; the gates are ours to
-   enforce and must hold while suspended.
+4. Instance-state rules: `may_leave` enforcement and poisoned-instance
+   refusal — **JSPI enforces no Component Model invariant for us**; the
+   state discipline is ours and must hold while suspended. (The `may_enter`
+   reentrance gate lived here until CM#705 removed it from the spec;
+   adopted at the 2f13265 pin advance, #173 — reentrance into a live
+   instance is valid, and the only entry refusal left is the
+   poisoned-corpse divergence, §6.)
 5. Task scheduler (§6): the 0.3 task/thread model is the runtime's core
    structure, not an add-on — waitable sets, streams/futures, callback-ABI
    event dispatch, backpressure, cancellation. Sync calls are the degenerate
@@ -401,33 +407,39 @@ guest activation. Whatever settlement the abort provokes (typically an
 `AbortError` rejection) arrives with the subtask already resolved and lands
 on A23's resolved-subtask guards, discarded like any other late settlement.
 
-Named divergence (2026-08-20, [#165](https://github.com/polymorph-components/polyengine/issues/165),
-adjudicated-accept): **`enter-sync-call` checks the callee's reentrance gate
-but does not take it.** A FACT sync guest→guest call performs the
-reference's `trap_if(not may_enter_from(caller))` and stops — the
-`enter_from`/`leave_to` bracket around the call body (`Store.lift`,
-definitions.py:578-585) is deliberately omitted, so *host-mediated* reentry
-into the callee while the call is in flight (host → A.f → C.g → host import
-→ host re-enters C.g) is admitted where the pinned reference traps. Pure
-guest→guest cycles remain statically impossible (FACT compile-time traps;
-the instance-import DAG, [#99](https://github.com/polymorph-components/polyengine/issues/99)/
-[#101](https://github.com/polymorph-components/polyengine/issues/101)). Accepted on three
-grounds: **wasmtime parity** (`enter_guest_sync_call` performs no reentrance
-check at all, and fused adapters elide it); **architecture** — taking the
-bracket would create a guest→guest lock spanning suspension points,
-reintroducing the await-spanning-lock class that
+Resolved divergence (2026-08-20 → 2026-08-30,
+[#165](https://github.com/polymorph-components/polyengine/issues/165)):
+**`enter-sync-call` checked the callee's reentrance gate but did not take
+it** — host-mediated reentry into an in-flight callee was admitted where
+the then-pinned reference trapped. Accepted at the time on wasmtime parity
++ architecture (an enter/leave bracket spanning suspension points would
+reintroduce the await-spanning-lock class
 [#156](https://github.com/polymorph-components/polyengine/issues/156)/[#160](https://github.com/polymorph-components/polyengine/issues/160)
-eliminated; and **upstream trajectory** — CM PR
-[#705](https://github.com/WebAssembly/component-model/pull/705) ("CABI:
-remove the may_enter flag/trap") deletes the trap from the `canon lift`,
-`resource.drop`, and `subtask.cancel` paths and makes previously-trapping
-reentrance valid, retaining only run-to-completion serialization of async
-callback turns. This divergence is therefore a trailing indicator of the
-upstream removal and self-resolves when the submodule pin advances past
-#705; the pin-advance migration map is
-[#173](https://github.com/polymorph-components/polyengine/issues/173). Until that advance the
-pinned definitions.py remains the tie-breaker everywhere else — every
-reentrance check polyengine does enforce stays in force.
+eliminated) + upstream trajectory, and predicted to self-resolve at the
+CM#705 pin advance. It did: at pin `2f13265` the reference deletes
+`may_enter`/`entering_set`/`enter_from`/`leave_to` outright
+([CM#705](https://github.com/WebAssembly/component-model/pull/705)), the
+runtime's transient gates and brackets were removed with it
+([#173](https://github.com/polymorph-components/polyengine/issues/173)),
+and reentrance into a live instance — host-mediated or otherwise — is
+simply valid. What `enter-sync-call` (and every other entry site) still
+checks is the poisoned-corpse refusal below.
+
+Named divergence (2026-08-30, [#173](https://github.com/polymorph-components/polyengine/issues/173),
+formerly spec-derived): **per-instance poisoning is polyengine's only entry
+refusal.** A trap that escapes a guest activation marks the instance's
+corpse (`poisonedInstances`, re-keyed onto the marker in #251); every entry
+site refuses a marked instance permanently, naming the original trap
+([#145](https://github.com/polymorph-components/polyengine/issues/145)).
+Pre-#705 this behavior fell out of the reference's broken enter/leave
+bracket (`may_enter` stuck false); post-#705 the reference has no
+instance-level trap state at all and wasmtime kills the whole store on
+trap, so per-instance corpse semantics — sibling instances of the same
+instantiation stay usable — is now purely this runtime's choice, pinned by
+`builtin-trap-poisons-instance.wast`'s substring expectations and the
+runtime poisoning suites. The same-instance exemption (`caller === callee`
+passes vacuously, matching the old empty `entering_set`) is preserved in
+the refusal guard for the dtor self-drop path.
 
 ## 7. Canonical ABI decisions
 
@@ -469,12 +481,13 @@ decide deliberately and document here.
 - **Destructors.** Per spec (CanonicalABI.md §`canon resource.drop`): the dtor
   is a core function `[rep] -> []`, invoked as a normal **non-async**
   cross-component call — *"the destructor may not block. However, the
-  destructor may spawn a cooperative thread that does."* Reentrance is checked
-  (`may_enter_from`) with the same-instance exemption, and a trapping dtor
-  poisons the **implementing** instance (the reference's `Store.lift` bracket,
-  reconstructed at `runtime/src/cabi/handles.ts` `callDtorGated` —
-  implemented at [#85](https://github.com/polymorph-components/polyengine/issues/85); the
-  same-instance exemption falls out of `entering_set`, not a special case).
+  destructor may spawn a cooperative thread that does."* Dtor entry into a
+  live instance is valid (CM#705, adopted at pin `2f13265`, #173 — the old
+  `may_enter_from` check is gone); a poisoned implementing instance still
+  refuses (§6 divergence, with the same-instance exemption preserved for
+  self-drops), and a trapping dtor poisons the **implementing** instance
+  (`runtime/src/cabi/handles.ts` `callDtorGated`, implemented at
+  [#85](https://github.com/polymorph-components/polyengine/issues/85)).
   Host policy:
   - CM-level blocking in a dtor → deterministic trap (falls out of general
     sync-task rules).

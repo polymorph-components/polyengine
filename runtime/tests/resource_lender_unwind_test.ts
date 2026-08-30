@@ -17,6 +17,7 @@ import {
   type PreparedCall,
 } from "../src/intrinsics/fact_calls.ts";
 import type { FactStartScope } from "../src/intrinsics/mod.ts";
+import { isInstancePoisoned } from "../src/task/scheduler.ts";
 import { newStats } from "../src/exec/boundary.ts";
 import { ComponentInstanceState, Store } from "../src/task/mod.ts";
 import { NeedsJspi } from "../src/task/scheduler.ts";
@@ -127,7 +128,7 @@ Deno.test("#91: sync-start-call releases the caller's lenders when the callee tr
   });
   assertEq(escaped === boom, true);
   // The callee is poisoned; the caller is not, and its handle is usable again.
-  assertEq(h.callee.mayEnter, false);
+  assertEq(isInstancePoisoned(h.callee), true);
   assertEq(h.handle.numLends, 0);
   canonResourceDrop(h.caller, h.rt, h.handleIndex); // no "still lent out" trap
 });
@@ -146,7 +147,7 @@ Deno.test("#91: sync-start-call releases lenders on a capability bail", () => {
     throw boom;
   });
   assert(escaped instanceof NeedsJspi, `expected NeedsJspi, got ${escaped}`);
-  assertEq(h.callee.mayEnter, true); // not poisoned, as the class demands
+  assertEq(isInstancePoisoned(h.callee), false); // not poisoned, as the class demands
   assertEq(h.handle.numLends, 0);
   canonResourceDrop(h.caller, h.rt, h.handleIndex);
 });
@@ -158,7 +159,7 @@ Deno.test("#91: async-start-call releases the subtask's lenders when the callee 
     throw boom;
   });
   assertEq(escaped === boom, true);
-  assertEq(h.callee.mayEnter, false);
+  assertEq(isInstancePoisoned(h.callee), true);
   // The subtask never reached `report()`, so nothing else would ever deliver
   // its resolution and release these.
   assertEq(h.handle.numLends, 0);
@@ -166,15 +167,14 @@ Deno.test("#91: async-start-call releases the subtask's lenders when the callee 
 });
 
 Deno.test("#91: a trapping post-return leaves may_leave as the reference does", () => {
-  // definitions.py `canon_lift` (lines 2170-2174): `may_leave = False`, the
-  // post-return call, `may_leave = True`. A trap in between skips the
-  // restore, and `Store.lift`'s `leave_to` too — the instance is poisoned and
-  // its flags are left exactly as the trap left them. Verified rather than
-  // "fixed": restoring `may_leave` here locally would contradict both. The
-  // obligation this runtime adds — that no *live* instance is stranded with
-  // `may_leave === false` — is discharged at the host boundary by
-  // exec/boundary.ts `unwind`, which asserts the resting state for every
-  // instance outside the poisoned entered set.
+  // definitions.py `canon_lift`: `may_leave = False`, the post-return call,
+  // `may_leave = True`. A trap in between skips the restore, and the instance
+  // is poisoned, so its flags are left exactly as the trap left them.
+  // Verified rather than "fixed": restoring `may_leave` here locally would
+  // contradict the reference. The obligation this runtime adds — that no
+  // *live* instance is stranded with `may_leave === false` — is discharged at
+  // the host boundary by exec/boundary.ts `unwind`, which asserts the resting
+  // state for every instance except the poisoned one.
   const boom = new Error("post-return trap");
   const h = mkHarness(() => {
     throw boom;
@@ -182,10 +182,10 @@ Deno.test("#91: a trapping post-return leaves may_leave as the reference does", 
   // flags = 0 selects the sync-ABI callee, whose lift runs the post-return.
   const escaped = h.run("async", () => undefined as unknown as CoreValue);
   assertEq(escaped === boom, true);
-  assertEq(h.callee.mayEnter, false); // poisoned: never enterable again
+  assertEq(isInstancePoisoned(h.callee), true); // never enterable again
   assertEq(h.callee.mayLeave, false); // left as the trap left it
   // The caller — the instance that survives and may be re-entered — is sane.
-  assertEq(h.caller.mayEnter, true);
+  assertEq(isInstancePoisoned(h.caller), false);
   assertEq(h.caller.mayLeave, true);
   assertEq(h.handle.numLends, 0);
 });

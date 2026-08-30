@@ -1079,7 +1079,13 @@ async function driveAsync(
       );
       if (parked.length === 0) {
         // Every awaiting thread's settle is deferred on a non-enterable
-        // instance. The way out is the lock holder finishing, and the only
+        // instance. INERT since CM#705 (polyengine#173): nothing is ever
+        // non-enterable now, so `dispatchableTail` never defers and this
+        // branch is unreachable by construction rather than by argument. Kept
+        // textually intact pending the contract amendment that deletes the
+        // reentrance model.
+        //
+        // The way out is the lock holder finishing, and the only
         // await-spanning host-entry lock is the async-dtor bracket, which
         // registers in `pendingHostCalls` — so park on those, plus the
         // driver-arrival one-shot: every park in this loop races it, so the
@@ -1372,24 +1378,19 @@ export function createLiftedFunction(input: {
     // Depth of the sync-call scope stack on entry; see the `finally` below.
     const syncCallDepth = syncCallStack?.length ?? 0;
 
-    // Reference `Store.lift` (line 578): the host is the caller, so the
-    // entering set is the callee's `self_and_ancestors()`.
-    // On refusal, distinguish the corpse from the crowd: a poisoned
-    // instance's refusal names the original trap (polyengine#145 ask 1).
+    // Reference `Store.lift` (@ 2f13265) runs `canon_lift` with NO gate: the
+    // transient reentrance check went away with CM#705, so host entry into a
+    // live instance is valid. What survives is polyengine's per-instance
+    // poisoning divergence — a poisoned instance is a corpse, and its refusal
+    // names the original trap (polyengine#145 ask 1).
     {
       const refusal = entryRefusal(
         inst,
         null,
-        `cannot enter component instance ${inst.index} (reentrance forbidden)`,
+        `cannot enter component instance ${inst.index}`,
       );
       if (refusal !== null) trap(refusal);
     }
-    // The set this entry locked (definitions.py `ComponentInstance.enter_from`
-    // iterates `entering_set`). Remembered so a trap can leave exactly these
-    // locked and no others.
-    const enteredSet = inst.enteringSet(null);
-    inst.enterFrom(null);
-    let entered = true;
     let completed = false;
 
     let resolved: ComponentValue[] | null = null;
@@ -1472,45 +1473,36 @@ export function createLiftedFunction(input: {
       // definition; assert that resting state rather than leaving the
       // component bricked.
       //
-      // The *entered* instances are excluded: they are poisoned by this trap
-      // (see `poison` below) and must stay exactly as the trap left them.
-      // Restoring their `may_leave` would be tidying the state of an instance
-      // that is no longer allowed to run at all.
+      // The ENTERED instance is excluded: it is poisoned by this trap (see
+      // `poison` below) and must stay exactly as the trap left it. Restoring
+      // its `may_leave` would be tidying the state of an instance that is no
+      // longer allowed to run at all.
       for (const i of allInstances?.() ?? []) {
-        if (!enteredSet.has(i as unknown as ComponentInstanceState)) {
+        if (i as unknown as ComponentInstanceState !== inst) {
           i.mayLeave = true;
         }
       }
     };
 
-    const leave = (): void => {
-      if (!entered) return;
-      entered = false;
-      inst.leaveTo(null);
-    };
-
     /**
-     * A trap escaped the task: **do not** release the reentrance lock.
+     * A trap escaped the task: mark the instance poisoned.
      *
-     * definitions.py `Store.lift` (line 578) is
+     * polyengine's NAMED DIVERGENCE. definitions.py has no notion of a
+     * post-trap instance at all — a Trap is the end of the world — and
+     * wasmtime's answer is to poison the whole store. This runtime keeps the
+     * component graph alive and buries only the instance that trapped: it is
+     * not in a known state, so it may never be entered again, and the next
+     * call reports `cannot enter component instance` with the recorded cause
+     * appended (polyengine#145 ask 1).
+     * `test/async/builtin-trap-poisons-instance.wast` asserts exactly this,
+     * twice; the marker (`notifyInstancePoisoned`) is the whole mechanism
+     * since #251's re-key, and since CM#705 removed `may_enter` it is also
+     * the only one there could be.
      *
-     * ```python
-     * trap_if(not inst.may_enter_from(caller))
-     * inst.enter_from(caller)
-     * on_cancel = canon_lift(...)     # <-- a Trap propagates out of here
-     * inst.leave_to(caller)           # <-- and so this never runs
-     * ```
-     *
-     * so a trapping task leaves every instance it entered with
-     * `may_enter == False` permanently. That is the Component Model's
-     * "poisoning": a component that trapped is not in a known state, so it may
-     * never be entered again, and the next call reports `cannot enter
-     * component instance`. `test/async/builtin-trap-poisons-instance.wast`
-     * asserts exactly this, twice.
-     *
-     * Only the entered set is affected; sibling instances stay usable, which
-     * is why the lock is released per-instance rather than by poisoning a
-     * whole store the way wasmtime does.
+     * Only `inst` is affected; sibling instances stay usable. (Historically
+     * this walked the entry's `entering_set` and had to hand-release the
+     * synthetic per-instantiation root to avoid store-wide poisoning; with
+     * the gate gone there is no set and no root to release.)
      *
      * Poisoned instances can never rendezvous again, so their handle tables'
      * live stream/future ends are retired here (#66): parked host operations
@@ -1518,23 +1510,13 @@ export function createLiftedFunction(input: {
      * lets the embedder layer reject them loudly.
      */
     const poison = (e: unknown): void => {
-      entered = false; // consumed: the lock is now permanent
-      // ...for the leaf. The synthetic per-instantiation root (plan v3
-      // amendment 4) is in `enteredSet` too, and leaving IT locked would
-      // poison every instance of the component — exactly the store-wide
-      // behaviour the paragraph above says this runtime deliberately does not
-      // have. Released; see `releaseSyntheticRootOnPoison` in task/mod.ts.
-      inst.releaseSyntheticRootOnPoison();
       // Through the seam (not retireInstanceAsyncEnds directly) so the
       // poison marker is recorded too — `Thread.resumeWith` retires this
       // instance's late settles against it instead of assert-cascading.
-      for (const i of enteredSet) {
-        if (i.isSyntheticRoot) continue;
-        notifyInstancePoisoned(
-          i as unknown as { handles: Iterable<unknown> },
-          e,
-        );
-      }
+      notifyInstancePoisoned(
+        inst as unknown as { handles: Iterable<unknown> },
+        e,
+      );
     };
 
     /**
@@ -1544,9 +1526,9 @@ export function createLiftedFunction(input: {
      * not "the component faulted". Poisoning on them is wrong on the
      * reference's own terms: the operation they stand in for — a synchronous
      * stream copy, `waitable-set.wait`, a blocking cross-component call —
-     * *blocks and then completes* in definitions.py. `Store.lift` reaches
-     * `leave_to` in every one of those executions, so the instance stays
-     * enterable. Poisoning would attribute a permanent fault to a component
+     * *blocks and then completes* in definitions.py. Every one of those
+     * executions returns normally there, so the instance stays healthy.
+     * Poisoning would attribute a permanent fault to a component
      * that, on a complete runtime, is perfectly healthy — and it cascades:
      * one unsupported operation made every later call on that instance report
      * `cannot enter component instance`, which is neither our real behaviour
@@ -1554,8 +1536,6 @@ export function createLiftedFunction(input: {
      *
      * What unwinding must still do on this path, and what it must not:
      *
-     *  - MUST release the reentrance lock (`leave`) — the call is over and no
-     *    activation of this instance survives it.
      *  - MUST unwind the FACT sync-call scopes and restore `may_leave`
      *    (`unwind`), for exactly the reasons it does after a trap: a bail-out
      *    mid-adapter skips `exit-sync-call` and the `may_leave` restore, and
@@ -1600,15 +1580,9 @@ export function createLiftedFunction(input: {
       }
     } catch (e) {
       unwind();
-      if (isCapabilitySignal(e)) leave();
-      else poison(e);
+      if (!isCapabilitySignal(e)) poison(e);
       throw e;
     }
-    // The reentrance gate is released here, before the store is pumped:
-    // `Store.tick` re-enters each waiting thread's instance itself
-    // (`enter_from(None)` / `leave_to(None)`), exactly as in the reference,
-    // where `lift_and_run` ticks after `store.invoke` has returned.
-    leave();
 
     let pending: void | Promise<void>;
     try {
@@ -1676,11 +1650,10 @@ export function createLiftedFunction(input: {
     //
     // A promising-wrapped entry settles a microtask AFTER the guest's core
     // call returns, even when nothing suspended (jspi pin (j)) — so there
-    // is a hop between core return and the host-side result LIFT, and the
-    // reentrance bracket has already been released by then (`leave()` runs
-    // when the first segment parks). In the reference no such window
-    // exists: `canon_lift` for sync options runs core + lift atomically
-    // inside one entered bracket. Admitting another host call into the
+    // is a hop between core return and the host-side result LIFT, with
+    // nothing holding the instance against another host entry. In the
+    // reference no such window exists: `canon_lift` for sync options runs
+    // core + lift atomically. Admitting another host call into the
     // window lets a full guest turn mutate the memory the pending lift
     // will read — observed as `Trap: list too long` lifting the wosh
     // engine's `tick` (`list<list<u8>>`) after a concurrent `feed-keys`
@@ -1813,9 +1786,11 @@ function dtorOptions(instance: ComponentInstanceState): ResolvedOptions {
  *    → `PendingCapability`, or a foreign-task misattribution, the #24 class).
  *
  * Under the lift harness all three go away structurally: the activation has a
- * real `Task` + implicit `Thread`, the entry bracket is released when the
- * first segment parks (`leave()` before `drive`), and settled tails flow
- * through `serviceSettled` like any other lifted sync call.
+ * real `Task` + implicit `Thread`, and settled tails flow through
+ * `serviceSettled` like any other lifted sync call. (CM#705 has since removed
+ * the transient gate entirely, so the first two defects could no longer arise
+ * at all; the history is kept because the Task/Thread shape it forced is
+ * still what makes built-ins inside a dtor well-attributed.)
  *
  * The returned function takes the rep and returns either `undefined` (the
  * activation completed synchronously — the overwhelmingly common case) or a
@@ -1827,7 +1802,7 @@ export function createDtorEntry(input: {
   /**
    * The destructor's core function, unwrapped: `createLiftedFunction` applies
    * `enterWasm` itself per `suspensionMode`. `null` is the reference's
-   * `rt.dtor or (lambda rep: [])` — the bracket still runs.
+   * `rt.dtor or (lambda rep: [])` — the lift still runs.
    */
   dtor: CoreFn | null;
   /** `rt.impl`, the implementing instance the lift enters. */

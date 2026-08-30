@@ -997,22 +997,26 @@ interface PoisonedInstanceLike {
  * **poisoned** guest instance is retired silently via `resetPending`.
  * Notifying it would queue a phantom event into the corpse's waitables, and
  * a later driving loop servicing it would resume machinery whose instance
- * can no longer be entered (`tick` asserts enterability). Host sentinels are
+ * can no longer be entered (`tick` excludes poisoned instances). Host sentinels are
  * not instances at all, so they are always notified.
  *
  * #100: THE HEALTH TEST IS "POISONED", NOT "`mayEnter === false`". The
- * original test used non-enterability as a proxy for deadness. The proxy is
- * unsound in one direction, and the unsoundness stranded healthy tasks:
+ * original test used non-enterability as a proxy for deadness. Settled twice
+ * over now: CM#705 (polyengine#173) deleted `may_enter` from the reference
+ * outright, so the marker is not merely the better test but the only one
+ * left. The original argument, kept because it explains what the marker is
+ * for — the proxy was unsound in one direction, and the unsoundness stranded
+ * healthy tasks:
  *
  *  * (sound half, #84 audit) a healthy guest peer always parks with
  *    `mayEnter === true`. Every park — the callback ABI's waitable-set wait,
  *    and equally a sync-lowered/JSPI peer blocked inside `finishCopy`'s
  *    SITE 4 via `blockCurrentActivation` — yields the thread out of the
- *    scheduler's enter/leave bracket, and the bracket's `leaveTo` runs on the
- *    way out (task/scheduler.ts `Store.tick` :905-917, task/thread.ts
- *    `Thread.resumeWith` :157-179, whose resume-side
- *    `assert_(mayEnterFrom(null))` would fire otherwise). Blocking inside a
- *    wasm frame does NOT hold the enter bracket.
+ *    scheduler's enter/leave bracket, and the bracket's `leaveTo` ran on the
+ *    way out — `Thread.resumeWith`'s resume-side
+ *    `assert_(mayEnterFrom(null))` would have fired otherwise. Blocking
+ *    inside a wasm frame did NOT hold the enter bracket. (Both the bracket
+ *    and that assert are gone as of polyengine#173.)
  *  * (unsound converse) `mayEnter === false` does not imply "poisoned". An
  *    instance that is merely mid-call is also non-enterable, and a CALLER
  *    instance stays non-enterable for the whole duration of a
@@ -1024,7 +1028,7 @@ interface PoisonedInstanceLike {
  *    exact outcome #66 exists to prevent.
  *
  * So the test consults the poison marker itself. It is per-instance and
- * recorded at the single seam every bracket-break site routes through
+ * recorded at the single seam every poisoning site routes through
  * (`notifyInstancePoisoned`, task/scheduler.ts: exec/boundary.ts `poison`,
  * `Store.tick`, `Thread.resumeWith`, the FACT cross-component catches in
  * intrinsics/fact_calls.ts, and cabi/handles.ts's gated destructor call),
@@ -1038,7 +1042,7 @@ interface PoisonedInstanceLike {
  * Why this does not re-open review B2 (phantom events into a corpse): the
  * concern is that a DROPPED event queued onto a waitable of an instance that
  * can never be entered again would be serviced by a later driving loop and
- * resume machinery whose `tick` asserts enterability. "Can never be entered
+ * resume machinery `tick` deliberately excludes. "Can never be entered
  * again" is precisely poisoning — a mid-call instance's `mayEnter` is
  * restored by its own `leaveTo` when the call returns, and its parked task
  * then resumes normally and consumes the event. The narrowed predicate
@@ -1072,8 +1076,9 @@ export function dropSharedForTeardown(
  * Retire every live stream/future end in a trap-poisoned instance's handle
  * table (#66).
  *
- * Rationale: after a trap breaks the enter/leave bracket, `mayEnter` stays
- * false forever, so no task of this instance can ever rendezvous again. Its
+ * Rationale: a trapped instance is a corpse (polyengine's per-instance
+ * poisoning divergence), so no task of this instance can ever rendezvous
+ * again. Its
  * table's `CopyEnd`s are therefore unreachable-forever — leaving their shared
  * objects live strands the peers: a parked HOST operation never settles (its
  * promise hangs), and a LATER host operation would "succeed" against the
@@ -1081,7 +1086,7 @@ export function dropSharedForTeardown(
  * Dropping the shared object now converts both into the spec-shaped DROPPED
  * outcome, and the recorded failure lets the embedder layer brand it.
  *
- * Called from every bracket-break site — exec/boundary.ts `poison()` (the
+ * Called from every poisoning site — exec/boundary.ts `poison()` (the
  * sync-lift path), scheduler.ts `Store.tick` and thread.ts
  * `Thread.resumeWith` (traps during a resumed thread), and the FACT
  * cross-component catches (intrinsics/fact_calls.ts, callee side) — with the
@@ -1159,7 +1164,7 @@ export function retireInstanceAsyncEnds(
   if (failed) throw first;
 }
 
-// `Store.tick`'s bracket-break site reaches the walk through this seam (its
+// `Store.tick`'s poisoning site reaches the walk through this seam (its
 // module cannot import ours — see `setOnInstancePoisoned`); the sync-lift
 // site (exec/boundary.ts `poison`) imports it directly.
 setOnInstancePoisoned(retireInstanceAsyncEnds);

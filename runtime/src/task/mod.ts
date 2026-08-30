@@ -453,12 +453,16 @@ export class Task {
   }
 
   /**
-   * definitions.py `Task.request_cancellation` (line 519). Delivered to a
-   * cancellable thread if one exists and the instance is enterable; otherwise
-   * recorded as pending, to be picked up at the next cancellable block point
-   * (`deliverPendingCancel`).
+   * definitions.py `Task.request_cancellation` (@ 2f13265). Delivered to a
+   * cancellable thread if one exists; otherwise recorded as pending, to be
+   * picked up at the next cancellable block point (`deliverPendingCancel`).
+   *
+   * `caller` is retained for the call-site shape (fact_calls.ts's
+   * `subtask.onCancel`) and for diagnostics; the reentrance condition it used
+   * to feed went away with CM#705 (polyengine#173).
    */
   requestCancellation(caller: ComponentInstanceState | null): void {
+    void caller;
     if (this.state === "initial") {
       this.state = "cancel-delivered";
       this.implicitThread!.resume(CANCELLED_TRUE);
@@ -510,39 +514,30 @@ export class Task {
         }
       }
     }
-    // Delivery needs the callee instance to be enterable — and NOT poisoned.
-    // The marker is the authoritative poisoning input (polyengine#173): a
-    // poisoned instance leaves the cancellation pending. Behaviorally
-    // identical today (the marker locks the leaf's `mayEnter` forever), but
-    // it survives the CM#705 deletion of `may_enter`; the `caller !== inst`
-    // guard is `entering_set`'s vacuous pass, as in `entryRefusal`.
-    const poisoned = caller !== this.inst && isInstancePoisoned(this.inst);
-    if (candidates.length > 0 && !poisoned && this.inst.mayEnterFrom(caller)) {
+    // Merged reference (definitions.py @ 2f13265): `if candidates: deliver`,
+    // full stop — no enterability condition, no bracket (CM#705).
+    //
+    // ONE divergence conjunct survives: a POISONED instance is a corpse whose
+    // threads never resume, so the request parks as pending-cancel forever —
+    // which is the honest state, since a corpse can never reach a cancellable
+    // suspension to deliver at. The reference never faces this because a trap
+    // there kills the whole store. The marker is the authoritative input
+    // (polyengine#173, #251's re-key).
+    if (candidates.length > 0 && !isInstancePoisoned(this.inst)) {
       this.state = "cancel-delivered";
-      this.inst.enterFrom(caller);
       try {
         chooseCandidate(candidates).resume(CANCELLED_TRUE);
       } catch (e) {
-        // Deliberately NOT a `finally`, mirroring `Store.tick`'s
-        // bracket-break discipline (scheduler.ts): the reference wraps the
-        // delivery `resume(Cancelled.TRUE)` in no handler at all
-        // (definitions.py `Task.request_cancellation`, lines 519-532; the
-        // delivery is line 531), so a Trap escaping it never reaches
-        // `leave_to` on line 532 — the entered set stays locked, i.e. the
-        // Component Model's instance poisoning. A `finally` here would
-        // un-poison a half-unwound callee.
+        // A trap escaping the delivery poisons the callee instance
+        // (polyengine#164/#212) — polyengine's per-instance corpse divergence;
+        // the reference wraps this `resume(Cancelled.TRUE)` in no handler at
+        // all and simply ends the world.
         //
         // Capability signals are the exception, exactly as in `tick`: they
-        // mark this RUNTIME incomplete, not the component faulted, and in
-        // the reference the blocking operation completes and `leave_to` IS
-        // reached.
-        if (e instanceof NeedsJspi || e instanceof PendingCapability) {
-          this.inst.leaveTo(caller);
-        } else {
-          // The synthetic root is released so the poisoning stays
-          // per-instance (plan v3 amendment 4); for a guest caller the
-          // entering set is the leaf alone and the release is a no-op.
-          this.inst.releaseSyntheticRootOnPoison();
+        // mark this RUNTIME incomplete, not the component faulted, and in the
+        // reference the blocking operation they stand in for completes
+        // normally.
+        if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
           notifyInstancePoisoned(
             this.inst as unknown as { handles: Iterable<unknown> },
             e,
@@ -550,7 +545,6 @@ export class Task {
         }
         throw e;
       }
-      this.inst.leaveTo(caller);
     } else {
       this.state = "pending-cancel";
     }

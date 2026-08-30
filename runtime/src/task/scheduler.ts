@@ -194,12 +194,12 @@ export function instancePoisonCause(inst: object): unknown {
 
 /**
  * Append the recorded poison cause to an entry-refusal trap message
- * (polyengine#145 ask 1). "cannot enter component instance" covers two states
- * that send an embedder down entirely different debugging paths — a
- * transient reentrance overlap (retry later, look for caller-side call
- * overlap) and a permanently poisoned instance (the corpse of an earlier
- * trap, which this suffix names). Only the poisoned case gets the suffix:
- * the transient message stays byte-identical, and the suffix is
+ * (polyengine#145 ask 1). Since the transient gate went away with CM#705,
+ * "cannot enter component instance" has exactly one cause left — a
+ * permanently poisoned instance, the corpse of an earlier trap — and this
+ * suffix names the trap that made it one. The call is kept unconditional at
+ * the refusal sites (returning `base` unchanged for an unmarked instance) so
+ * the message construction stays in one place; the suffix is
  * conformance-safe because the official suite matches trap messages by
  * substring (harness/src/runner.ts).
  */
@@ -214,45 +214,36 @@ export function withPoisonCause(inst: object, base: string): string {
  * now, and if not, what does the refusal trap say? Returns `null` when entry
  * is allowed, otherwise the exact trap message for `base`.
  *
- * THE POISONING RE-KEY (polyengine#173). Poisoning is decided by the POISON
- * MARKER (`isInstancePoisoned`), not by `mayEnter`. Today the two agree —
- * the marker is only ever set at a bracket-break site that simultaneously
- * leaves the leaf's `mayEnter` false forever, and nothing restores it
- * (`releaseSyntheticRootOnPoison` touches synthetic roots only, and roots are
- * never marked) — so clause 1 implies clause 2 and the re-key is observably
- * neutral. The point is what happens NEXT: CM PR #705 deletes `may_enter`
- * entirely, and at that pin advance clause 2 is deleted wholesale while
- * poisoning survives untouched, because it never depended on `may_enter`.
+ * POISONING IS THE WHOLE MECHANISM (polyengine#173, CM#705 adoption). The
+ * transient reentrance gate is GONE: at the pinned reference
+ * (definitions.py @ 2f13265) `may_enter`, `entering_set`, `enter_from`,
+ * `leave_to` and `ComponentInstance.parent` no longer exist — `Store.lift`
+ * runs `canon_lift` with no gate at all, so host-mediated reentrance into a
+ * live instance is simply VALID. The clause that consulted `mayEnterFrom`
+ * was deleted with the pin advance; #251's re-key onto the marker is what
+ * made that deletion a pure subtraction (the marker never depended on
+ * `may_enter`).
  *
- * Byte identity with the pre-re-key `if (!X.mayEnterFrom(Y)) trap(
- * withPoisonCause(X, BASE))` at every call site:
- *   - marked callee ⇒ clause 1 returns `withPoisonCause(callee, base)`, and
- *     clause 2 would have fired too (marker ⇒ leaf locked forever), yielding
- *     the same suffixed string;
- *   - unmarked and locked ⇒ clause 2 returns `base`, which is exactly what
- *     `withPoisonCause` returns for an unmarked instance;
- *   - unmarked and enterable ⇒ no trap, then as now.
+ * What survives is polyengine's NAMED DIVERGENCE: per-instance poisoning. A
+ * trapped instance is a corpse — entry is refused permanently, with the
+ * recorded cause appended (polyengine#145 ask 1) — where wasmtime instead
+ * kills the whole store. The reference never faces the question because a
+ * trap there is the end of the world.
  *
- * The `caller !== callee` guard on clause 1 preserves the reference's
- * vacuous pass on an EMPTY entering set (definitions.py `entering_set`,
- * line 230: `self_and_ancestors() - caller.self_and_ancestors()`, empty when
- * caller is callee). A dtor invoked from inside its own instance
- * (cabi/handles.ts) is the live case: it must not be refused by its own
- * instance's marker. With the synthetic-root shape (`{leaf, root}` ancestry,
- * mod.ts `enteringSet`), "some member of `enteringSet(caller)` is marked" is
- * exactly `caller !== callee && isInstancePoisoned(callee)`: the only other
- * member a set can hold is the root, and roots are never marked.
+ * The `caller !== callee` guard preserves the reference's vacuous pass on an
+ * EMPTY entering set (the pre-#705 `entering_set` was
+ * `self_and_ancestors() - caller.self_and_ancestors()`, empty when caller is
+ * callee). A dtor invoked from inside its own instance (cabi/handles.ts) is
+ * the live case: it must not be refused by its own instance's marker.
  */
 export function entryRefusal(
-  callee: { mayEnterFrom(caller: unknown): boolean },
+  callee: object,
   caller: unknown,
   base: string,
 ): string | null {
   if (caller !== callee && isInstancePoisoned(callee)) {
     return withPoisonCause(callee, base);
   }
-  // CM#705 deletes `may_enter`; this clause goes with it (polyengine#173).
-  if (!callee.mayEnterFrom(caller)) return base;
   return null;
 }
 
@@ -1029,7 +1020,12 @@ export class Store {
    *
    * A tail whose instance is NOT host-enterable is DEFERRED IN PLACE — left
    * in the queue, skipped here — until the lock releases (issue #156).
-   * `resumeWith` brackets the resumption with `enterFrom(null)`, and under
+   * NOTE (polyengine#173, CM#705): with the transient reentrance gate gone,
+   * `mayEnterFrom(null)` is constant-true and this deferral is INERT — every
+   * non-stale tail is dispatched immediately. The machinery is kept textually
+   * intact pending the contract amendment that deletes the model; the
+   * paragraphs below record why it existed.
+   *   * `resumeWith` brackets the resumption with `enterFrom(null)`, and under
    * the shared synthetic per-instantiation root a host entry into ANY
    * instance of the graph locks the root, so while one instance is entered a
    * sibling's tail cannot be dispatched: dispatching it tripped
@@ -1162,9 +1158,9 @@ export class Store {
   }
 
   /**
-   * definitions.py `Store.tick` (line 597): resume one ready thread, bracketed
-   * by the reentrance gate for a host-initiated entry (`enter_from(None)` /
-   * `leave_to(None)`).
+   * definitions.py `Store.tick` (@ 2f13265): resume one ready thread. Post
+   * CM#705 there is no bracket and no gate — the reference body is exactly
+   * "pick a ready thread, resume it".
    *
    * Returns false when no thread was ready, so callers can distinguish
    * "made progress" from "stuck" without inspecting the queue themselves.
@@ -1188,80 +1184,46 @@ export class Store {
     // Same discipline, other edge: a settled-but-unserviced activation tail
     // (see `settled`) is mid-"atomic resume" from the reference's point of
     // view; scheduling anything before servicing it acts on phantom state.
-    //
-    // Only a SERVICEABLE tail gates: a tail DEFERRED on a non-enterable
-    // instance (issue #156) cannot be dispatched now, and gating on it would
-    // wedge the store (and hot-spin the drivers). It does not need to gate,
-    // because its instance is self-excluded from the candidate set by the
-    // enterability filter below — the same predicate on the same instance —
-    // so no thread of that instance can be resumed while its tail waits.
+    // That is settle-order discipline and has nothing to do with reentrance:
+    // it survives CM#705 unchanged. `hasServiceableSettled` (rather than
+    // "queue non-empty") only because a tail whose thread was already resumed
+    // elsewhere must not wedge the store.
     if (this.hasServiceableSettled()) return false;
-    // Ready is not sufficient: the thread's instance must also be enterable
-    // from the host. The reference *asserts* this in `Store.tick` — a waiting
-    // thread's instance is always re-enterable there, because its host entry
-    // has either left or is itself a waiting thread. That does not hold here.
+    // Ready is sufficient — almost. The reentrance constraint that used to
+    // filter this set is GONE: post-CM#705 (definitions.py @ 2f13265)
+    // `Store.tick` resumes any ready thread with no gate and no bracket, so a
+    // sibling instance's thread going ready while another instance is entered
+    // from the host is simply resumable.
     //
-    // Instances of one linked graph share a Store and, with it, the synthetic
-    // per-instantiation root (plan v3 amendment 4): `enterFrom(null)` locks
-    // the callee AND the root, so while ANY instance is entered from the host
-    // — e.g. a sync export parked on an async host import, which in this
-    // runtime is a real suspension rather than a blocked OS thread — no
-    // instance in the graph is host-enterable. A sibling instance whose
-    // thread goes ready in that window (event-driven wakeups do this on every
-    // clock turn) would then trip the assertion, and the failure escapes
-    // through whatever host-import promise is in flight.
-    //
-    // So "ready but not enterable" is treated as no progress, exactly as the
-    // sync driving loop already does by restricting its candidate set to the
-    // callee instance (`driveSyncLift` below; definitions.py `canon_lift`).
-    // This cannot livelock: the entered call's host import settles from host
-    // JS independently of `tick`, and when that call returns, `leaveTo(null)`
-    // unlocks the root and the skipped threads run on the next turn.
-    // A poisoned instance is excluded by the MARKER, not by its (permanently
-    // false) `mayEnter` — the poisoning re-key of polyengine#173. Identical
-    // behavior today; keyed so the CM#705 removal of `may_enter` deletes only
-    // the second conjunct.
+    // What remains is polyengine's per-instance poisoning divergence: a
+    // poisoned instance is a corpse, its threads must never resume, and the
+    // MARKER is the whole test (#251's re-key). `Thread.resumeWith` makes the
+    // same call on the tail path.
     const candidates = this.readyCandidates().filter((t) =>
-      !isInstancePoisoned(t.task.inst) && t.task.inst.mayEnterFrom(null)
+      !isInstancePoisoned(t.task.inst)
     );
     if (candidates.length === 0) return false;
     const thread = chooseCandidate(candidates);
     const inst = thread.task.inst;
-    inst.enterFrom(null);
-    // Deliberately NOT a `finally`: if the resumed thread traps, the reference
-    // never reaches `leave_to` either (definitions.py `Store.tick`, line 597,
-    // where a Trap propagates out of `thread.resume()`), so the instance stays
-    // locked — the Component Model's instance poisoning. See the `poison`
-    // helper in exec/boundary.ts for the full rationale.
-    //
-    // Capability signals are the exception, for the same reason as there: a
-    // `NeedsJspi`/`PendingCapability` marks an operation this runtime cannot
-    // perform, not a component fault. In the reference that operation blocks
-    // and then completes, so `leave_to` *is* reached and the instance stays
-    // enterable — poisoning here would turn one unsupported operation into a
-    // permanently dead instance.
+    // A trap out of the resumption poisons the instance (polyengine's named
+    // divergence: a per-instance corpse where wasmtime kills the whole store).
+    // Capability signals are the exception: a `NeedsJspi`/`PendingCapability`
+    // marks an operation this runtime cannot perform, not a component fault —
+    // in the reference that operation blocks and then completes, so poisoning
+    // here would turn one unsupported operation into a permanently dead
+    // instance.
     try {
       thread.resume();
     } catch (e) {
-      if (e instanceof NeedsJspi || e instanceof PendingCapability) {
-        inst.leaveTo(null);
-      } else {
-        // The bracket stays broken (instance poisoned, comment above), so
-        // its live stream/future ends can never rendezvous again — retire
-        // them so parked host peers settle instead of hanging (#66).
-        //
-        // The synthetic root (plan v3 amendment 4) is released, though: it is
-        // in this entry's entering set but must not turn per-instance
-        // poisoning into store-wide poisoning. See
-        // `ComponentInstanceState.releaseSyntheticRootOnPoison`.
+      if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
+        // Poisoned: its live stream/future ends can never rendezvous again —
+        // retire them so parked host peers settle instead of hanging (#66).
         //
         // Routed through `notifyInstancePoisoned` (not the raw hook) so the
         // poison MARKER is recorded too (polyengine#145): `Thread.resumeWith`'s
         // quiet-retire of late settled tails and `dispatchableTail`'s
         // dispatch-or-defer decision (#156) both read it, and without the
-        // marker a settled tail of this instance would hit the backstop
-        // assert or defer forever.
-        inst.releaseSyntheticRootOnPoison?.();
+        // marker a settled tail of this instance would defer forever.
         notifyInstancePoisoned(
           inst as unknown as { handles: Iterable<unknown> },
           e,
@@ -1269,7 +1231,6 @@ export class Store {
       }
       throw e;
     }
-    inst.leaveTo(null);
     return true;
   }
 }

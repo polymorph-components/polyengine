@@ -18,6 +18,7 @@ import {
 import { PlanError } from "../../src/plan/mod.ts";
 import { ResourceHandle } from "../../src/cabi/mod.ts";
 import { SyncCallScope } from "../../src/intrinsics/mod.ts";
+import { isInstancePoisoned } from "../../src/task/scheduler.ts";
 
 const root = new URL("../../../", import.meta.url);
 
@@ -259,10 +260,9 @@ Deno.test({
       `expected a lend trap, got: ${error}`,
     );
     // The trap escaped a FACT sync-call bracket mid-argument-translation, so
-    // the entered instance is now poisoned: definitions.py `Store.lift`
-    // (line 578) never reaches `leave_to` when a Trap propagates out of
-    // `canon_lift`, and `test/async/builtin-trap-poisons-instance.wast`
-    // asserts that the next call reports the reentrance error.
+    // the entered instance is now poisoned — polyengine's per-instance corpse
+    // divergence, which `test/async/builtin-trap-poisons-instance.wast`
+    // pins by requiring the next call to be refused.
     assertEq(
       String(catchOf(() => fn(c, "run")())).includes(
         "cannot enter component instance",
@@ -276,10 +276,12 @@ Deno.test({
     // restored and the shared sync-call scope stack emptied (see `unwind` in
     // exec/boundary.ts — that hygiene is still load-bearing for *siblings*
     // even though the entered instance is now poisoned).
-    const poisoned = c.componentInstances.filter((i) => i && !i.mayEnter);
+    const poisoned = c.componentInstances.filter((i) =>
+      i && isInstancePoisoned(i)
+    );
     assertEq(poisoned.length, 1);
     for (const i of c.componentInstances) {
-      if (i && i.mayEnter) assertEq(i.mayLeave, true);
+      if (i && !isInstancePoisoned(i)) assertEq(i.mayLeave, true);
     }
     // A fresh instantiation is unaffected and runs the success path.
     const c2 = await instantiate("relend-borrow", {});
@@ -360,5 +362,48 @@ Deno.test({
     // result distinguishes a real conversion from a straight copy.
     const c = await instantiate("transcode", {});
     assertEq(fn(c, "run")(), 3);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// polyengine#173 (CM#705): HOST-MEDIATED REENTRANCE IS VALID
+// ---------------------------------------------------------------------------
+
+Deno.test({
+  name: "reentrance: a host import may synchronously re-enter its own instance",
+  ignore: shimWasm === null,
+  fn: async () => {
+    // The headline of the CM#705 adoption. Host calls `run`; `run` calls the
+    // host import `log`; the host handler synchronously calls `run` on the
+    // SAME instance again. This used to trap at the host-entry gate
+    // ("cannot enter component instance"): the reference's `Store.lift`
+    // refused a second entry while the first was live.
+    //
+    // Merged reference (definitions.py @ 2f13265): `Store.lift` runs
+    // `canon_lift` with no gate, `may_enter`/`entering_set`/`enter_from`/
+    // `leave_to` do not exist, and nesting host entries is simply legal.
+    // Both calls complete.
+    const logged: number[] = [];
+    let depth = 0;
+    let inner: number | undefined;
+    const c: { exports: Record<string, unknown> } = await instantiate("imports", {
+      "log": (x: unknown) => {
+        logged.push(x as number);
+        if (depth === 0) {
+          depth = 1;
+          // Re-entry into the live instance, host-mediated.
+          inner = fn(c, "run")(10, 20) as number;
+        }
+      },
+      "host:api/math": {
+        add: (a: unknown, b: unknown) => (a as number) + (b as number),
+        greet: (who: unknown) => `Hello, ${who as string}!`,
+      },
+    });
+
+    const outer = fn(c, "run")(1, 2) as number;
+    assertEq(outer, 3, "the outer call completed");
+    assertEq(inner, 30, "and so did the re-entrant inner call");
+    assertEq(logged.join(","), "3,30", "both activations reached the import");
   },
 });
