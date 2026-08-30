@@ -107,6 +107,33 @@ export function needsJspi(what: string): never {
 }
 
 /**
+ * Failure raised when a synchronous entry into an instance would race a
+ * pending lift (contracts/embedder-api.md amendment A25, failure-ladder arm
+ * 2).
+ *
+ * In jspi mode a promising-wrapped entry settles through a microtask hop even
+ * when nothing suspended, and the hop-quiescence gate (exec/boundary.ts)
+ * defers Promise-surface calls that would enter during that window. A
+ * synchronous caller — a resource constructor, or the embedder's `sync()`
+ * adapter — cannot be deferred, so it refuses instead.
+ *
+ * Deliberately *not* a `Trap`, and deliberately raised BEFORE the instance is
+ * entered: nothing was entered, so there is nothing to poison. The refusal is
+ * transient — the instance stays enterable, and the call succeeds on retry
+ * once the in-flight activity settles, or immediately through the
+ * Promise-shaped surface, which defers rather than refusing.
+ */
+export class SyncEntryBusy extends Error {
+  constructor(what: string) {
+    super(
+      `sync entry refused: ${what} (the component instance has activity in ` +
+        `flight; retry once it settles, or use the Promise-shaped call)`,
+    );
+    this.name = "SyncEntryBusy";
+  }
+}
+
+/**
  * Failure raised where a capability scheduled for a later M2 phase is
  * required. Same rationale as `NeedsJspi`: never a `Trap`.
  */

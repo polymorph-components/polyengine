@@ -57,6 +57,14 @@ const MANGLED = /^\[([a-z-]+)\](.*)$/;
 
 /**
  * Decode a mangled leaf name; unmangled names come back as `plain`.
+ *
+ * An unknown bracket form throws rather than falling back to `plain`
+ * (contracts/embedder-api.md §"Getters and setters (pre-ruling…)", final
+ * paragraph): "the runtime refuses unknown bracket forms in mangled names
+ * loudly at instantiation (rather than misbinding them as plain names — a
+ * `[get]foo` treated as a function named `[get]foo` would be wrong in both
+ * directions)". Getter/setter support (`[get]`/`[set]`, upstream
+ * WebAssembly/component-model#701) is tracked in polyengine#254.
  * @internal — leaf-name demangling, performed by the runtime and by
  * bindgen-generated code.
  */
@@ -66,19 +74,26 @@ export function parseLeafName(raw: string): LeafName {
   const [, tag, rest] = m;
   switch (tag) {
     case "constructor":
-      return { form: "constructor", resource: rest };
+      if (!rest.includes("[")) return { form: "constructor", resource: rest };
+      break;
     case "method":
     case "static": {
       const dot = rest.indexOf(".");
       if (dot < 0) break;
-      return {
-        form: tag,
-        resource: rest.slice(0, dot),
-        member: rest.slice(dot + 1),
-      };
+      const resource = rest.slice(0, dot);
+      // A resource name carrying a further bracket (`[method][get]r.p`, the
+      // exact getter/setter-on-instance spelling the pre-ruling names) is
+      // NOT a plain `[method]`/`[static]` leaf — it is one of the still-
+      // unimplemented forms, and must be refused the same way, not
+      // misparsed as a method whose resource is literally `[get]r`.
+      if (resource.includes("[")) break;
+      return { form: tag, resource, member: rest.slice(dot + 1) };
     }
   }
-  // Unknown bracket forms (`[async]`, `[dtor]`, future spellings) are left
-  // alone rather than guessed at: they surface verbatim, which is loud.
-  return { form: "plain", name: raw };
+  throw new Error(
+    `unrecognized mangled export/import name '${raw}': the bracket form is ` +
+      `not one this runtime understands (only [constructor]/[method]/` +
+      `[static] are implemented; getter/setter forms like [get]/[set] are ` +
+      `not yet implemented — polyengine#254)`,
+  );
 }

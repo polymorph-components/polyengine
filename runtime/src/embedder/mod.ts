@@ -92,3 +92,5 @@ export {
   toHost,
   type ValueBridge,
 } from "./values.ts";
+
+export { type Sync, sync } from "./sync.ts";

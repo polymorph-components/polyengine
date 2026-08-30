@@ -21,6 +21,7 @@ import { hostDtorCall } from "../exec/boundary.ts";
 import { COPY_URL, describeCrossCopy } from "./copy.ts";
 import { InvalidHandleError } from "./errors.ts";
 import { camelCase, pascalCase } from "./casing.ts";
+import { markSyncCallable, syncPayloadOf } from "./sync.ts";
 
 /**
  * Internal state of a guest-resource wrapper.
@@ -331,22 +332,35 @@ export interface GuestResourceSpec {
     raw: (...a: unknown[]) => unknown;
     params: ValType[];
     results: ValType[];
+    /** True for an `async func` — see A25's `{ kind: "async" }` brand. */
+    async: boolean;
   }[];
   statics: {
     member: string;
     raw: (...a: unknown[]) => unknown;
     params: ValType[];
     results: ValType[];
+    async: boolean;
   }[];
 }
 
-export type CallAdapter = (
+/**
+ * Build (once, at class-build time — never per call) the Promise-shaped
+ * wrapper for one method/static's raw lifted function, exactly as
+ * `Facade#wrapExportFn` would for a plain export. `buildGuestResourceClass`
+ * reads the A25 brand off the returned wrapper to install the matching
+ * `"method"`/`"free"`/`"async"` brand on the class member it builds around
+ * it — the wrapper itself IS what a per-call closure invokes, so a `self`
+ * receiver is `wrapper(self, ...args)` for a method the same way a bare
+ * export is `wrapper(...args)`.
+ */
+export type ExportWrapper = (
   raw: (...a: unknown[]) => unknown,
   params: ValType[],
   results: ValType[],
+  async: boolean,
   where: string,
-  args: unknown[],
-) => Promise<unknown>;
+) => (...args: unknown[]) => Promise<unknown>;
 
 /**
  * Build the class for a guest-implemented resource.
@@ -360,7 +374,7 @@ export type CallAdapter = (
 export function buildGuestResourceClass(
   spec: GuestResourceSpec,
   rt: ResourceTypeInfo,
-  adapt: CallAdapter,
+  wrapExport: ExportWrapper,
   lowerArgs: (args: unknown[], params: ValType[], where: string) => unknown[],
   // deno-lint-ignore no-explicit-any
 ): any {
@@ -403,23 +417,46 @@ export function buildGuestResourceClass(
   for (const m of spec.methods) {
     const js = camelCase(m.member);
     const where = `${className}.${js}`;
+    // Built ONCE at class-build time (A25: "prototype methods and statics
+    // must carry the brand at class-build time, not per call") — every
+    // instance's method call goes through this same wrapper, receiver
+    // (`self`) prepended.
+    const wrapped = wrapExport(m.raw, m.params, m.results, m.async, where);
+    const methodFn = function (this: GuestResource, ...args: unknown[]) {
+      // params[0] is the `borrow<R>`/`own<R>` self.
+      return wrapped(this, ...args);
+    };
+    const payload = syncPayloadOf(wrapped);
+    if (payload !== undefined) {
+      // A resource method's sync form takes `self` as its first argument —
+      // exactly `wrapped`'s own synchronous form (params[0] IS self), so the
+      // "method" brand's `fn` is `payload.fn` verbatim, just re-tagged so
+      // `sync()` knows this one needs `sync(instance)` rather than being
+      // callable bare.
+      markSyncCallable(
+        methodFn,
+        payload.kind === "free"
+          ? { kind: "method", fn: payload.fn }
+          : payload, // kind "async": pass the brand through unchanged
+      );
+    }
     Object.defineProperty(cls.prototype, js, {
       configurable: true,
       writable: true,
-      value: function (this: GuestResource, ...args: unknown[]) {
-        // params[0] is the `borrow<R>`/`own<R>` self.
-        return adapt(m.raw, m.params, m.results, where, [this, ...args]);
-      },
+      value: methodFn,
     });
   }
   for (const s of spec.statics) {
     const js = camelCase(s.member);
     const where = `${className}.${js} (static)`;
+    const wrapped = wrapExport(s.raw, s.params, s.results, s.async, where);
+    const staticFn = (...args: unknown[]) => wrapped(...args);
+    const payload = syncPayloadOf(wrapped);
+    if (payload !== undefined) markSyncCallable(staticFn, payload);
     Object.defineProperty(cls, js, {
       configurable: true,
       writable: true,
-      value: (...args: unknown[]) =>
-        adapt(s.raw, s.params, s.results, where, args),
+      value: staticFn,
     });
   }
   return cls;

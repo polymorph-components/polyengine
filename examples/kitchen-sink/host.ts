@@ -14,11 +14,14 @@
 //   §8  streams: natural producers in (array / ReadableStream), a
 //       Stream<T> handle out (for-await in chunks)
 //   §9  futures: a Promise in, an EAGER Future handle out
+//   §10 sync(): the explicit synchronous view, driving a cancelable
+//       dispatch from inside a handler that cannot await
 //
 // Run with: ./run.sh
 
 import {
   instantiate,
+  sync,
 } from "@polyengine/runtime/embedder";
 import { suspending, ComponentException } from "@polyengine/protocol";
 import { defaultTranslator } from "@polyengine/translator";
@@ -275,5 +278,61 @@ assertEq(
 const fut = api.deferredAnswer();
 assertEq(typeof fut.drop, "function", "deferred-answer returns a handle");
 assertEq(await fut, 42, "awaiting the handle yields the value");
+
+// --- §10: sync() — the explicit synchronous view --------------------------
+
+// The motivating case (contracts/embedder-api.md §"Functions and async",
+// amendment A25): a cancelable-event dispatcher, DOM's model for
+// preventDefault(). The handler must decide RIGHT NOW, before it returns
+// control to the dispatcher — a Promise cannot express that. Even an
+// ALREADY-RESOLVED Promise only lets its continuation run on a later
+// microtask; by the time `.then()` fires, `dispatch()` below has already
+// returned and the caller has moved on treating the event as un-cancelled.
+// There is no synchronous way to peek inside a Promise.
+//
+// A tiny DOM-free stand-in for that dispatcher:
+interface CancelableEvent {
+  defaultPrevented: boolean;
+  preventDefault(): void;
+}
+function dispatch(handler: (ev: CancelableEvent) => void): boolean {
+  const ev: CancelableEvent = {
+    defaultPrevented: false,
+    preventDefault() {
+      this.defaultPrevented = true;
+    },
+  };
+  handler(ev); // handler must decide before this call returns
+  return !ev.defaultPrevented;
+}
+
+// `api.allowed` is WIT-sync (`func(p: perms) -> bool`) but the generated
+// export is Promise-shaped like every export (contracts/embedder-api.md
+// §"Functions and async"). `sync()` reclaims the synchronous form so a
+// handler can call it and act on the result immediately — no `await`,
+// hence usable from a plain (non-async) handler function.
+//
+// This works for real here, not just in principle: `component` above was
+// instantiated with `readSensor` marked `suspending()` (§2c), so the whole
+// instantiation runs in JSPI mode and every export call goes through the
+// SYNC_ENTRY re-entry path under the hood. `sync(api.allowed)` exercises
+// that path for a genuine JSPI-mode instance — it works here because
+// `allowed` never reaches the suspending `readSensor` import and so
+// completes without parking. (A guest call that DOES park fails loudly
+// instead of hanging — A25's failure ladder: SyncEntryBusy if the instance
+// has in-flight activity to settle first (transient; retry or use the
+// Promise surface), NeedsJspi for a blocking built-in reached through the
+// plain entry (both leave the instance usable), or a trap if the guest
+// genuinely suspends mid-call. `sync()` is for exports KNOWN to complete
+// synchronously, not a way to force one that doesn't.)
+const syncAllowed = sync(api.allowed);
+const proceeded = dispatch((ev) => {
+  if (!syncAllowed({ read: true })) ev.preventDefault();
+});
+assertEq(proceeded, true, "sync-allowed permission not cancelled");
+const cancelled = dispatch((ev) => {
+  if (!syncAllowed({ exec: true })) ev.preventDefault();
+});
+assertEq(cancelled, false, "sync-disallowed permission cancelled the event");
 
 console.log(`kitchen-sink example: OK (${logs.length} log lines)`);

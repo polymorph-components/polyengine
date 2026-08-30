@@ -167,7 +167,7 @@ Deno.test({
     // jspi mode promising-wraps every lifted entry, so the entry returns a
     // Promise even when the activation never suspends — which a JS class
     // constructor cannot await. Constructor exports carry a plain-entered
-    // variant for exactly this (exec/boundary.ts CONSTRUCTOR_SYNC_ENTRY);
+    // variant for exactly this (exec/boundary.ts SYNC_ENTRY);
     // this pins `new` working under forced jspi, method calls included
     // (the polymorph-iroh endpoint's `new EndpointOptions(identity)` is the
     // consumer shape that found the gap).

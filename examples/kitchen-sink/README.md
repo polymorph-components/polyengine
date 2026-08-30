@@ -13,6 +13,7 @@ One world exercising the surfaces an embedder actually touches:
 | guest-implemented resource (`using`) | `api.counter` | `Counter` | §6 |
 | streams: producers in, `Stream<T>` handle out | `tally`, `countdown` | §8 | §8 |
 | futures: Promise in, EAGER `Future<T>` handle out | `promised-double`, `deferred-answer` | §9 | §9 |
+| `sync()`: the synchronous view of a WIT-sync export | `allowed` | | §10 |
 
 Run it:
 
@@ -51,6 +52,17 @@ What to notice:
   exports**: `deferredAnswer()` returns an eager `Future<u32>` handle
   synchronously (a Promise wrapper would adopt the thenable handle and
   make `drop`/`cancel` unreachable). Awaiting the handle yields the value.
+- **`sync()` reclaims the synchronous form of a WIT-sync export**, for a
+  handler that must decide before it returns (cancelable-event dispatch,
+  DOM's `preventDefault()` — even an already-resolved Promise only lets its
+  continuation run on a later microtask, too late once the handler has
+  returned). `sync(api.allowed)` works here for real: this instantiation
+  runs in JSPI mode (`read-sensor` is `suspending()`), so the call exercises
+  the SYNC_ENTRY re-entry path — it succeeds because `allowed` never
+  reaches the suspending import and so completes without parking. A guest
+  call that DOES try to park fails loudly instead (`NeedsJspi` /
+  `SyncEntryBusy` / trap) — `sync()` is for exports known to complete
+  synchronously, not a way to force one that doesn't.
 
 Deliberately absent (to stay approachable): async-typed *imports* and
 `error-context` — see `contracts/embedder-api.md` until an example covers

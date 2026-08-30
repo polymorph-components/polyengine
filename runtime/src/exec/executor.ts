@@ -42,7 +42,7 @@ import type {
 } from "../plan/format.ts";
 import type { LoadedPlan, LoadedType } from "../plan/loader.ts";
 import {
-  CONSTRUCTOR_SYNC_ENTRY,
+  SYNC_ENTRY,
   type CoreFn,
   createDtorEntry,
   createLiftedFunction,
@@ -869,20 +869,23 @@ class Executor {
           syncCallStack: this.syncCallStack,
           allInstances: () => this.componentInstances.values(),
         });
-        // Constructor exports additionally carry a plain-entered variant
-        // (see CONSTRUCTOR_SYNC_ENTRY): in jspi mode the promising-wrapped
-        // entry above necessarily returns a Promise, which a JS class
-        // constructor cannot await. Deliberately NOT noteEntry()-recorded —
-        // this is the one documented exception to the bridge invariant
-        // (entries wrapped iff imports wrapped), safe because a
-        // synchronously-completing activation never reaches the Suspending
-        // seam.
-        if (
-          this.suspensionMode === "jspi" &&
-          exp.name.startsWith("[constructor]")
-        ) {
+        // Every SYNC-TYPED export additionally carries a plain-entered
+        // variant (see SYNC_ENTRY, contracts/embedder-api.md amendment A25):
+        // in jspi mode the promising-wrapped entry above necessarily returns
+        // a Promise, which some host contexts cannot use however promptly it
+        // resolves — a JS class constructor cannot await it at all, and the
+        // embedder's `sync()` adapter exists to ask for the synchronous form
+        // of any sync-typed export. Async-typed exports have no synchronous
+        // form by definition and get none.
+        //
+        // Deliberately NOT noteEntry()-recorded — this is the documented
+        // exception to the bridge invariant (entries wrapped iff imports
+        // wrapped), safe because a synchronously-completing activation never
+        // reaches the Suspending seam. A25 extends the exception from
+        // constructors to all sync entries.
+        if (this.suspensionMode === "jspi" && !ft.async) {
           (value as unknown as Record<PropertyKey, unknown>)[
-            CONSTRUCTOR_SYNC_ENTRY
+            SYNC_ENTRY
           ] = createLiftedFunction({
               name: `${path} (sync entry)`,
               ft,
@@ -893,6 +896,12 @@ class Executor {
               trapState: this.trapState,
               syncCallStack: this.syncCallStack,
               allInstances: () => this.componentInstances.values(),
+              // A25 arm 2: a synchronous caller cannot be deferred by the
+              // hop-quiescence gate, so it refuses (SyncEntryBusy) instead.
+              // This deliberately changes constructor behaviour: the
+              // constructor sync entry previously bypassed the gate
+              // entirely, a latent lift-corruption window.
+              refuseOnEntryHops: true,
             });
         }
         return { kind: "value", value };

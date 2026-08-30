@@ -359,7 +359,11 @@ class PeerTrappedError extends Error {  // A7: a stream/future op whose peer ins
   immediately). One calling convention; async-first per docs/architecture.md §1. Exactly
   two exceptions (C2 amendments): resource constructors (synchronous —
   see Resources) and `future<T>`-typed results (eager handles — see
-  Streams and futures).
+  Streams and futures). The default surface is Promise-shaped; a
+  synchronous *view* of it exists as an explicit per-use adapter —
+  `sync()`, amendment A25 below — and WIT getters/setters are pre-ruled
+  to ride it as accessors once they become implementable (see
+  §"Resources" → "Getters and setters").
 - **Imports match their WIT type**: an `async func` import may be a plain
   `async` JS function (or return a value synchronously); a sync `func`
   import is typed to return `T` synchronously. Returning a Promise from a
@@ -480,6 +484,92 @@ class PeerTrappedError extends Error {  // A7: a stream/future op whose peer ins
   discards), calls that resolve eagerly — the signal simply never fires.
   The signal fires only for guest-initiated cancellation; instance
   teardown does not abort in-flight calls (future amendment material).
+- **`sync()` adapts a WIT-sync export to a synchronous call** (amendment
+  A25, 2026-08-30). Some host contexts cannot usefully receive a Promise
+  no matter how promptly it resolves: an event handler deciding whether
+  to call `preventDefault()` before it returns, a sort comparator, a
+  `Proxy` trap, a JS accessor. Even an already-resolved Promise defers
+  observation by a microtask, which is too late for all of these. For a
+  WIT-**sync** export whose guest completes synchronously — the
+  overwhelmingly common case for sync-typed WIT — the runtime can deliver
+  the result synchronously, and `sync()` is the explicit spelling for
+  asking it to. The default surface stays Promise-shaped; `sync()` is an
+  adapter the embedder applies per use, never a mode.
+
+  **Placement and spelling.** `sync()` and its types (`Sync<F>`) are
+  exported from `@polyengine/runtime/embedder` — application machinery in
+  A22's sense, like `createStream`: only an instantiating application
+  holds export functions, so this is deliberately NOT host-module
+  vocabulary and does not touch `@polyengine/protocol`. Recognition is by
+  brand (`polyengine.syncCallable/1`, a registry symbol per A9) so views
+  work across mixed runtime copies. Dispatch by target shape:
+
+  - `sync(fn)` where `fn` is a lifted export function (plain export,
+    interface member, or resource static): returns the synchronous form
+    `(...args) => T`.
+  - `sync(instance)` where `instance` is a guest-resource wrapper:
+    returns a view object whose members call the synchronous forms with
+    `instance` as receiver. Calling `sync(method)` on a bare prototype
+    method throws (`TypeError`) naming the `sync(instance)` spelling —
+    a free function cannot supply the receiver.
+  - `sync(cls)` where `cls` is a guest-resource class: returns a view
+    object of synchronous statics (constructors are already synchronous;
+    `new` the class itself).
+  - `sync(record)` where `record` is an exports record or nested
+    interface record: returns a view with every member mapped by these
+    same rules, recursively; non-branded members pass through unchanged.
+  - Views are stable: repeated `sync(x)` on the same target returns the
+    same view object.
+  - `sync()` on an **async-typed** export throws `TypeError` at adapter
+    time, naming the export and its async type: async WIT functions have
+    no synchronous form by definition. Anything unbranded also throws
+    `TypeError`.
+
+  **Call semantics.** Arguments lower synchronously; the call enters
+  through a plain (non-`promising`) entry; the reference's synchronous
+  driving loop (`canon_lift`, definitions.py line 2213) runs the task to
+  resolution; results lift synchronously. A `result<T, E>` in
+  function-result position throws `ComponentException<E>` synchronously
+  and resolves `T` otherwise, exactly as the Promise surface rejects and
+  resolves; handle-valued results (streams, futures, resources) return
+  their handles synchronously by the usual value mapping. Call-scoped
+  borrows are released on completion or unwind, as on the async surface.
+
+  **Failure ladder** (ordered; the first three are non-poisoning and
+  leave the instance enterable):
+
+  1. *Entry refusals* shared with the Promise surface (reentrance
+     forbidden, poisoned-instance refusal naming the original trap) are
+     thrown synchronously, before entering.
+  2. *Hop-window contention* (jspi mode only): a promising-wrapped entry
+     settles through a microtask hop even when nothing suspended, and the
+     hop-quiescence gate defers Promise-surface calls that would race a
+     pending lift. A synchronous call cannot defer, so it **refuses**
+     instead: `SyncEntryBusy` (`e.name === "SyncEntryBusy"`), a
+     transient, non-poisoning refusal — retry after in-flight activity
+     settles, or use the Promise surface. The constructor sync entry
+     (below) previously bypassed the hop gate entirely; it now shares
+     this refusal, closing a latent lift-corruption window.
+  3. *Blocking built-in* reached through the plain entry: `NeedsJspi`, a
+     capability error — same as the constructor rule.
+  4. *Genuine suspension*: a `Suspending`-wrapped host import reached
+     from the unwrapped frame fails as a trap, and a trap escaping a
+     lifted call poisons the entered instances (CM poisoning semantics).
+     This is the documented cost, stated loudly: `sync()` is for calls
+     the embedder knows complete synchronously. A component instantiated
+     with zero `suspending()`-marked imports and no async built-ins can
+     never hit this arm.
+
+  **Mechanics and cost.** In plain mode the lifted function already
+  completes synchronously inside the entered bracket; `sync()` merely
+  skips the Promise wrapper — near-zero cost. In jspi mode every
+  sync-typed export carries a second, plain-entered lifted entry
+  (generalizing the constructor-only `CONSTRUCTOR_SYNC_ENTRY` mechanism
+  to a uniform `SYNC_ENTRY`); like the constructor entry it is
+  deliberately not recorded against the bridge invariant (entries
+  wrapped iff imports wrapped) — safe because a synchronously-completing
+  activation never reaches the Suspending seam. Unused sync entries cost
+  nothing per call.
 
 ## Resources
 
@@ -505,11 +595,14 @@ handle, the runtime calls `instance[Symbol.dispose]?.()` (dtor). Method
 `self` is the instance — no reps, no side tables.
 
 **Constructors are synchronous** (C2 amendment): a JS class constructor
-cannot await, so `new R(...)` is the one exception to Promise-shaped
-exports. A guest constructor that does not complete synchronously raises
+cannot await, so `new R(...)` is one of the two exceptions to
+Promise-shaped exports (§"Functions and async"). A guest constructor that
+does not complete synchronously raises
 a named error rather than half-constructing; if a consumer ever needs a
 suspending constructor, the escape hatch is a generated async static
-factory — deferred until demanded.
+factory — deferred until demanded. Since A25 the constructor's plain
+entry is one instance of the general `SYNC_ENTRY` mechanism and shares
+its failure ladder, including the `SyncEntryBusy` hop-window refusal.
 
 Ownership at the boundary, both directions:
 
@@ -572,6 +665,64 @@ wrapper stays inside the pattern):
 Named types in the imported interface (a `record decoder-options` the
 constructor takes, say) need no imports-object entry — only functions and
 resource classes are read from the embedder.
+
+### Getters and setters (pre-ruling, 2026-08-30 — not yet implementable)
+
+Upstream, WebAssembly/component-model#701 (approved, emoji-gated 📡) adds
+property getters and setters to WIT and the name mangling: `[get]foo` /
+`[set]foo` at interface level, `[method][get]r.foo` / `[method][set]r.foo`
+on resource instances, `[static][get]r.foo` / `[static][set]r.foo` on
+resource types. Validation upstream: getters take no parameters (beyond
+`self`) and must return a value; setters take exactly one parameter
+(beyond `self`) and return nothing or `result<_, error?>`; **`[get]`/
+`[set]` functions must not be `async`**; every `[set]` requires its
+`[get]`; getter/setter type agreement is deliberately not required
+(WebIDL `PutForwards` precedent). Implementation here is blocked on the
+toolchain (spec merge → wit-parser/wasm-tools → a wasmtime release
+carrying the 📡 gate → bumping the pinned `wasmtime-environ`); the
+dependency chain is tracked in polyengine#254. This section pre-rules the
+JS shape so the eventual implementation is mechanical.
+
+**Export side (guest-implemented): real JS accessors, sync-required both
+directions.** Bindgen emits `get prop(): T` / `set prop(v)` as true
+accessors — on resource classes for `[method]` forms, as static accessors
+for `[static]` forms, and on the exports record for interface-level
+forms. Accessors ride A25's sync calling convention: the underlying calls
+enter through `SYNC_ENTRY` and share A25's failure ladder, so a guest
+getter/setter that parks fails with A25's named errors rather than
+half-working. Accessors thereby join constructors as sync-required
+contexts (a JS getter *could* return a Promise, but a JS setter cannot
+express async completion or rejection at all — the assignment expression
+discards the setter's continuation; symmetric sync-required semantics
+are ruled to match, and match WebIDL expectations). A fallible setter
+(`result<_, error?>`) throws `ComponentException` synchronously.
+Divergent getter/setter types map to TS 4.3+ asymmetric accessor types.
+The WASI migration path (`get-prop`/`set-prop` *methods*) stays
+Promise-shaped like any method; where the spec permits both spellings to
+coexist and a bindings collision results, **the accessor wins** and the
+shadowed method is dropped with a bindgen warning (the spec sanctions
+generator choice here).
+
+**Import side (host-implemented): property get and assignment on the A2
+receiver.** `[get]foo` dispatches as a property read of
+`self[camelCase(foo)]` (or of the containing interface object for
+interface-level forms) and `[set]foo` as the corresponding assignment —
+per call, receiver rules unchanged from A2. This retires limit 1 of the
+platform-class pattern above for WIT worlds that declare accessors:
+`URLSearchParams.prototype.size` becomes bindable as `size: get() ->
+u32`. Accessors are never `suspending()`-markable (consistent with the
+upstream not-`async` rule, with the wrap-time probe's
+data-properties-only constraint, and with `@suspending`'s existing loud
+refusal of accessor positions); a host getter that returns a Promise is
+refused exactly as any sync-typed import returning a Promise without the
+mark (A1).
+
+**Until support lands**: the runtime refuses unknown bracket forms in
+mangled names loudly at instantiation (rather than misbinding them as
+plain names — a `[get]foo` treated as a function named `[get]foo` would
+be wrong in both directions), and the translator keeps the upstream
+feature gate off. Digest impact: none expected — mangled externnames
+differ textually and function kind is not separately hashed.
 
 ## Streams and futures
 
@@ -992,6 +1143,7 @@ equivalent of a semver major:
 | `polyengine.suspending/1` | the marked function / class prototype (A1/A2) | suspendable sync imports |
 | `polyengine.deferCancel/1` | the marked function (A23) | imports exempt from cancel-discard |
 | `polyengine.abortable/1` | the marked function (A24) | imports receiving a per-call AbortSignal |
+| `polyengine.syncCallable/1` | lifted export functions and guest-resource members (A25; defined in the runtime — application-tier, not host-module vocabulary) | sync-callable exports and their synchronous forms |
 | `polyengine.stream/1` | `Stream.prototype` | embedder stream handles |
 | `polyengine.streamWriter/1` | `StreamWriter.prototype` (A22) | embedder stream writer handles |
 | `polyengine.future/1` | `Future.prototype` | embedder future handles |

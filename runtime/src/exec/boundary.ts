@@ -45,6 +45,7 @@ import {
   Store,
   storeQuiescent,
   Subtask,
+  SyncEntryBusy,
   WaitableSet,
   SubtaskState,
   Task,
@@ -1260,28 +1261,35 @@ function takeHostFailure(store: Store): unknown {
  *     needs genuine wasm-frame suspension: `needsJspi`, at the precise point.
  */
 /**
- * The plain-entered variant of a `[constructor]` export in jspi mode,
- * attached to the promising-wrapped lifted function under this symbol.
+ * The plain-entered variant of a **sync-typed** lifted export in jspi mode,
+ * attached to the promising-wrapped lifted function under this symbol
+ * (contracts/embedder-api.md §"Functions and async", amendment A25).
  *
- * A WIT constructor is surfaced as a JS class constructor
- * (contracts/embedder-api.md §"Resources"), and a JS constructor cannot
- * await — but in jspi mode every promising-wrapped entry returns a Promise
- * even when the activation completes without suspending (jspi pin (e)). So
- * constructor exports carry a second lifted function whose ENTRY is plain
- * (unwrapped): a constructor that completes synchronously — the
- * overwhelmingly common case; WIT constructors are always sync-typed —
- * returns its rep synchronously through it.
+ * In jspi mode every promising-wrapped entry returns a Promise even when the
+ * activation completes without suspending (jspi pin (e)). Some host contexts
+ * cannot use a Promise no matter how promptly it resolves, so each sync-typed
+ * export carries a second lifted function whose ENTRY is plain (unwrapped):
+ * a guest activation that completes synchronously — the overwhelmingly common
+ * case for sync-typed WIT — delivers its results synchronously through it.
  *
- * The cost is confined to genuinely-suspending constructors, which no JS
- * host can surface as `new` anyway: a blocking built-in reached through the
- * plain entry signals `NeedsJspi` (a capability error, instance left
- * enterable), and a Suspending-wrapped host import reached from the
- * unwrapped frame fails as a trap. Both name the constructor rather than
- * silently deadlocking.
+ * Two consumers, one mechanism:
+ *
+ *  * **resource constructors** — a WIT constructor is surfaced as a JS class
+ *    constructor (§"Resources") and a JS constructor cannot await, so the
+ *    embedder layer reads this symbol unconditionally for `[constructor]`
+ *    exports;
+ *  * **the embedder `sync()` adapter** (A25) — the explicit per-use
+ *    synchronous view of any sync-typed export.
+ *
+ * The cost is confined to genuinely-suspending activations: a blocking
+ * built-in reached through the plain entry signals `NeedsJspi` (a capability
+ * error, instance left enterable), and a `Suspending`-wrapped host import
+ * reached from the unwrapped frame fails as a trap. Both name the export
+ * rather than silently deadlocking. A call made while the instance has
+ * hop-parked activations refuses with `SyncEntryBusy` before entering
+ * (`refuseOnEntryHops` below).
  */
-export const CONSTRUCTOR_SYNC_ENTRY: unique symbol = Symbol(
-  "polyengine.constructorSyncEntry",
-);
+export const SYNC_ENTRY: unique symbol = Symbol("polyengine.syncEntry");
 
 export function createLiftedFunction(input: {
   name: string;
@@ -1325,6 +1333,22 @@ export function createLiftedFunction(input: {
    * Promise, which it can never advance, and declares a bogus deadlock.
    */
   allowAsyncCompletion?: boolean;
+  /**
+   * Refuse — synchronously, before entering — a call made while the instance
+   * has HOP-parked activations, instead of deferring it (amendment A25,
+   * failure-ladder arm 2).
+   *
+   * Set for the `SYNC_ENTRY` variant, which is built with
+   * `suspensionMode: "plain"` inside a *jspi-mode* instantiation: the
+   * hop-quiescence gate below is keyed on this function's own mode and so is
+   * dead for that variant, yet the hazard it exists to prevent is the
+   * instance's, not the entry's — a hop-parked activation's pending lift
+   * reads memory a fresh guest turn would mutate (see the gate's comment).
+   * A synchronous caller cannot be deferred, so it refuses instead. The
+   * refusal is pre-enter, hence non-poisoning: nothing was entered, so there
+   * is nothing to poison — the same structural safety as `entryRefusal`.
+   */
+  refuseOnEntryHops?: boolean;
 }): (...args: ComponentValue[]) => unknown {
   const {
     name,
@@ -1641,6 +1665,14 @@ export function createLiftedFunction(input: {
   };
 
   return (...hostArgs: ComponentValue[]): unknown => {
+    // A25 arm 2: the synchronous variant refuses rather than deferring, and
+    // does so FIRST — before the arity check's sibling logic reaches
+    // `invokeNow` — because the refusal must be pre-enter to stay
+    // non-poisoning. See `refuseOnEntryHops` above for why the mode-keyed
+    // gate below cannot cover this variant.
+    if (input.refuseOnEntryHops && entryHopThreads(store, inst).length > 0) {
+      throw new SyncEntryBusy(name);
+    }
     if (hostArgs.length !== ft.params.length) {
       throw new TypeError(
         `${name}: expected ${ft.params.length} argument(s), got ${hostArgs.length}`,
