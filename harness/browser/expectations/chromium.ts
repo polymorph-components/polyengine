@@ -29,6 +29,12 @@
 // Measured 2026-08-09 on HeadlessChrome/151.0.7922.34 (playwright 1.62.1,
 // linux-arm64). JSPI is present and functional (`WebAssembly.Suspending` /
 // `promising` + a live suspend/resume round trip).
+//
+// CM#705 pin advance to 2f13265 (polyengine#173): re-measured (this host is
+// aarch64) — full Deno-lane parity holds exactly, zero deltas, zero stale
+// deltas. Corpus grew 1416->1475 commands; see harness/src/xfail.ts and
+// harness/shell/expectations/sm-pinned.ts's header for the new-class
+// breakdown (engine-independent by construction).
 
 import type { LaneExpectation } from "./types.ts";
 
@@ -41,19 +47,12 @@ export const chromium: LaneExpectation = {
     "Any delta at all is a gate failure.",
   deltas: [],
   // Identical to the Deno lane's TOTAL row.
-  // +21 commands / +20 xfail / +1 pending-runtime vs the seed measurement:
-  // upstream during-sync-call-* tests (CM submodule bump to 4142913) fail
-  // at TRANSLATION (wasmparser pin drift, engine-independent — see
-  // harness/src/xfail.ts), so the shift is uniform across lanes.
-  // +3 passed / -3 xfail when #13 closed drop-stream:158 +
-  // drop-cross-task-borrow:309 (trap-wording parity, engine-independent)
-  // and binary:1421 (plan v4 core-module exports).
   totals: {
-    commands: 1416,
-    executed: 1369,
-    passed: 1257,
+    commands: 1475,
+    executed: 1428,
+    passed: 1263,
     failed: 0,
-    xfail: 112,
+    xfail: 165,
     pendingRuntime: 42,
     pendingCapability: 0,
     unsupportedDirective: 5,

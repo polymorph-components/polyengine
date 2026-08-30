@@ -30,6 +30,22 @@
 // A future re-pin (pins.json version bump) that changes these totals is a
 // FINDING to triage before the pin bump lands, not silently absorbed here —
 // bump this file's totals only after re-measuring against the new pin.
+//
+// CM#705 pin advance to 2f13265 (polyengine#173): totals bumped to the
+// engine-independent Deno-lane baseline (1475/1428/1263 passed/165 xfail/42
+// pending-runtime/5 unsupported-directive — see harness/src/xfail.ts and
+// sm-pinned.ts's header for the new-class breakdown) WITHOUT a local
+// re-measurement: this lane is x86_64-only and self-skips on this
+// aarch64 dev host (see the recipe body in `justfile`'s `shells` target).
+// Every OTHER pinned engine (sm-pinned, node-pinned, sm-nightly,
+// bun-pinned — all re-measured on aarch64 this round) hit EXACT Deno-lane
+// parity with zero per-row deltas, and this lane's own history is "same
+// rev, same hash, same corpus => same result" (see the TOTALS note above) —
+// so this bump is UNVERIFIED ON AARCH64, MEASURED-BY-CI: the x64 CI leg of
+// `core` is what actually re-confirms it against the new pin (as it did for
+// the prior bump per the CONFIRMED note above). Any delta the CI leg finds
+// there is a finding to triage before merge, not something this dev-host
+// pass could have caught.
 
 import type { ShellLaneExpectation } from "./types.ts";
 
@@ -43,19 +59,12 @@ export const jscPinned: ShellLaneExpectation = {
     "Required gate — promoted from the jsc-trunk canary at this exact, " +
     "hash-pinned rev.",
   deltas: [],
-  // +21 commands / +20 xfail / +1 pending-runtime vs the seed measurement:
-  // upstream during-sync-call-* tests (CM submodule bump to 4142913) fail
-  // at TRANSLATION (wasmparser pin drift, engine-independent — see
-  // harness/src/xfail.ts), so the shift is uniform across lanes.
-  // +3 passed / -3 xfail when #13 closed drop-stream:158 +
-  // drop-cross-task-borrow:309 (trap-wording parity, engine-independent)
-  // and binary:1421 (plan v4 core-module exports).
   totals: {
-    commands: 1416,
-    executed: 1369,
-    passed: 1257,
+    commands: 1475,
+    executed: 1428,
+    passed: 1263,
     failed: 0,
-    xfail: 112,
+    xfail: 165,
     pendingRuntime: 42,
     pendingCapability: 0,
     unsupportedDirective: 5,

@@ -42,6 +42,12 @@
 // Track this file the same way `harness/browser/expectations/firefox.ts`
 // tracks Firefox: any future delta gets a named, dated entry here, never a
 // blanket overlay.
+//
+// CM#705 pin advance to 2f13265 (polyengine#173): re-measured (this host is
+// aarch64) — full Deno-lane parity holds exactly, zero deltas, zero stale
+// xfails. Corpus grew 1416->1475 commands; see harness/src/xfail.ts and
+// sm-pinned.ts's header for the new-class breakdown (engine-independent by
+// construction).
 
 import type { ShellLaneExpectation } from "./types.ts";
 
@@ -53,19 +59,12 @@ export const smNightly: ShellLaneExpectation = {
     "zero deltas, all compile-probes true (multi-memory/wasm-GC/EH/memory64/" +
     "tail-calls/relaxed-simd), JSPI round trip verified end to end.",
   deltas: [],
-  // +21 commands / +20 xfail / +1 pending-runtime vs the seed measurement:
-  // upstream during-sync-call-* tests (CM submodule bump to 4142913) fail
-  // at TRANSLATION (wasmparser pin drift, engine-independent — see
-  // harness/src/xfail.ts), so the shift is uniform across lanes.
-  // +3 passed / -3 xfail when #13 closed drop-stream:158 +
-  // drop-cross-task-borrow:309 (trap-wording parity, engine-independent)
-  // and binary:1421 (plan v4 core-module exports).
   totals: {
-    commands: 1416,
-    executed: 1369,
-    passed: 1257,
+    commands: 1475,
+    executed: 1428,
+    passed: 1263,
     failed: 0,
-    xfail: 112,
+    xfail: 165,
     pendingRuntime: 42,
     pendingCapability: 0,
     unsupportedDirective: 5,

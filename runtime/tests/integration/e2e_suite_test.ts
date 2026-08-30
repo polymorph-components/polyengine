@@ -404,6 +404,43 @@ async function commandsOf(dir: string): Promise<[string, WastCommand[]][]> {
 }
 
 /**
+ * Known acceptance gaps for the blanket verdict check below: wasmparser
+ * 0.252 (pinned via wasmtime-environ 47.0.3, crates/translator-shim)
+ * validates components that CM#703/#704 ("name rules") and CM#688
+ * ("max-value-size") — pulled in by the CM#705 pin advance, polyengine#173
+ * — newly require rejecting. Tracked https://github.com/polymorph-components/polyengine/issues/248.
+ *
+ * Authoritative source of truth for these rows is harness/src/xfail.ts (same
+ * (file, line) keys): its stale-xfail detector (harness/tests/
+ * conformance_test.ts) fails loudly the moment any of these rows starts
+ * validating-then-rejecting for real, so when the wasmtime-environ bump
+ * lands, the harness turns stale FIRST and this allowlist must be pruned in
+ * the same PR (it does not self-detect staleness — it is an allowlist, not
+ * an xfail list with its own audit).
+ *
+ * Exact-match only: a (file, line) pair not in this set still goes through
+ * the full phase-verdict check below.
+ */
+const KNOWN_ACCEPTANCE_GAPS: ReadonlySet<string> = new Set([
+  // name-rules-47 (https://github.com/polymorph-components/polyengine/issues/248): kebab-case name-folding import
+  // conflicts wasmparser 0.252 does not detect.
+  "kebab.json:149",
+  "kebab.json:154",
+  "kebab.json:159",
+  "kebab.json:164",
+  "kebab.json:169",
+  // max-value-size-47 (https://github.com/polymorph-components/polyengine/issues/248): the elem_size(t, i64) < 2^28
+  // check wasmparser 0.252 does not enforce.
+  "max-value-size.json:25",
+  "max-value-size.json:31",
+  "max-value-size.json:37",
+  "max-value-size.json:43",
+  "max-value-size.json:48",
+  "max-value-size.json:57",
+  "max-value-size.json:63",
+]);
+
+/**
  * Every `assert_invalid` / `assert_malformed` component in `binary/` and
  * `validation/` must be rejected by the translator *with a validation-phase
  * verdict*.
@@ -427,6 +464,7 @@ Deno.test({
             continue;
           }
           if (cmd.kind !== "component" || cmd.module_type !== "binary") continue;
+          if (KNOWN_ACCEPTANCE_GAPS.has(`${file}:${cmd.line}`)) continue;
           const bytes = await Deno.readFile(new URL(cmd.filename!, base));
           checked++;
           try {
@@ -500,16 +538,21 @@ Deno.test({
   },
 });
 
-// test/binary/binary.wast:1421 — a component exporting one of its own
+// test/binary/binary.wast:1433 — a component exporting one of its own
 // embedded core modules (plan-format.md v4 amendment 2, polyengine#13). The
 // export surfaces as the already-compiled `WebAssembly.Module`, and it is
 // the *embedded* module: instantiating it works and its export list matches
-// the wast source (an empty module).
+// the wast source (an empty module). Artifact index shifted 115->116 by the
+// CM#705 pin advance (polyengine#173): CM#698 (dff1181, "fix some spec and
+// test typos") added 12 lines earlier in binary.wast, renumbering this
+// component from wast line 1421 to 1433 and its testgen-assigned positional
+// artifact index from 115 to 116 (verified:
+// `git -C third_party/component-model show 2f13265:test/binary/binary.wast`).
 Deno.test({
-  name: "suite binary.115: a core-module export surfaces as WebAssembly.Module",
+  name: "suite binary.116: a core-module export surfaces as WebAssembly.Module",
   ignore: !ready,
   fn: async () => {
-    const c = await instantiate("binary", "binary.115.wasm");
+    const c = await instantiate("binary", "binary.116.wasm");
     const m = c.exports["m"];
     assertEq(
       m instanceof WebAssembly.Module,
@@ -517,7 +560,7 @@ Deno.test({
       `export 'm' should be a WebAssembly.Module, got ${typeof m}`,
     );
     const inst = new WebAssembly.Instance(m as WebAssembly.Module);
-    assertEq(Object.keys(inst.exports).length, 0); // binary.wast:1423: empty module
+    assertEq(Object.keys(inst.exports).length, 0); // binary.wast:1435: empty module
   },
 });
 
