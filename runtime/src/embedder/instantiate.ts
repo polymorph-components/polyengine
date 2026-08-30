@@ -18,7 +18,7 @@ import type { ComponentValue } from "../cabi/types.ts";
 import { Trap } from "../cabi/trap.ts";
 import {
   type ComponentHandle,
-  CONSTRUCTOR_SYNC_ENTRY,
+  SYNC_ENTRY,
   type HostImports,
   hostResourceType,
   instantiateComponent,
@@ -39,6 +39,7 @@ import { type ImportLeaf, requiredImports } from "./imports.ts";
 import { hostDtorCall } from "../exec/boundary.ts";
 import {
   buildGuestResourceClass,
+  type ExportWrapper,
   type GuestResourceSpec,
   HostResourceRegistry,
   invalidateWrapper,
@@ -56,6 +57,7 @@ import {
 } from "./values.ts";
 import { ImportResolver } from "./version.ts";
 import { type ElemCodec, Future, Stream } from "./streams.ts";
+import { markSyncCallable, syncPayloadOf } from "./sync.ts";
 
 /**
  * Relay the per-declaration host-import marks from the embedder's function
@@ -389,7 +391,7 @@ class Facade {
       { name: b.name, ctor: null, ctorParams: null, methods: [], statics: [] },
       // The rt is supplied per wrapper, so an anonymous class needs none here.
       { impl: null, dtor: null } as unknown as ResourceTypeInfo,
-      () => Promise.reject(new TypeError("no methods")),
+      () => () => Promise.reject(new TypeError("no methods")),
       () => [],
     );
     return b.cls;
@@ -1001,9 +1003,9 @@ class Facade {
           const s = spec(member.resource);
           // Prefer the plain-entered variant in jspi mode: the JS `new`
           // cannot await the Promise a promising-wrapped entry returns
-          // (exec/boundary.ts CONSTRUCTOR_SYNC_ENTRY).
+          // (exec/boundary.ts SYNC_ENTRY).
           s.ctor = ((fn as unknown as Record<PropertyKey, unknown>)[
-            CONSTRUCTOR_SYNC_ENTRY
+            SYNC_ENTRY
           ] ?? fn) as RawFn;
           s.ctorParams = ft.params;
           rtOf(ft.results[0], specRt, member.resource);
@@ -1015,6 +1017,7 @@ class Facade {
             raw: fn,
             params: ft.params,
             results: ft.results,
+            async: ft.async === true,
           });
           rtOf(ft.params[0], specRt, member.resource);
           break;
@@ -1025,6 +1028,7 @@ class Facade {
             raw: fn,
             params: ft.params,
             results: ft.results,
+            async: ft.async === true,
           });
           break;
         }
@@ -1042,12 +1046,8 @@ class Facade {
       const cls = buildGuestResourceClass(
         s,
         rt,
-        (fn, params, results, where, args) =>
-          this.#wrapExportFn(fn, { params, results }, where)(
-            ...args,
-          ) as Promise<
-            unknown
-          >,
+        (raw, params, results, async, where) =>
+          this.#wrapExportFn(raw, { params, results, async }, where),
         (args, params, where) =>
           args.map((a, i) => fromHost(a, params[i], this.#opts(where))),
       );
@@ -1107,18 +1107,19 @@ class Facade {
    */
   #wrapExportFn(
     fn: RawFn,
-    ft: { params: ValType[]; results: ValType[] },
+    ft: { params: ValType[]; results: ValType[]; async?: boolean },
     where: string,
   ): (...args: unknown[]) => Promise<unknown> {
     const o = this.#opts(where);
     const resultType = ft.results.length === 0 ? null : ft.results[0];
+    let wrapper: (...args: unknown[]) => Promise<unknown>;
     if (resultType !== null && resultType.kind === "future") {
       // See `Future.deferred`: a `future<T>` result cannot be delivered
       // *through* a Promise, because promise resolution adopts thenables and
       // `Future<T>` is one. The handle is returned eagerly instead; it is
       // PromiseLike, so `await` still yields `T`.
       const element = resultType.element;
-      return (...args: unknown[]): Promise<unknown> => {
+      wrapper = (...args: unknown[]): Promise<unknown> => {
         // Advisory 9: the generic branch checks arity; so must this one.
         if (args.length !== ft.params.length) {
           throw new TypeError(
@@ -1140,8 +1141,112 @@ class Facade {
           elementCodec(element, o),
         ) as unknown as Promise<unknown>;
       };
+    } else {
+      wrapper = async (...args: unknown[]): Promise<unknown> => {
+        if (args.length !== ft.params.length) {
+          throw new TypeError(
+            `${where}: expected ${ft.params.length} argument(s), got ${args.length}`,
+          );
+        }
+        const { lowered, release } = this.#lowerParams(ft.params, args, o);
+        let raw: unknown;
+        try {
+          raw = await fn(...lowered);
+        } finally {
+          // Call-scoped reps minted for `borrow<R>` arguments of a
+          // host-implemented resource live exactly as long as the call.
+          release();
+        }
+        if (resultType === null) return undefined;
+        if (resultType.kind === "result") {
+          const v = raw as Record<string, ComponentValue>;
+          if ("error" in v) {
+            throw new ComponentException(
+              resultType.error === null
+                ? undefined
+                : toHost(v["error"], resultType.error, o),
+            );
+          }
+          return resultType.ok === null
+            ? undefined
+            : toHost(v["ok"], resultType.ok, o);
+        }
+        return toHost(raw as ComponentValue, resultType, o);
+      };
     }
-    return async (...args: unknown[]): Promise<unknown> => {
+    // A25 brand (contracts/embedder-api.md §"Functions and async"): every
+    // returned wrapper is branded, additively — the default Promise-shaped
+    // surface above is unchanged either way.
+    if (ft.async === true) {
+      markSyncCallable(wrapper, { kind: "async" });
+    } else {
+      markSyncCallable(wrapper, {
+        kind: "free",
+        fn: this.#buildSyncForm(fn, ft, where, o),
+      });
+    }
+    return wrapper;
+  }
+
+  /**
+   * The synchronous form of a sync-typed export (A25's `sync()` adapter),
+   * mirroring `#wrapExportFn`'s async form exactly minus the `await`:
+   * arity check, `#lowerParams`, the plain (`SYNC_ENTRY`) entry, result
+   * mapping.
+   *
+   * `SYNC_ENTRY` is the plain-entered variant `executor.ts` attaches to every
+   * sync-typed lifted export in jspi mode (exec/boundary.ts; in plain mode
+   * the lifted function itself already returns synchronously, so `fn` is
+   * used as-is — `fn[SYNC_ENTRY] ?? fn`).
+   */
+  #buildSyncForm(
+    fn: RawFn,
+    ft: { params: ValType[]; results: ValType[] },
+    where: string,
+    o: AdapterOptions,
+  ): (...args: unknown[]) => unknown {
+    const resultType = ft.results.length === 0 ? null : ft.results[0];
+    const entry = ((fn as unknown as Record<PropertyKey, unknown>)[
+      SYNC_ENTRY
+    ] as RawFn | undefined) ?? fn;
+    const unreachableThenable = (raw: unknown): never => {
+      // Defensive (see the dispatch prompt / A25 failure ladder): a genuine
+      // park through a plain entry surfaces as a trap, `NeedsJspi`, or
+      // `SyncEntryBusy` — never a settled thenable VALUE. A silent
+      // Promise-as-value here would corrupt lifting rather than fail loudly,
+      // so this is a diagnostic backstop, not a documented outcome.
+      void raw;
+      throw new Error(
+        `${where}: the sync entry returned a thenable, which should be ` +
+          `unreachable for a sync-typed WIT export (a genuine park surfaces ` +
+          `as a trap, NeedsJspi, or SyncEntryBusy instead) — this indicates ` +
+          `a runtime defect`,
+      );
+    };
+    if (resultType !== null && resultType.kind === "future") {
+      const element = resultType.element;
+      return (...args: unknown[]): unknown => {
+        if (args.length !== ft.params.length) {
+          throw new TypeError(
+            `${where}: expected ${ft.params.length} argument(s), got ` +
+              `${args.length}`,
+          );
+        }
+        const { lowered, release } = this.#lowerParams(ft.params, args, o);
+        let raw: unknown;
+        try {
+          raw = entry(...lowered);
+        } finally {
+          release();
+        }
+        if (isThenable(raw)) unreachableThenable(raw);
+        return Future.fromLifted(
+          raw as ComponentValue,
+          elementCodec(element, o),
+        );
+      };
+    }
+    return (...args: unknown[]): unknown => {
       if (args.length !== ft.params.length) {
         throw new TypeError(
           `${where}: expected ${ft.params.length} argument(s), got ${args.length}`,
@@ -1150,12 +1255,11 @@ class Facade {
       const { lowered, release } = this.#lowerParams(ft.params, args, o);
       let raw: unknown;
       try {
-        raw = await fn(...lowered);
+        raw = entry(...lowered);
       } finally {
-        // Call-scoped reps minted for `borrow<R>` arguments of a
-        // host-implemented resource live exactly as long as the call.
         release();
       }
+      if (isThenable(raw)) unreachableThenable(raw);
       if (resultType === null) return undefined;
       if (resultType.kind === "result") {
         const v = raw as Record<string, ComponentValue>;
