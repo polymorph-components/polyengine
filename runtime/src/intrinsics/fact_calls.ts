@@ -85,7 +85,7 @@ import {
   Task,
   type TaskOptions,
   Thread,
-  withPoisonCause,
+  entryRefusal,
 } from "../task/mod.ts";
 import { blockCurrentActivation, enterWasm } from "../jspi/mod.ts";
 import {
@@ -658,11 +658,13 @@ export function createSyncStartCall(
     // Reference `Store.lift`: the reentrance gate, with the *caller* as the
     // entering context (definitions.py `entering_set(caller)`).
     // A poisoned callee's refusal names the original trap (polyengine#145).
-    if (!prepared.calleeInst.mayEnterFrom(prepared.callerInst)) {
-      trap(withPoisonCause(
+    {
+      const refusal = entryRefusal(
         prepared.calleeInst,
+        prepared.callerInst,
         "cannot enter component instance",
-      ));
+      );
+      if (refusal !== null) trap(refusal);
     }
     prepared.calleeInst.enterFrom(prepared.callerInst);
     let ok = false;
@@ -902,11 +904,13 @@ export function createAsyncStartCall(
     subtask.calleeTask = task;
 
     // A poisoned callee's refusal names the original trap (polyengine#145).
-    if (!prepared.calleeInst.mayEnterFrom(prepared.callerInst)) {
-      trap(withPoisonCause(
+    {
+      const refusal = entryRefusal(
         prepared.calleeInst,
+        prepared.callerInst,
         "cannot enter component instance",
-      ));
+      );
+      if (refusal !== null) trap(refusal);
     }
     prepared.calleeInst.enterFrom(prepared.callerInst);
     let ok = false;

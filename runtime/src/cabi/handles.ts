@@ -17,7 +17,7 @@ import {
   NeedsJspi,
   notifyInstancePoisoned,
   PendingCapability,
-  withPoisonCause,
+  entryRefusal,
 } from "../task/scheduler.ts";
 import type {
   ComponentInstanceLike,
@@ -259,8 +259,16 @@ export function callDtorGated(
   const callerInst = asGate(caller) === null ? null : caller;
 
   // A poisoned target's refusal names the original trap (polyengine#145).
-  if (!impl.mayEnterFrom(callerInst)) {
-    trap(withPoisonCause(impl, "cannot enter component instance"));
+  // `callerInst` can legitimately BE `impl` here (a guest dropping its own
+  // resource): `entryRefusal`'s vacuous-pass guard keeps that entry allowed
+  // even against a marked instance, matching the empty entering set.
+  {
+    const refusal = entryRefusal(
+      impl,
+      callerInst,
+      "cannot enter component instance",
+    );
+    if (refusal !== null) trap(refusal);
   }
   impl.enterFrom(callerInst);
 
