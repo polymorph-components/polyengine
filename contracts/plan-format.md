@@ -364,3 +364,22 @@ Additions/corrections from the M0 integration, normative as of v0.1:
    use table 0, both resolving to `ResourceIndex` 0 via
    `resourceTables[n].resource`. Consumers keying per-resource state must
    key by the resolved `ResourceIndex`, treating table indices as aliases.
+
+## CM#705 adoption amendment (2026-08-30, polyengine#173)
+
+1. **The instance-tree question is retired, wire-form-free forever.**
+   Upstream CM#705 (adopted at submodule pin `2f13265`) deleted
+   `ComponentInstance.parent`, `entering_set`, and the whole
+   `may_enter` enter/leave model from the reference: reentrance into a
+   live instance is valid, and no reachable semantics consult instance
+   ancestry at all. Accordingly: v1 amendment 4's "open gap: no wire form
+   for the component-instance tree" is void (there is no tree to carry),
+   and v3 amendment 4's runtime-side closure — the synthetic
+   per-instantiation root and its `mayEnterFrom`/`enterFrom`/`leaveTo`
+   participation — has been **deleted from the runtime**, not merely
+   bypassed. The "reopens only if a future upstream shape makes nesting
+   depth observable" clause carries over to this amendment unchanged. No
+   `formatVersion` bump: the plan wire format never carried any of this.
+   What survives at entry sites is per-instance poisoning refusal, a
+   named divergence documented in docs/architecture.md §6 — a runtime
+   policy with no plan-format footprint.

@@ -184,7 +184,7 @@ Deno.test("#85: a guest-initiated dtor that does not finish synchronously traps"
 
 Deno.test("#160: a host-initiated async dtor is not external work", async () => {
   // REVISED from the #85 pin "holds the gate until it settles". That
-  // behaviour was the bug: the held `enterFrom(null)` bracket made the impl
+  // behaviour was the bug: the held host-entry bracket made the impl
   // instance non-enterable for the whole activation, so `Store.tick`'s
   // enterability filter could never resume a suspension point belonging to
   // the dtor itself (#160). A host-initiated dtor is a full canonical lift

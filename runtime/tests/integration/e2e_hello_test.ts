@@ -63,9 +63,10 @@ Deno.test("hello: full pipeline shim -> plan -> executor -> greet()", async () =
   assertEq(component.stats.liftedCalls, 1);
   assertEq(component.stats.tasksResolved, 1);
 
-  // Reentrance gates released after the sync call resolved.
+  // The may_leave flag is released after the sync call resolved. (There is
+  // no may_enter counterpart any more: CM#705 / polyengine#173 deleted the
+  // transient reentrance model.)
   const inst = component.componentInstances[0];
-  assert(inst.mayEnter, "may_enter must be restored after call");
   assert(inst.mayLeave, "may_leave must be restored after call");
   assertEq(inst.flags.value, 1);
 

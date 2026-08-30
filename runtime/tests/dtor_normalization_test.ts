@@ -4,7 +4,7 @@
 // into a function instance and calls it through `Store.lift` with
 // `CanonicalOptions(async_ = False)` / `FuncType([U32Type()], [], async_ =
 // False)`. Before #160 the host-initiated path called `rt.dtor` bare while
-// HOLDING `enterFrom(null)` across the returned promise, which produced two
+// HOLDING a host-entry bracket across the returned promise, which produced two
 // observable defects pinned below:
 //
 //   1. the dtor's own suspension points were unresumable — `Store.tick`'s
@@ -12,7 +12,7 @@
 //      host-enterable, and the held bracket made the impl exactly that, so
 //      the completion promise (parked in `pendingHostCalls`, i.e. advertised
 //      as *external* work) never settled and every driver waited forever;
-//   2. the held bracket also locked the synthetic per-instantiation root for
+//   2. the held bracket also locked the per-instantiation root for
 //      the whole activation, so a SIBLING instance of the same component
 //      looked non-enterable from the host — the macro-scale window of the
 //      #156 class.

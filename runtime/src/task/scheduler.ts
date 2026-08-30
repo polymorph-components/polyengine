@@ -193,23 +193,6 @@ export function isInstancePoisoned(inst: object): boolean {
 }
 
 /**
- * May a settled activation tail for parked thread `t` be DISPATCHED now
- * (issue #156)? True iff its instance is host-enterable — `Thread.resumeWith`
- * brackets the resumption with `enterFrom(null)` — or POISONED, in which case
- * `resumeWith`'s early return retires it and deferring would leak forever.
- *
- * CONTRACT: a parked entry without a reachable `task.inst` (the partial
- * thread doubles the host-pump tests park in `Store.awaiting`) holds no
- * reentrance state, so there is nothing to defer on: dispatchable.
- */
-// deno-lint-ignore no-explicit-any
-export function dispatchableTail(t: any): boolean {
-  const inst = t?.task?.inst;
-  if (inst === undefined || inst === null) return true;
-  return isInstancePoisoned(inst) || inst.mayEnterFrom(null);
-}
-
-/**
  * The recorded cause of an instance's poisoning: the original trap that
  * broke the enter/leave bracket (polyengine#145). `undefined` when the instance
  * is not poisoned — and, degenerately, when the poisoning cause itself was
@@ -246,10 +229,10 @@ export function withPoisonCause(inst: object, base: string): string {
  * (definitions.py @ 2f13265) `may_enter`, `entering_set`, `enter_from`,
  * `leave_to` and `ComponentInstance.parent` no longer exist — `Store.lift`
  * runs `canon_lift` with no gate at all, so host-mediated reentrance into a
- * live instance is simply VALID. The clause that consulted `mayEnterFrom`
- * was deleted with the pin advance; #251's re-key onto the marker is what
- * made that deletion a pure subtraction (the marker never depended on
- * `may_enter`).
+ * live instance is simply VALID. The clause that consulted the transient
+ * gate was deleted with the pin advance and the model itself with
+ * polyengine#173; #251's re-key onto the marker is what made those deletions
+ * pure subtractions (the marker never depended on `may_enter`).
  *
  * What survives is polyengine's NAMED DIVERGENCE: per-instance poisoning. A
  * trapped instance is a corpse — entry is refused permanently, with the
@@ -1045,35 +1028,20 @@ export class Store {
    * throw (trap unwinding); callers propagate or park it exactly as they do
    * for `tick`.
    *
-   * A tail whose instance is NOT host-enterable is DEFERRED IN PLACE — left
-   * in the queue, skipped here — until the lock releases (issue #156).
-   * NOTE (polyengine#173, CM#705): with the transient reentrance gate gone,
-   * `mayEnterFrom(null)` is constant-true and this deferral is INERT — every
-   * non-stale tail is dispatched immediately. The machinery is kept textually
-   * intact pending the contract amendment that deletes the model; the
-   * paragraphs below record why it existed.
-   *   * `resumeWith` brackets the resumption with `enterFrom(null)`, and under
-   * the shared synthetic per-instantiation root a host entry into ANY
-   * instance of the graph locks the root, so while one instance is entered a
-   * sibling's tail cannot be dispatched: dispatching it tripped
-   * `resumeWith`'s enterability assert (which, mutating before asserting,
-   * also stranded the thread and lost the settle).
+   * Every non-stale tail is dispatched immediately, in queue order. (History,
+   * issue #156: tails whose instance was not host-enterable were deferred in
+   * place until the reentrance lock released. CM#705 / polyengine#173 deleted
+   * the reentrance model, so there is nothing left to defer on.)
    *
-   * Deferral is safe because `!inst.mayEnterFrom(null)` is EXACTLY `tick`'s
-   * candidate-filter predicate on the same instance: while a tail of `inst`
-   * is deferred, `tick` cannot resume any thread of `inst` either, so the
-   * phantom-state gate the queue exists to enforce is preserved per-instance
-   * by construction.
+   * The ordering discipline is therefore settle order, full stop — and it is
+   * the reason this queue exists rather than a direct resumption from the
+   * settle continuation: in definitions.py the tail runs atomically inside
+   * the entered bracket, so the phantom-state gate (`tick` refuses while an
+   * unserviced tail is queued, see `hasServiceableSettled`) is what keeps a
+   * parked activation's tail from being observed out of order.
    *
-   * The ordering discipline is therefore per-instance settle order. Cross-
-   * instance order relaxes only when enterability defers a tail, which is
-   * conforming schedule nondeterminism: in definitions.py the tail runs
-   * atomically inside the entered bracket, so a host entry admitted during a
-   * park necessarily orders before the parked activation's tail there.
-   *
-   * A POISONED instance's tail is still dispatched: `resumeWith`'s poison
-   * early-return retires it, and deferring it would leak forever — a
-   * poisoned leaf keeps its lock permanently.
+   * A POISONED instance's tail is dispatched like any other: `resumeWith`'s
+   * poison early-return retires it, so it drains rather than leaking.
    */
   serviceSettled(): boolean {
     let did = false;
@@ -1089,7 +1057,6 @@ export class Store {
           this.settled.splice(i, 1);
           continue scan;
         }
-        if (!dispatchableTail(s.t)) continue;
         this.settled.splice(i, 1);
         (s.t as {
           resumeWith(v: unknown, f?: { error: unknown }): void;
@@ -1103,17 +1070,19 @@ export class Store {
   }
 
   /**
-   * "Would a `serviceSettled` call make progress right now?" — i.e. some
-   * entry is stale (would be removed) or serviceable (would be dispatched).
-   * A queue holding ONLY deferred tails (issue #156) answers false: `tick`
-   * must not be gated by them, and the driving loops must not spin on them.
+   * "Would a `serviceSettled` call make progress right now?" — i.e. is any
+   * entry queued at all. Every entry either dispatches or is dropped as
+   * stale, so a non-empty queue always makes progress.
+   *
+   * It exists to gate `tick` (and to keep the driving loops from parking)
+   * behind unserviced tails: resuming some other thread while a settled tail
+   * waits would expose the out-of-order state the queue is there to prevent.
+   * (Pre-CM#705 this had to inspect each entry, because a queue holding only
+   * reentrance-DEFERRED tails had to answer false — issue #156. That case is
+   * gone with the reentrance model, polyengine#173.)
    */
   hasServiceableSettled(): boolean {
-    for (const s of this.settled) {
-      if (!this.awaiting.has(s.t)) return true;
-      if (dispatchableTail(s.t)) return true;
-    }
-    return false;
+    return this.settled.length > 0;
   }
 
   /**
@@ -1248,9 +1217,9 @@ export class Store {
         //
         // Routed through `notifyInstancePoisoned` (not the raw hook) so the
         // poison MARKER is recorded too (polyengine#145): `Thread.resumeWith`'s
-        // quiet-retire of late settled tails and `dispatchableTail`'s
-        // dispatch-or-defer decision (#156) both read it, and without the
-        // marker a settled tail of this instance would defer forever.
+        // quiet-retire of late settled tails (#156) and `entryRefusal` both
+        // read it; without the marker a settled tail of this dead instance
+        // would be resumed as if healthy.
         notifyInstancePoisoned(
           inst as unknown as { handles: Iterable<unknown> },
           e,

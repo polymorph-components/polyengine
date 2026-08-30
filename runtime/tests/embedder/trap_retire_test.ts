@@ -2,7 +2,7 @@
 // stream/future operation (contracts/embedder-api.md amendment A7).
 //
 // Mechanism under test: a trap breaks the enter/leave bracket, the instance
-// is poisoned (mayEnter stays false forever), and the retirement walk
+// is poisoned (permanently, by the poison marker), and the retirement walk
 // (task/streams.ts `retireInstanceAsyncEnds`, hooked at both bracket-break
 // sites) drops every live stream/future end in the poisoned table and
 // records the failure — so parked host peers settle and the conventions
