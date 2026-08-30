@@ -13,6 +13,7 @@ import { assertEq, assertTrap } from "../support/asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";
 import { instantiateComponent } from "../../src/exec/mod.ts";
 import { SUPPORTED_FORMAT_VERSION } from "../../src/plan/mod.ts";
+import { isInstancePoisoned } from "../../src/task/scheduler.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
@@ -123,7 +124,7 @@ Deno.test("hello: executor validates formatVersion and hash", async () => {
   assert(failed.includes("sha256"), `got: ${failed}`);
 });
 
-Deno.test("task model: reentrance gate blocks concurrent entry", async () => {
+Deno.test("task model: reentrance is permitted; a failed call poisons", async () => {
   const translator = await Translator.create(shimWasm);
   const { plan, adapters } = translator.translate(helloWasm);
   const component = await instantiateComponent({
@@ -134,17 +135,15 @@ Deno.test("task model: reentrance gate blocks concurrent entry", async () => {
   const greet = component.exports.greet as (name: string) => string;
   greet("warm-up");
 
-  // Simulate an in-progress activation of the same instance, as a
-  // transitive call back into it would observe (docs/architecture.md §4.3 item 4: the
-  // gates are ours to enforce; the engine permits reentry the CM forbids).
+  // INVERTED by polyengine#173 (CM#705). This used to simulate an
+  // in-progress activation of the same instance and require the next host
+  // entry to trap. The merged reference (definitions.py @ 2f13265) has no
+  // `may_enter`, no `entering_set` and no bracket in `Store.lift`, so entry
+  // into a live instance is valid. The live host-mediated shape is pinned
+  // end-to-end in e2e_imports_test.ts ("a host import may synchronously
+  // re-enter its own instance"); here we only pin that nothing refuses.
   const inst = component.componentInstances[0];
-  inst.enter();
-  try {
-    assertTrap(() => greet("reentrant"), "reentrant call");
-  } finally {
-    inst.leave();
-  }
-  // Gate released: calls work again.
+  assertEq(greet("reentrant"), "Hello, reentrant!");
   assertEq(greet("after"), "Hello, after!");
 
   // Host input of the wrong JS type fails as a host-side error, not a CM trap
@@ -152,9 +151,9 @@ Deno.test("task model: reentrance gate blocks concurrent entry", async () => {
   // runtime/README.md). It still poisons: the failure happens *inside* the
   // task, after `task.start()`, so the guest may already have run realloc and
   // half-written its argument buffer — the instance is in exactly the
-  // indeterminate state poisoning exists for. definitions.py `Store.lift`
-  // (line 578) makes no exception either: anything propagating out of
-  // `canon_lift` skips `leave_to`.
+  // indeterminate state poisoning exists for. (Poisoning is polyengine's
+  // named divergence — a per-instance corpse where wasmtime kills the whole
+  // store — and since CM#705 it is the ONLY reason an entry is refused.)
   let threw = false;
   try {
     greet(123 as unknown as string);
@@ -162,7 +161,7 @@ Deno.test("task model: reentrance gate blocks concurrent entry", async () => {
     threw = true;
   }
   assert(threw, "number lowered as string must fail");
-  assert(!inst.mayEnter, "a failed call must poison the instance");
+  assert(isInstancePoisoned(inst), "a failed call must poison the instance");
   assertTrap(() => greet("after-poison"), "cannot enter component instance");
   // polyengine#145 ask 1: the poisoned refusal names the original cause, so the
   // embedder is not sent chasing transient caller-side call overlap. The
@@ -175,7 +174,7 @@ Deno.test("task model: reentrance gate blocks concurrent entry", async () => {
     refusal = String((e as Error).message ?? e);
   }
   assert(
-    refusal.includes("(reentrance forbidden)"),
+    refusal.includes("cannot enter component instance"),
     `refusal must keep the base wording, got: ${refusal}`,
   );
   assert(

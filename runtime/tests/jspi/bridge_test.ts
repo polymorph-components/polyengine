@@ -17,6 +17,7 @@ import {
   suspendingImport,
 } from "../../src/jspi/mod.ts";
 import { isSupported } from "../../src/jspi/mechanics.ts";
+import { entryRefusal } from "../../src/task/scheduler.ts";
 import {
   ComponentInstanceState,
   maybeCurrentThread,
@@ -103,14 +104,17 @@ Deno.test("bridge: a trap computed at resume time becomes a rejection", async ()
   assertEq(store.waiting.length, 0);
 });
 
-Deno.test("bridge: reentrance gates are ours and hold across a suspension", async () => {
-  // Empirical fact (d): the engine freely permits reentering an instance while
-  // one of its activations is suspended. The Component Model forbids it, so
-  // the gate must be enforced by us and must survive the suspension — the
-  // instance stays entered for as long as the activation is parked.
+Deno.test("bridge: a suspension does not make the instance unusable", async () => {
+  // Was: "reentrance gates are ours and hold across a suspension". Empirical
+  // fact (d) is unchanged — the ENGINE freely permits reentering an instance
+  // while one of its activations is suspended — but the Component Model no
+  // longer forbids it either: CM#705 (definitions.py @ 2f13265) deleted
+  // `may_enter`/`enter_from`/`leave_to`, so there is no gate to hold
+  // (polyengine#173). What this pins now is that a suspended-and-resumed
+  // activation leaves the instance entirely usable: nothing is refused before,
+  // during or after.
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
-  inst.enterFrom(null); // an activation is in flight
   let flag = false;
   const point = new SuspensionPoint<number>(
     store,
@@ -119,17 +123,11 @@ Deno.test("bridge: reentrance gates are ours and hold across a suspension", asyn
     false,
     () => 1,
   );
-  // While suspended the instance is still un-enterable: a second host call
-  // would trap, which is exactly what `createLiftedFunction` checks.
-  assertEq(inst.mayEnterFrom(null), false);
+  assertEq(entryRefusal(inst, null, "base"), null, "entry is admitted");
   flag = true;
-  store.tick;
   point.resume();
   await point.promise;
-  // Still entered — resuming does not release the gate; leaving does.
-  assertEq(inst.mayEnterFrom(null), false);
-  inst.leaveTo(null);
-  assertEq(inst.mayEnterFrom(null), true);
+  assertEq(entryRefusal(inst, null, "base"), null, "still admitted");
 });
 
 Deno.test("bridge: abandon rejects without resuming the guest", async () => {

@@ -8,6 +8,7 @@
 // core wasm exports (the established pattern in these unit tests).
 
 import { assertEq, assertTrap } from "./support/asserts.ts";
+import { isInstancePoisoned } from "../src/task/scheduler.ts";
 import {
   createLiftedFunction,
   createLoweredImport,
@@ -176,10 +177,10 @@ Deno.test("#147: a host-entry realloc that lowers an import traps", () => {
     message.includes("may_leave violation"),
     `expected a may_leave violation, got: ${message}`,
   );
-  // #91 precedent: the bracket is bare, so the trap left `may_leave` false
-  // and nothing tidied it up — the instance is poisoned instead.
+  // #91 precedent: the trap left `may_leave` false and nothing tidied it up
+  // — the instance is poisoned instead.
   assertEq(h.inst.mayLeave, false);
-  assertEq(h.inst.mayEnter, false);
+  assertEq(isInstancePoisoned(h.inst), true);
 });
 
 Deno.test("#147: import-result lowering runs realloc inside the may_leave window", () => {

@@ -14,6 +14,7 @@
 //   cargo run -p testgen
 
 import { assertEq } from "../support/asserts.ts";
+import { isInstancePoisoned } from "../../src/task/scheduler.ts";
 import { Translator } from "../../src/shim/mod.ts";
 import { instantiateComponent } from "../../src/exec/mod.ts";
 import { TranslateError } from "../../src/plan/mod.ts";
@@ -182,12 +183,15 @@ Deno.test({
     // traps build a fresh component instance for each one.
     const c = await instantiate("resources", "borrows.0.wasm");
     assertTraps(() => fn(c, "lend-trap")(), "while borrowed");
-    // Same instance, second attempt: the reentrance gate, not the lend check.
+    // Same instance, second attempt: the poisoned-corpse refusal, not the
+    // lend check.
     assertTraps(() => fn(c, "lend-trap")(), "cannot enter component instance");
     // Exactly one instance is poisoned — the one this call entered. Siblings
-    // stay usable, which is why the lock is per-instance rather than a
+    // stay usable, which is why poisoning is per-instance rather than a
     // whole-store poison the way wasmtime does it.
-    const poisoned = c.componentInstances.filter((i) => i && !i.mayEnter);
+    const poisoned = c.componentInstances.filter((i) =>
+      i && isInstancePoisoned(i)
+    );
     assertEq(poisoned.length, 1);
 
     // A *fresh* instance reproduces the original, specific trap — the trap
@@ -636,6 +640,9 @@ Deno.test({
     // Every FACT sync-call bracket balanced, and nothing is poisoned — i.e.
     // no call left an instance entered.
     assertEq(c.stats.enterSyncCalls, c.stats.exitSyncCalls);
-    assertEq(c.componentInstances.some((i) => i && !i.mayEnter), false);
+    assertEq(
+      c.componentInstances.some((i) => i && isInstancePoisoned(i)),
+      false,
+    );
   },
 });

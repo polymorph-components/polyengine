@@ -60,11 +60,12 @@
 //   * Reentrance between *related* instances is resolved statically:
 //     `trampoline.rs:116-127` emits an unconditional
 //     `trap(Trap::CannotEnterComponent)` when the lower and lift instances are
-//     the same or are ancestors of one another. So the flat-instance-tree gap
-//     recorded in task/mod.ts is NOT load-bearing here — wasmtime has already
-//     decided those cases at translation time, and the remaining runtime check
-//     is the ordinary "is the callee instance currently executing" one, which
-//     a flat tree answers correctly.
+//     the same or are ancestors of one another. The runtime-side counterpart
+//     — "is the callee instance currently executing" — is GONE as of CM#705
+//     (definitions.py @ 2f13265 has no `may_enter`), so the only refusal left
+//     at these call sites is polyengine's per-instance poisoned-corpse check
+//     (`entryRefusal`). The flat-instance-tree gap recorded in task/mod.ts is
+//     doubly not load-bearing here.
 
 import { assert_, trap } from "../cabi/trap.ts";
 import { MAX_FLAT_RESULTS } from "../cabi/mod.ts";
@@ -655,9 +656,9 @@ export function createSyncStartCall(
       lenderScope,
     });
 
-    // Reference `Store.lift`: the reentrance gate, with the *caller* as the
-    // entering context (definitions.py `entering_set(caller)`).
-    // A poisoned callee's refusal names the original trap (polyengine#145).
+    // Reference `Store.lift` (@ 2f13265) has no reentrance gate; the only
+    // refusal left is polyengine's poisoned-corpse check, whose message names
+    // the original trap (polyengine#145).
     {
       const refusal = entryRefusal(
         prepared.calleeInst,
@@ -666,23 +667,16 @@ export function createSyncStartCall(
       );
       if (refusal !== null) trap(refusal);
     }
-    prepared.calleeInst.enterFrom(prepared.callerInst);
-    let ok = false;
     try {
       const thread = spawn(task, body);
       thread.resume();
-      ok = true;
     } catch (e) {
-      // A trap leaves the instance poisoned: `leave_to` is not reached
-      // (definitions.py `Store.lift`, line 578). A *capability signal* does
-      // not — see the `isCapabilitySignal` note in exec/boundary.ts.
-      if (e instanceof NeedsJspi || e instanceof PendingCapability) {
-        prepared.calleeInst.leaveTo(prepared.callerInst);
-      } else {
-        // Retire the poisoned CALLEE's stream/future ends (#66): this is a
-        // bracket-break site like `Store.tick`'s, and the trap unwinds to a
-        // hooked site that walks only the CALLER's chain — a composed
-        // component's callee would otherwise strand its host peers.
+      // A trap poisons the callee instance. A *capability signal* does not —
+      // see the `isCapabilitySignal` note in exec/boundary.ts.
+      if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
+        // Retire the poisoned CALLEE's stream/future ends (#66): the trap
+        // unwinds to a hooked site that walks only the CALLER's chain — a
+        // composed component's callee would otherwise strand its host peers.
         notifyInstancePoisoned(prepared.calleeInst, e);
       }
       // The lent handles are the CALLER's, and the caller is not poisoned by
@@ -696,7 +690,6 @@ export function createSyncStartCall(
       lenderScope.releaseLenders();
       throw e;
     }
-    if (ok) prepared.calleeInst.leaveTo(prepared.callerInst);
 
     if (callerResults === null) {
       // The callee did not resolve within its first activation. definitions.py
@@ -912,20 +905,14 @@ export function createAsyncStartCall(
       );
       if (refusal !== null) trap(refusal);
     }
-    prepared.calleeInst.enterFrom(prepared.callerInst);
-    let ok = false;
     let thread: Thread;
     try {
       thread = spawn(task, body);
       thread.resume();
-      ok = true;
     } catch (e) {
       // See the sync form above and `isCapabilitySignal` in exec/boundary.ts.
-      if (e instanceof NeedsJspi || e instanceof PendingCapability) {
-        prepared.calleeInst.leaveTo(prepared.callerInst);
-      } else {
-        // Bracket-break site — retire the poisoned callee's ends (#66),
-        // as in the sync form above.
+      if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
+        // Retire the poisoned callee's ends (#66), as in the sync form above.
         notifyInstancePoisoned(prepared.calleeInst, e);
       }
       // The subtask never reached `report()`, so it has no handle in the
@@ -938,7 +925,6 @@ export function createAsyncStartCall(
       unwindSubtaskLenders(subtask);
       throw e;
     }
-    if (ok) prepared.calleeInst.leaveTo(prepared.callerInst);
 
     const report = (): CoreValue => {
       if (subtask.resolved()) {

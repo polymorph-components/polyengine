@@ -1,9 +1,11 @@
-// polyengine#145 ask 1: entry refusals on a poisoned instance name the original
-// trap. The scheduler records the FIRST poisoning cause per instance
-// (follow-on failures against a corpse are noise); `withPoisonCause` appends
-// it to entry-refusal messages, and a non-poisoned (transient-reentrance)
-// refusal stays byte-identical to the reference wording. The e2e face of
-// this is asserted in integration/e2e_hello_test.ts; the transient face in
+// polyengine#145 ask 1: entry refusals on a poisoned instance name the
+// original trap. The scheduler records the FIRST poisoning cause per instance
+// (follow-on failures against a corpse are noise) and `withPoisonCause`
+// appends it to the refusal message. Since CM#705 (polyengine#173) poisoning
+// is the ONLY reason an entry is refused, so the helper's pass-through
+// behavior on an unmarked instance is just the "nothing to say" case rather
+// than a second refusal class. The e2e face is asserted in
+// integration/e2e_hello_test.ts, the trampoline face in
 // enter_sync_call_reentrance_test.ts.
 //
 // No hook manipulation here: if task/streams.ts's retirement walk happens to
@@ -36,7 +38,7 @@ Deno.test("poison cause: recorded, queryable, first cause wins", () => {
   assertEq(isInstancePoisoned(inst), true, "poisoned after notify");
   assertEq(instancePoisonCause(inst) === original, true, "cause identity");
 
-  // A later bracket break against the same corpse must not displace the
+  // A later trap against the same corpse must not displace the
   // original cause — it is the one worth reporting.
   notifyInstancePoisoned(inst, new Trap("second victim"));
   assertEq(
@@ -50,17 +52,14 @@ Deno.test("poison cause: refusal message carries the original trap", () => {
   const inst = fakeInst();
   notifyInstancePoisoned(inst, new Trap("boom in cabi_realloc"));
   assertEq(
-    withPoisonCause(
-      inst,
-      "cannot enter component instance 8 (reentrance forbidden)",
-    ),
-    "cannot enter component instance 8 (reentrance forbidden)" +
+    withPoisonCause(inst, "cannot enter component instance 8"),
+    "cannot enter component instance 8" +
       " — instance poisoned by: Trap: boom in cabi_realloc",
   );
 });
 
-Deno.test("poison cause: transient refusal stays byte-identical", () => {
-  const inst = fakeInst(); // never poisoned: a live-call overlap, not a corpse
+Deno.test("poison cause: an unmarked instance gets the base unchanged", () => {
+  const inst = fakeInst(); // never poisoned, so there is no cause to append
   assertEq(
     withPoisonCause(inst, "cannot enter component instance"),
     "cannot enter component instance",

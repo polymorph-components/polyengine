@@ -141,59 +141,37 @@ export class Thread implements SchedulableThread {
     this.awaiting = null;
     this.#store.awaiting.delete(this);
     this.#state = "suspended";
-    // The reentrance bracket, exactly as `Store.tick` puts around `resume()`.
+    // Not a bracketed resumption: post-CM#705 (definitions.py @ 2f13265)
+    // `Store.tick` resumes a ready thread with no enter/leave bracket at all,
+    // and this path — the same thread body, woken by a Promise instead of a
+    // ready-condition — matches it.
     //
-    // Every thread resumption in the reference runs under the instance's
-    // entered lock, and a trap propagating out of the resumed thread skips
-    // `leave_to` — which is the Component Model's instance poisoning
-    // (definitions.py `Store.tick` line 597; see the matching comment in
-    // scheduler.ts). This path is a resumption too — the value arrived
-    // through a Promise instead of a ready-condition, but the thread body
-    // (and any wasm it runs) is the same — so it takes the same bracket.
-    // Without it, a trap delivered as an `awaitValue` rejection (how EVERY
-    // guest trap in a suspended activation arrives under jspi, pin (e))
-    // unwound cleanly and the instance stayed enterable: the second call of
-    // `builtin-trap-poisons-instance.wast` then re-ran the guest and
-    // reported "cannot drop busy stream" where the suite demands the
+    // What the catch preserves is polyengine's per-instance poisoning, which
+    // must be MARKER-recorded here specifically: a trap delivered as an
+    // `awaitValue` rejection is how EVERY guest trap in a suspended
+    // activation arrives under jspi (pin (e)), and if it unwound silently the
+    // second call of `builtin-trap-poisons-instance.wast` would re-run the
+    // guest and report "cannot drop busy stream" where the suite demands the
     // poisoned-instance "cannot enter component instance".
     //
-    // Capability signals release the lock, for the same reason as in `tick`:
+    // Capability signals do not poison, for the same reason as in `tick`:
     // they mark the RUNTIME incomplete, not the component faulted.
     const inst = this.task.inst;
     // A poisoned instance's parked segments never run again: this settle
     // belongs to an activation that was in flight when a SIBLING activation
-    // trapped (the trap kept the reentrance lock — CM poisoning — and #66
-    // retired the handle tables). Resuming would re-enter the corpse, and
-    // asserting turned one legible trap into an assert cascade (the
-    // wosh-M2 shape: `list too long`, then this assert as second victim).
-    // Retire quietly: the abandoned call's own driver reports, via its
-    // deadlock trap naming the export.
+    // trapped (#66 retired the handle tables). Resuming would re-enter the
+    // corpse, and asserting turned one legible trap into an assert cascade
+    // (the wosh-M2 shape: `list too long`, then this assert as second
+    // victim). Retire quietly: the abandoned call's own driver reports, via
+    // its deadlock trap naming the export.
     if (isInstancePoisoned(inst)) return;
-    // The enterability check below is an internal BACKSTOP, not a live gate:
-    // every dispatch site (`Store.serviceSettled`, `driveAsync`'s race-winner
-    // path) now guards enterable-or-poisoned before calling and DEFERS the
-    // tail otherwise (issue #156) — under the shared synthetic root, a host
-    // entry into any instance of the graph makes every sibling
-    // non-enterable, so this assert was reachable, and (mutating before
-    // asserting) it stranded the thread and lost the settle. It stays to
-    // protect the invariant for any future caller.
-    assert_(
-      inst.mayEnterFrom(null),
-      "resumeWith: parked thread's instance is not enterable from the host",
-    );
-    inst.enterFrom(null);
     try {
       this.#resumeInternal(value, failure);
     } catch (e) {
-      if (e instanceof NeedsJspi || e instanceof PendingCapability) {
-        inst.leaveTo(null);
-      } else {
-        // The bracket stays broken (instance poisoned, comment above) — same
-        // as `Store.tick`: retire the poisoned table's stream/future ends so
-        // parked host peers settle instead of hanging (#66), and release the
-        // synthetic root so the poisoning stays per-instance (plan v3
-        // amendment 4; `releaseSyntheticRootOnPoison`).
-        inst.releaseSyntheticRootOnPoison();
+      if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
+        // Retire the poisoned table's stream/future ends so parked host peers
+        // settle instead of hanging (#66), and record the marker — the whole
+        // entry-refusal mechanism since #251's re-key.
         notifyInstancePoisoned(
           inst as unknown as { handles: Iterable<unknown> },
           e,
@@ -201,7 +179,6 @@ export class Thread implements SchedulableThread {
       }
       throw e;
     }
-    inst.leaveTo(null);
   }
 
   resume(cancelled: Cancelled = CANCELLED_FALSE): void {

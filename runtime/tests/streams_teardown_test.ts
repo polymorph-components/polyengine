@@ -44,6 +44,7 @@ import {
   ComponentInstanceState,
   CopyResult,
   CopyState,
+  isInstancePoisoned,
   notifyInstancePoisoned,
   popCurrentThread,
   pushCurrentThread,
@@ -152,9 +153,8 @@ function mkFutureSplit(mode: "plain" | "jspi" = "plain") {
     thread,
     read: createFutureRead({ futureTable: 0, options: 0 }, ctx, reader),
     wait: createWaitableSetWait({ options: 0 }, ctx, reader),
-    /** Model the broken enter/leave bracket the walk is always called under. */
+    /** Model the trap the walk is always called under. */
     poison(cause: unknown) {
-      writer.mayEnter = false;
       retireInstanceAsyncEnds(writer, cause);
     },
     run<T>(fn: () => T): T {
@@ -218,10 +218,10 @@ Deno.test("#84(a): a parked async future reader traps when the writer's instance
   // The reader parks: async `future.read` with nobody on the other side.
   assertEq(f.run(() => f.read(f.ri, 0)), BLOCKED);
   assertEq(f.readEnd.state, CopyState.COPYING);
-  // Healthy: the reader's instance is enterable while it is parked. This is
+  // Healthy: the reader's instance is unmarked while it is parked. This is
   // the property `dropSharedForTeardown`'s notify/silently-retire test rests
   // on (see its #84 AUDIT note).
-  assertEq(f.reader.mayEnter, true);
+  assertEq(isInstancePoisoned(f.reader), false);
 
   const boom = new Trap("unreachable");
   f.poison(boom);
@@ -276,7 +276,6 @@ Deno.test("#84(a'): a stream reader keeps the spec-shaped DROPPED outcome", () =
   } finally {
     popCurrentThread(thread);
   }
-  writer.mayEnter = false;
   retireInstanceAsyncEnds(writer, new Trap("unreachable"));
   assertEq(readEnd.hasPendingEvent(), true);
   const [, , payload] = readEnd.getPendingEvent();
@@ -298,10 +297,9 @@ Deno.test("#84(b): a JSPI-blocked future reader's suspension rejects with the tr
   const parked = f.run(() => read(f.ri, 0)) as unknown as Promise<number>;
   assertEq(f.readEnd.state, CopyState.COPYING);
   assertEq(f.readEnd.hasSyncWaiter, true);
-  // A JSPI-blocked peer parks OUTSIDE the enter bracket, exactly like a
-  // callback-ABI one: blocking inside the wasm frame does not hold `mayEnter`
-  // (#84 audit item; see `dropSharedForTeardown`).
-  assertEq(f.reader.mayEnter, true);
+  // A JSPI-blocked peer is healthy while parked, exactly like a callback-ABI
+  // one (#84 audit item; see `dropSharedForTeardown`).
+  assertEq(isInstancePoisoned(f.reader), false);
 
   f.poison(new Trap("unreachable"));
   // The scheduler resumes the suspension point; `produce` throws, which the
@@ -372,7 +370,6 @@ Deno.test("#84: one end's failing notification does not strand the remaining end
   const okFuture = new SharedFutureImpl(null);
   inst.handles.add(new WritableFutureEnd(okFuture));
 
-  inst.mayEnter = false;
   const raised = caughtSync(() => retireInstanceAsyncEnds(inst, new Trap("x")));
 
   // The first failure is rethrown...
@@ -529,22 +526,22 @@ Deno.test("#97: cancelRead resolves the read exactly like end-of-stream does", a
 });
 
 // ---------------------------------------------------------------------------
-// #100: `mayEnter === false` is not "poisoned" — a mid-FACT-call CALLER's
-// healthy parked task must not be silently retired
+// #100: "poisoned" is a MARKER, not a liveness proxy — a mid-FACT-call
+// CALLER's healthy parked task must not be silently retired
 // ---------------------------------------------------------------------------
 //
 // The stranding shape from the issue. Instance A (caller) is mid
-// cross-component (FACT) call into instance B (callee), so A is non-enterable
-// for the whole duration of that call (`enterFrom` clears `mayEnter` on the
-// callee's entering set; the caller's own bracket is still open). A DIFFERENT,
+// cross-component (FACT) call into instance B (callee). A DIFFERENT,
 // perfectly healthy task of A is parked on an end of a stream/future whose
 // peer end B holds. B traps; the poisoning walk runs over B's table and
 // reaches A's parked side. The old health test (`mayEnter === false`) read A
-// as a corpse and retired it in silence — stranded, the outcome #66 exists to
-// prevent. The narrowed test (task/scheduler.ts's per-instance poison marker,
-// recorded at the `notifyInstancePoisoned` seam) gives A the spec-shaped
-// outcome instead: DROPPED for a stream, the #84 abandonment trap for an
-// unwritten future.
+// as a corpse — A was non-enterable merely because it was mid-call — and
+// retired it in silence: stranded, the outcome #66 exists to prevent. The
+// narrowed test (task/scheduler.ts's per-instance poison marker, recorded at
+// the `notifyInstancePoisoned` seam) gives A the spec-shaped outcome instead:
+// DROPPED for a stream, the #84 abandonment trap for an unwritten future.
+// CM#705 (polyengine#173) has since deleted `may_enter` outright, so the
+// marker is not merely the better predicate but the only one available.
 //
 // Both directions are pinned here: the dead-guest discipline (a parked task of
 // the POISONED instance itself is still silently retired) has its own leg
@@ -590,17 +587,18 @@ function inTask<T>(inst: ComponentInstanceState, fn: () => T): T {
 }
 
 /**
- * Put `caller` mid-cross-component-call into `callee`: the host entered the
- * caller, and the caller entered the callee (task/mod.ts `enterFrom`).
+ * `caller` is mid-cross-component-call into `callee`. Post-CM#705 that state
+ * carries no instance-level flag at all (the pre-#705 `enterFrom` chain, whose
+ * cleared `may_enter` on BOTH instances is what the old health test tripped
+ * over, no longer exists), so this is documentation: neither instance is
+ * marked, and only the marker decides.
  */
 function enterMidFactCall(
   caller: ComponentInstanceState,
   callee: ComponentInstanceState,
 ): void {
-  caller.enterFrom(null);
-  callee.enterFrom(caller);
-  assertEq(caller.mayEnter, false); // the trap the old health test fell into
-  assertEq(callee.mayEnter, false);
+  assertEq(isInstancePoisoned(caller), false);
+  assertEq(isInstancePoisoned(callee), false);
 }
 
 Deno.test("#100: a mid-FACT-call caller's parked stream reader gets DROPPED, not silence", () => {
@@ -613,7 +611,7 @@ Deno.test("#100: a mid-FACT-call caller's parked stream reader gets DROPPED, not
   const readEnd = new ReadableStreamEnd(shared);
   const ri = caller.handles.add(readEnd);
 
-  // A's other task parks on the read (a healthy park: `mayEnter === true`).
+  // A's other task parks on the read — a healthy park.
   const read = createStreamRead(
     { streamTable: 0, options: 0 },
     mkCtx(caller, view),
@@ -621,10 +619,9 @@ Deno.test("#100: a mid-FACT-call caller's parked stream reader gets DROPPED, not
   );
   assertEq(inTask(caller, () => read(ri, 0, 4)), BLOCKED);
   assertEq(readEnd.state, CopyState.COPYING);
-  assertEq(caller.mayEnter, true);
 
   // A calls into B; B traps. The poison goes through the one seam every
-  // bracket-break site uses, which is what records the marker.
+  // poisoning site uses, which is what records the marker.
   enterMidFactCall(caller, callee);
   notifyInstancePoisoned(callee, new Trap("unreachable"));
 
@@ -653,7 +650,6 @@ Deno.test("#100: a mid-FACT-call caller's parked future reader gets the abandonm
   readEnd.join(wset);
 
   assertEq(inTask(caller, () => read(ri, 0)), BLOCKED);
-  assertEq(caller.mayEnter, true);
 
   enterMidFactCall(caller, callee);
   const boom = new Trap("unreachable");
@@ -697,8 +693,7 @@ Deno.test("#100: the poisoned instance's OWN parked task is still retired silent
 
 Deno.test("#100: a host peer parked on a poisoned guest's end is still notified", () => {
   // Host sentinels are not component instances, so the predicate never reads
-  // them as poisoned (the pre-#100 test relied on the absence of a `mayEnter`
-  // key for the same conclusion).
+  // them as poisoned.
   const store = new Store();
   const guest = new ComponentInstanceState(0, store);
   const shared = new SharedStreamImpl(null);

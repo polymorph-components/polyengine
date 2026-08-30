@@ -162,10 +162,14 @@ export function canonResourceNew(
 }
 
 /**
- * The reentrance-gating half of `ComponentInstance` that a dtor call needs.
- * `ResourceTypeInfo.impl` is typed as the deliberately-minimal `InstanceLike`
- * (cabi must not depend on task/), so the gate is reached structurally; the
- * concrete implementor is `task/mod.ts` `ComponentInstanceState`.
+ * The slice of `ComponentInstance` a dtor call needs to identify a real
+ * component instance (as opposed to an imported/host resource, which has no
+ * instance at all). `ResourceTypeInfo.impl` is typed as the
+ * deliberately-minimal `InstanceLike` (cabi must not depend on task/), so it
+ * is recognised structurally; the concrete implementor is `task/mod.ts`
+ * `ComponentInstanceState`. The reentrance members are inert since CM#705
+ * (polyengine#173) and are matched only as the structural discriminator,
+ * pending the contract amendment that deletes the model.
  */
 interface ReentranceGate {
   mayEnterFrom(caller: unknown): boolean;
@@ -189,11 +193,8 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
 }
 
 /**
- * Invoke a resource destructor through the reference's entry bracket.
- *
- * definitions.py `canon_resource_drop` (line 2319) does not call `rt.dtor`
- * directly. It builds the dtor into a function instance and calls it through
- * `Store.lift` / `Store.lower` (lines 2330-2333):
+ * Invoke a resource destructor, as definitions.py `canon_resource_drop`
+ * (@ 2f13265) does — through `Store.lift`/`Store.lower`:
  *
  * ```python
  *   dtor = rt.dtor or (lambda rep: [])
@@ -202,26 +203,23 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
  *   caller([h.rep])
  * ```
  *
- * so the dtor inherits `Store.lift`'s gate verbatim (lines 579-584):
- * `trap_if(not inst.may_enter_from(caller))`, `enter_from(caller)`, the call,
- * then `leave_to(caller)` — which a trap skips, leaving the *implementing*
- * instance permanently unenterable (poisoned).
+ * Post-CM#705 that lift carries NO gate: dropping a handle whose implementing
+ * instance is mid-execution is VALID, including the dtor-less case. The
+ * pre-#705 `may_enter_from`/`enter_from`/`leave_to` bracket (and with it the
+ * "same-instance exemption" that fell out of an empty entering set) is gone
+ * from the reference and gone from here.
  *
- * Two consequences that are easy to get wrong, both taken from the reference
- * rather than from intuition:
- *
- *  - the bracket runs even when `rt.dtor is None` (the `or (lambda rep: [])`
- *    above), so a dtor-less resource whose impl instance is mid-execution is
- *    still a trap. `may_enter_from`/`enter_from` walk `entering_set(caller)`
- *    (line 230), which is empty when the caller *is* the implementing
- *    instance — that, not a special case, is the same-instance exemption:
- *    a component dropping a handle to its own resource never traps.
- *  - poisoning applies to `rt.impl`, not to the dropping instance. The
- *    dropper's own bracket (its `Store.lift` frame) is broken by the same
- *    propagating trap at its own level; here only the callee is retired.
+ * What remains is polyengine's per-instance poisoning divergence, and it
+ * applies to `rt.impl`, not to the dropping instance: a trap out of the dtor
+ * buries the implementing instance (refusal names the original trap,
+ * polyengine#145; its live stream/future ends are retired, #66). The
+ * dropper is poisoned, if at all, by the same trap propagating at its own
+ * level. `entryRefusal`'s `caller !== callee` guard keeps a component
+ * dropping a handle to its OWN resource admissible even against a marked
+ * instance.
  *
  * Capability signals (`NeedsJspi`, `PendingCapability`) are not traps — see
- * `isCapabilitySignal` in exec/boundary.ts — so they release the gate.
+ * `isCapabilitySignal` in exec/boundary.ts — so they do not poison.
  *
  * SCOPE (#160): this is the **guest-initiated** path only. A guest-initiated
  * drop must complete synchronously (the reference lifts the dtor with
@@ -270,18 +268,14 @@ export function callDtorGated(
     );
     if (refusal !== null) trap(refusal);
   }
-  impl.enterFrom(callerInst);
 
   const poison = (e: unknown): void => {
-    if (e instanceof NeedsJspi || e instanceof PendingCapability) {
-      // Not a trap: the reference reaches `leave_to` on every execution these
-      // stand in for, so the instance stays enterable.
-      impl.leaveTo(callerInst);
-      return;
-    }
-    // `leave_to` is NOT reached (the gate stays taken, permanently), and the
-    // poisoned instance's live stream/future ends are retired (#66) through
-    // the same seam fact_calls.ts uses for its bracket-break sites.
+    // Capability signals are not traps: the operation they stand in for
+    // completes normally in the reference, so the instance stays healthy.
+    if (e instanceof NeedsJspi || e instanceof PendingCapability) return;
+    // A real trap buries the implementing instance, and its live
+    // stream/future ends are retired (#66) through the same seam
+    // fact_calls.ts uses for its poisoning sites.
     notifyInstancePoisoned(impl, e);
   };
 
@@ -302,7 +296,6 @@ export function callDtorGated(
     poison(e);
     throw e;
   }
-  impl.leaveTo(callerInst);
 }
 
 export function canonResourceDrop(

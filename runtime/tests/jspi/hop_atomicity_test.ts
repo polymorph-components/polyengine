@@ -14,12 +14,13 @@
 //   2. the host lifts the result through that pointer — outer (ptr,len),
 //      each inner (ptr,len), then the bytes.
 //
-// `exec/boundary.ts` releases the reentrance bracket at the FIRST park
-// (`leave()` runs before `drive`, and the lift happens later still, in
-// `finishHostEntry`). A hop-park is a park, so pre-fix a SECOND host call
-// could enter and run a full guest turn in that window — and if that turn
-// mutates the memory the pending lift is about to read, the lift reads
-// whatever the intruder left.
+// Nothing holds the instance across that window: the lift happens later
+// still, in `finishHostEntry`, and post-CM#705 (polyengine#173) there is no
+// reentrance gate anywhere to hold in the first place. A hop-park is a park,
+// so pre-fix a SECOND host call could enter and run a full guest turn in that
+// window — and if that turn mutates the memory the pending lift is about to
+// read, the lift reads whatever the intruder left. The hop-quiescence gate in
+// `exec/boundary.ts` is the only thing standing between the two.
 //
 // In the wild: the wosh mosh engine's `tick`, returning `list<list<u8>>`,
 // died under real traffic with `Trap: list too long` — a clobbered outer

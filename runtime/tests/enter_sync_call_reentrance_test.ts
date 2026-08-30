@@ -1,24 +1,26 @@
-// The reentrance gate on the sync fused-adapter bracket (issue #99).
+// Entry refusal on the sync fused-adapter bracket (issues #99, #173).
 //
-// Reference chain, component-model @ 73b7ad5
-// `design/mvp/canonical-abi/definitions.py`:
-//   * `canon_lower` line 2312 invokes the callee `FuncInst` with
-//     `caller = thread.task.inst`;
-//   * that `FuncInst` is `Store.lift`'s `func_inst`, lines 578-585, whose
-//     first statement is `trap_if(not inst.may_enter_from(caller))` (581);
-//   * `may_enter_from` (214) tests every instance in
-//     `entering_set(caller) = callee.self_and_ancestors()
-//                             - caller.self_and_ancestors()` (230-234).
+// INVERTED by polyengine#173. The reference chain that used to gate here —
+// `canon_lower` invoking the callee `FuncInst` with `caller =
+// thread.task.inst`, and `Store.lift`'s `trap_if(not
+// inst.may_enter_from(caller))` over `entering_set(caller)` — is GONE:
+// CM#705 (definitions.py @ 2f13265) removed `may_enter`, `entering_set`,
+// `enter_from`, `leave_to` and `ComponentInstance.parent` outright, and
+// `Store.lift` now runs `canon_lift` unconditionally. A sibling cycle
+// A -> C -> A through the trampoline therefore does NOT trap.
 //
-// So a *sibling* callee that is currently entered traps, an idle sibling does
-// not, and same-instance / ancestor pairs have an empty entering set and never
-// trap here (FACT traps those statically instead --
-// wasmtime-environ 47.0.3 `fact/trampoline.rs:120-127`).
+// wasmtime agreed all along: `enter_guest_sync_call`
+// (47.0.3 `runtime/component/concurrent.rs:1723`) performs no reentrance
+// check, and same-instance / ancestor pairs are trapped statically by FACT
+// (`fact/trampoline.rs:120-127`), not here.
+//
+// What DOES still refuse at this site is polyengine's named divergence: a
+// POISONED callee is a corpse, and the refusal names the original trap
+// (polyengine#145). That is the surviving pin below.
 //
 // These tests drive the `enter-sync-call` trampoline directly, because the
-// trapping shape is not constructible as a component: mutual sibling imports
-// are rejected by validation (instance imports form a DAG). See the
-// adjudication note on the trampoline itself.
+// shapes involved are not constructible as components: mutual sibling
+// imports are rejected by validation (instance imports form a DAG).
 
 import { assertEq } from "./support/asserts.ts";
 import {
@@ -28,6 +30,7 @@ import {
 } from "../src/intrinsics/mod.ts";
 import { newStats } from "../src/exec/boundary.ts";
 import { ComponentInstanceState, Store } from "../src/task/mod.ts";
+import { notifyInstancePoisoned } from "../src/task/scheduler.ts";
 
 function fixture() {
   const store = new Store();
@@ -57,21 +60,29 @@ function fixture() {
 const A = 0;
 const C = 1;
 
-Deno.test("enter-sync-call: idle sibling callee is enterable", () => {
-  const { enter, exit, inst, syncCallStack } = fixture();
-  inst(A).mayEnter = false; // the host entered A (boundary `enterFrom(null)`)
+Deno.test("enter-sync-call: an idle sibling callee is enterable", () => {
+  const { enter, exit, syncCallStack } = fixture();
   enter(A, 0, C);
   assertEq(syncCallStack.length, 1, "bracket opened");
   exit();
   assertEq(syncCallStack.length, 0, "bracket closed");
 });
 
-Deno.test("enter-sync-call: sibling cycle A -> C -> A traps", () => {
+Deno.test("enter-sync-call: a sibling cycle A -> C -> A no longer traps (CM#705)", () => {
+  // Was: "sibling cycle A -> C -> A traps". Host entered A; A is mid-call
+  // into C; C calls back into A. Post-CM#705 that is simply a valid call.
+  const { enter, exit, syncCallStack } = fixture();
+  enter(A, 0, C);
+  enter(C, 0, A);
+  assertEq(syncCallStack.length, 2, "both brackets opened, nothing refused");
+  exit();
+  exit();
+  assertEq(syncCallStack.length, 0);
+});
+
+Deno.test("enter-sync-call: a POISONED callee is refused, naming the trap", () => {
   const { enter, inst } = fixture();
-  // Host entered A; A is mid-call into C, so C is entered too. The cycle is
-  // C calling back into A.
-  inst(A).mayEnter = false;
-  inst(C).mayEnter = false;
+  notifyInstancePoisoned(inst(A), new Error("earlier boom"));
   let msg = "";
   try {
     enter(C, 0, A);
@@ -81,37 +92,28 @@ Deno.test("enter-sync-call: sibling cycle A -> C -> A traps", () => {
   assertEq(
     msg.includes("cannot enter component instance"),
     true,
-    `expected the reentrance trap, got: ${msg || "<no trap>"}`,
+    `expected the poisoned-corpse refusal, got: ${msg || "<no trap>"}`,
   );
-  // polyengine#145: a TRANSIENT reentrance refusal (live-call overlap, nothing
-  // poisoned) must stay byte-identical — the poison-cause suffix is what
-  // distinguishes the corpse from the crowd.
-  assertEq(
-    msg.includes("instance poisoned by"),
-    false,
-    `transient refusal must not claim poisoning: ${msg}`,
-  );
+  // polyengine#145 ask 1: the refusal names the original trap.
+  assertEq(msg.includes("instance poisoned by"), true, msg);
+  assertEq(msg.includes("earlier boom"), true, msg);
+});
+
+Deno.test("enter-sync-call: a poisoned instance calling ITSELF passes vacuously", () => {
+  // `entryRefusal`'s `caller !== callee` guard: the pre-#705 entering set
+  // `{A} - {A}` was empty, and the vacuous pass is preserved.
+  const { enter, inst } = fixture();
+  notifyInstancePoisoned(inst(A), new Error("earlier boom"));
+  enter(A, 0, A);
 });
 
 Deno.test("enter-sync-call: an acyclic sibling chain A -> B -> C never traps", () => {
-  const { enter, exit, inst } = fixture();
+  const { enter, exit, syncCallStack } = fixture();
   const B = 2;
-  inst(A).mayEnter = false;
   enter(A, 0, B);
   enter(B, 0, C);
+  assertEq(syncCallStack.length, 2);
   exit();
   exit();
-  // Nothing above mutates `mayEnter`; the point is that the gate stays quiet
-  // for the shape `test/linking/unit.wast` (the sibling relift chain) uses.
-  assertEq(inst(B).mayEnter, true);
-  assertEq(inst(C).mayEnter, true);
-});
-
-Deno.test("enter-sync-call: same-instance pair has an empty entering set", () => {
-  const { enter, inst } = fixture();
-  // definitions.py `entering_set`: `{A} - {A}` is empty, so `may_enter_from`
-  // is vacuously true even with `may_enter == False`. FACT never emits this
-  // pair (trampoline.rs:120-127) but the gate must agree with the reference.
-  inst(A).mayEnter = false;
-  enter(A, 0, A);
+  assertEq(syncCallStack.length, 0);
 });

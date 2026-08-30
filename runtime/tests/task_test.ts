@@ -13,6 +13,7 @@ import {
   type Cancelled,
   chooseCandidate,
   ComponentInstanceState,
+  dispatchableTail,
   driveSyncLift,
   entryRefusal,
   EventCode,
@@ -195,8 +196,18 @@ Deno.test("canon_lift sync loop: traps when no thread can make progress", () => 
 });
 
 // ---------------------------------------------------------------------------
-// Reentrance (ComponentInstance.enter_from / may_enter_from)
+// The RETAINED-BUT-INERT reentrance model (ComponentInstance.enter_from /
+// may_enter_from)
 // ---------------------------------------------------------------------------
+//
+// CM#705 (definitions.py @ 2f13265) removed `may_enter`, `entering_set`,
+// `enter_from`, `leave_to` and `ComponentInstance.parent` outright, and
+// polyengine#173 removed every CALL to them from the runtime: nothing gates
+// entry any more except the poison marker. The model's own arithmetic is
+// still defined in task/mod.ts pending the contract amendment that deletes
+// it, and these tests pin that arithmetic so the deletion PR is a clean
+// subtraction. They assert NOTHING about runtime behavior — no runtime path
+// consults them.
 
 Deno.test("reentrance: an instance cannot be re-entered from the host", () => {
   const inst = new ComponentInstanceState(0);
@@ -259,28 +270,30 @@ Deno.test("root: guest-to-guest entering sets are unchanged ({leaf})", () => {
   assertEq([...a.enteringSet(a)].length, 0);
 });
 
-Deno.test("root: tick skips a sibling whose instance is locked by a host entry", () => {
-  // Regression: `tick` used to select on `ready()` alone and then *assert*
-  // host-enterability, so this shape trapped instead of making no progress.
+Deno.test("root: tick resumes a ready sibling thread during a live host entry", () => {
+  // INVERTED by polyengine#173 (CM#705). This shape used to be the #155
+  // regression: `tick` filtered its candidates on host-enterability, and
+  // under the shared synthetic root a host entry into A made every sibling
+  // non-enterable, so B could not run until A's call returned.
   //
-  // Shape: instance A is entered from the host by a sync export that is parked
-  // on an async host import (the import settles from host JS, not from
-  // `tick`). While A is parked, a thread of sibling instance B goes ready —
-  // event-driven wakeups do this on every clock turn. A's host entry locks the
-  // shared synthetic root, so B is not host-enterable in that window.
+  // The merged reference (definitions.py @ 2f13265 `Store.tick`) resumes any
+  // ready thread with no gate and no bracket, so B runs immediately.
+  //
+  // Shape: instance A is entered from the host by a sync export parked on an
+  // async host import (the import settles from host JS, not from `tick`).
+  // While A is parked, a thread of sibling instance B goes ready.
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
+  void a;
 
-  // A's export call: entered from the host, parked awaiting an async import.
-  a.enterFrom(null);
   let settleImport!: () => void;
   const pendingImport = new Promise<void>((resolve) => {
     settleImport = resolve;
   });
   store.pendingHostCalls.add(pendingImport);
 
-  // B's thread: waiting, and it becomes ready while A is still entered.
+  // B's thread: waiting, and it becomes ready while A's host entry is live.
   let flag = false;
   const order: string[] = [];
   const bTask = mkTask(b, SYNC_FT, SYNC_OPTS);
@@ -297,33 +310,28 @@ Deno.test("root: tick skips a sibling whose instance is locked by a host entry",
 
   flag = true;
   assertEq(bThread.ready(), true, "B is ready...");
-  assertEq(b.mayEnterFrom(null), false, "...but locked through the shared root");
-  // The window: no throw, and no progress on B.
-  assertEq(store.tick(), false, "ready-but-not-enterable is not progress");
-  assertEq(order.length, 0);
-  assertEq(bThread.done(), false);
-
-  // The host import settles and A's entered call returns.
-  settleImport();
-  store.pendingHostCalls.delete(pendingImport);
-  a.leaveTo(null);
-  assertEq(b.mayEnterFrom(null), true, "the root is unlocked again");
-
-  // B now runs to completion on the next turn.
-  assertEq(store.tick(), true);
+  assertEq(store.tick(), true, "...and ready is now sufficient");
   assertEq(order.join(","), "b ran");
   assertEq(bTask.state, "resolved");
   assertEq(store.waiting.length, 0);
+
+  settleImport();
+  store.pendingHostCalls.delete(pendingImport);
 });
 
-// --- issue #156: settled activation tails defer while the root is locked ----
+// --- issue #156: settled activation tails, post-CM#705 ---------------------
 //
-// `Store.settled` tails are dispatched through `Thread.resumeWith`, which
-// brackets the resumption with `enterFrom(null)`. Under the shared synthetic
-// root a host entry into ANY instance locks every sibling, so dispatching a
-// sibling's tail in that window used to trip `resumeWith`'s enterability
-// assert (and, mutating before asserting, strand the thread and lose the
-// settle). The fix defers such tails IN PLACE.
+// History: `Store.settled` tails are dispatched through `Thread.resumeWith`,
+// which used to bracket the resumption with `enterFrom(null)`. Under the
+// shared synthetic root a host entry into ANY instance locked every sibling,
+// so dispatching a sibling's tail in that window tripped `resumeWith`'s
+// enterability assert (and, mutating before asserting, stranded the thread
+// and lost the settle); #156 deferred such tails IN PLACE.
+//
+// INVERTED by polyengine#173: there is no bracket and nothing is ever
+// non-enterable, so every non-stale tail dispatches immediately. What still
+// holds — and is pinned below — is the settle-order discipline (a
+// serviceable tail gates `tick`) and the poisoned-tail retirement (#66).
 
 /** Settle a park promise and let `noteAwaiting`'s eager continuation run. */
 async function queueSettledTail(settle: () => void): Promise<void> {
@@ -333,7 +341,7 @@ async function queueSettledTail(settle: () => void): Promise<void> {
   await Promise.resolve();
 }
 
-Deno.test("root: serviceSettled defers a sibling tail while a host entry holds the root", async () => {
+Deno.test("root: serviceSettled dispatches a sibling tail immediately", async () => {
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -359,20 +367,14 @@ Deno.test("root: serviceSettled defers a sibling tail while a host entry holds t
   await queueSettledTail(settle);
   assertEq(store.settled.length, 1, "the tail is queued");
 
-  // A host entry into the sibling locks the shared root.
-  a.enterFrom(null);
-  assertEq(b.mayEnterFrom(null), false);
-  assertEq(store.serviceSettled(), false, "deferred: no dispatch, no throw");
-  assertEq(store.settled.length, 1, "the entry stays queued, in place");
-  assertEq(store.awaiting.has(bThread), true, "and the thread is not stranded");
-  assertEq(order.length, 0);
-  assertEq(store.tick(), false, "a deferred-only queue does not gate tick open");
-
-  a.leaveTo(null);
-  assertEq(store.serviceSettled(), true, "the lock released: dispatch");
+  // A live host entry into the sibling used to defer this tail (#156). Post
+  // CM#705 nothing defers: the tail dispatches on the spot.
+  void a;
+  assertEq(store.serviceSettled(), true, "dispatched, not deferred");
   assertEq(order.join(","), "b tail ran");
   assertEq(bTask.state, "resolved");
   assertEq(store.settled.length, 0);
+  assertEq(store.awaiting.has(bThread), false);
 });
 
 Deno.test("root: the phantom-state gate holds for a serviceable tail", async () => {
@@ -415,7 +417,7 @@ Deno.test("root: the phantom-state gate holds for a serviceable tail", async () 
 
   await queueSettledTail(settle);
   assertEq(store.settled.length, 1);
-  assertEq(a.mayEnterFrom(null), true, "nothing is entered: the tail is serviceable");
+  assertEq(dispatchableTail(bThread), true, "the tail is serviceable");
   assertEq(store.tick(), false, "a serviceable tail gates tick");
   assertEq(order.length, 0);
 
@@ -424,10 +426,10 @@ Deno.test("root: the phantom-state gate holds for a serviceable tail", async () 
   assertEq(order.join(","), "a ran");
 });
 
-Deno.test("root: poisoned tails retire even while the root is locked", async () => {
-  // A poisoned leaf stays locked forever, so deferring its tail would leak.
-  // `resumeWith`'s poison early-return retires it instead: the queue drains
-  // and the body does NOT run.
+Deno.test("root: a poisoned instance's tail retires without running", async () => {
+  // `resumeWith`'s poison early-return retires the tail: the queue drains and
+  // the body does NOT run. (#66 / #156; unchanged by CM#705 — a corpse's
+  // parked segments must never resume.)
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -451,14 +453,13 @@ Deno.test("root: poisoned tails retire even while the root is locked", async () 
   assertEq(store.settled.length, 1);
 
   notifyInstancePoisoned(b, undefined);
-  a.enterFrom(null);
-  assertEq(store.serviceSettled(), true, "poisoned tails dispatch, locked or not");
+  void a;
+  assertEq(store.serviceSettled(), true, "poisoned tails dispatch");
   assertEq(store.settled.length, 0, "and the queue drains");
   assertEq(order.length, 0, "retired quietly: the body never ran");
-  a.leaveTo(null);
 });
 
-Deno.test("root: stale settled entries are removed regardless of enterability", async () => {
+Deno.test("root: stale settled entries are removed", async () => {
   // "Stale" = the thread was resumed elsewhere (driveAsync's race-winner
   // path), i.e. it is gone from `store.awaiting`. Such entries are dropped
   // whenever encountered, and dropping one is not progress.
@@ -484,23 +485,22 @@ Deno.test("root: stale settled entries are removed regardless of enterability", 
 
   // Simulate the elsewhere-resumption.
   store.awaiting.delete(bThread);
-  a.enterFrom(null);
+  void a;
   assertEq(store.serviceSettled(), false, "removing a stale entry is not progress");
   assertEq(store.settled.length, 0, "but it is removed");
-  a.leaveTo(null);
 });
 
-Deno.test("root: trap poisoning stays per-instance (documented divergence)", () => {
+Deno.test("root: trap poisoning stays per-instance (named divergence)", () => {
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
-  // A host entry into A that traps never reaches `leaveTo`: A stays poisoned
-  // forever. polyengine deliberately keeps sibling instances usable (exec/
-  // boundary.ts `poison`), so the shared root is released explicitly.
-  a.enterFrom(null);
-  a.releaseSyntheticRootOnPoison();
-  assertEq(a.mayEnterFrom(null), false, "the leaf stays poisoned");
-  assertEq(b.mayEnterFrom(null), true, "a sibling is still enterable");
+  // polyengine buries only the instance that trapped, where wasmtime kills
+  // the whole store (exec/boundary.ts `poison`). Since polyengine#173 the
+  // marker is the entire mechanism, so "per-instance" is a property of the
+  // marker alone.
+  notifyInstancePoisoned(a, new Trap("boom"));
+  assertEq(entryRefusal(a, null, "base") !== null, true, "A is a corpse");
+  assertEq(entryRefusal(b, null, "base"), null, "a sibling is still enterable");
 });
 
 // ---------------------------------------------------------------------------
@@ -813,10 +813,11 @@ Deno.test("cancellation: with no cancellable thread it becomes pending", () => {
 });
 
 Deno.test("tick: a trap under tick records the poison marker", async () => {
-  // A trap escaping `thread.resume()` under `Store.tick` breaks the
-  // enter/leave bracket (definitions.py `Store.tick`, line 597) — and must
-  // also record the poison MARKER, which `Thread.resumeWith`'s quiet-retire
-  // and `dispatchableTail` read (polyengine#145, #156).
+  // A trap escaping `thread.resume()` under `Store.tick` poisons the
+  // instance. Post-CM#705 there is no bracket to break, so recording the
+  // MARKER is the entire act — and it is what `Thread.resumeWith`'s
+  // quiet-retire, `dispatchableTail` and `entryRefusal` all read
+  // (polyengine#145, #156, #251).
   const store = new Store();
   const b = new ComponentInstanceState(0, store);
 
@@ -854,7 +855,11 @@ Deno.test("tick: a trap under tick records the poison marker", async () => {
   assertThrows(() => store.tick(), "boom under tick");
 
   assertEq(isInstancePoisoned(b), true, "the poison marker is recorded");
-  assertEq(b.mayEnterFrom(null), false, "and the bracket stays broken");
+  assertEq(
+    entryRefusal(b, null, "base") !== null,
+    true,
+    "and the marker is what refuses later entry",
+  );
   assert(
     withPoisonCause(b, "x").includes("boom under tick"),
     "the cause is available for entry-refusal diagnostics",
@@ -871,8 +876,10 @@ Deno.test("tick: a trap under tick records the poison marker", async () => {
 });
 
 Deno.test("request_cancellation: a trap during delivery poisons the callee", () => {
-  // definitions.py `Task.request_cancellation` (lines 519-532) wraps the
-  // delivery `resume(Cancelled.TRUE)` in no handler: a Trap skips `leave_to`.
+  // definitions.py `Task.request_cancellation` (@ 2f13265) wraps the delivery
+  // `resume(Cancelled.TRUE)` in no handler at all. polyengine records the
+  // trap as per-instance poisoning instead of ending the world
+  // (polyengine#164/#212).
   const store = new Store();
   const callerInst = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -890,14 +897,13 @@ Deno.test("request_cancellation: a trap during delivery poisons the callee", () 
     () => task.requestCancellation(callerInst),
     "boom during cancel delivery",
   );
-  assertEq(b.mayEnterFrom(callerInst), false, "the callee stays locked");
-  assertEq(isInstancePoisoned(b), true);
+  assertEq(isInstancePoisoned(b), true, "the callee is a corpse");
   assertEq(task.state, "cancel-delivered", "parity: the state is set first");
 });
 
-Deno.test("request_cancellation: a capability signal releases the gate", () => {
+Deno.test("request_cancellation: a capability signal does not poison", () => {
   // Capability signals mark the RUNTIME incomplete, not the component
-  // faulted: the bracket is released, exactly as in `Store.tick`.
+  // faulted: nothing is poisoned, exactly as in `Store.tick`.
   const store = new Store();
   const callerInst = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -914,31 +920,23 @@ Deno.test("request_cancellation: a capability signal releases the gate", () => {
     () => task.requestCancellation(callerInst),
     "pending-capability: x",
   );
-  assertEq(b.mayEnterFrom(callerInst), true, "the gate is released");
-  assertEq(isInstancePoisoned(b), false, "and nothing is poisoned");
+  assertEq(isInstancePoisoned(b), false, "nothing is poisoned");
 });
 
 // ---------------------------------------------------------------------------
 // Poisoning re-key (polyengine#173)
 // ---------------------------------------------------------------------------
 //
-// White-box pins on the property the re-key buys: every poisoning DECISION
-// reads the poison MARKER, not `mayEnter`. Each test below forces `mayEnter`
-// back to true on a marked instance — a state the runtime never produces
-// today — so the pin isolates the marker's authority and must survive the
-// CM#705 deletion of `may_enter` unchanged.
+// White-box pins on the property the re-key bought and CM#705 then made
+// unavoidable: every entry-refusal DECISION reads the poison MARKER, which is
+// now the only refusal mechanism there is. Nothing locks an instance any
+// more, so these tests need no `mayEnter` manipulation — an unmarked instance
+// is always enterable, by construction.
 
-/** Force a marked instance (and its synthetic root) back to enterable. */
-function forceEnterable(inst: ComponentInstanceState): void {
-  for (const i of inst.selfAndAncestors()) i.mayEnter = true;
-}
-
-Deno.test("re-key: entryRefusal refuses a marked instance with mayEnter forced true", () => {
+Deno.test("re-key: entryRefusal refuses a marked instance", () => {
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
   notifyInstancePoisoned(inst, new Trap("boom"));
-  forceEnterable(inst);
-  assertEq(inst.mayEnterFrom(null), true, "the transient gate is wide open");
 
   const r = entryRefusal(inst, null, "cannot enter component instance");
   assert(r !== null, "the marker alone refuses entry");
@@ -947,36 +945,28 @@ Deno.test("re-key: entryRefusal refuses a marked instance with mayEnter forced t
   assertEq(r.includes("boom"), true, "and it is the original trap");
 });
 
-Deno.test("re-key: an unmarked but bracket-locked instance refuses with the bare base", () => {
-  const store = new Store();
-  const inst = new ComponentInstanceState(0, store);
-  inst.enterFrom(null);
-  assertEq(
-    entryRefusal(inst, null, "cannot enter component instance"),
-    "cannot enter component instance",
-    "transient reentrance: byte-identical to the pre-re-key message",
-  );
-});
-
-Deno.test("re-key: an enterable instance is not refused", () => {
+Deno.test("re-key: an unmarked instance is never refused (CM#705)", () => {
+  // The clause that returned the bare base for a transiently-locked instance
+  // is DELETED with polyengine#173: entry into a live instance is valid.
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
   assertEq(entryRefusal(inst, null, "base"), null);
+  const other = new ComponentInstanceState(1, store);
+  assertEq(entryRefusal(inst, other, "base"), null, "and from a guest caller");
 });
 
 Deno.test("re-key: caller === callee passes vacuously even when marked", () => {
-  // definitions.py `entering_set` (line 230) is empty for a self-call, so
-  // there is no instance to check. The dtor path (cabi/handles.ts) relies on
-  // this: a guest dropping its own resource is not refused by its own marker.
+  // The pre-#705 `entering_set` was empty for a self-call, so there was no
+  // instance to check; `entryRefusal` keeps that vacuous pass. The dtor path
+  // (cabi/handles.ts) relies on it: a guest dropping its own resource is not
+  // refused by its own marker.
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
   notifyInstancePoisoned(inst, new Trap("boom"));
-  forceEnterable(inst);
-  assertEq([...inst.enteringSet(inst)].length, 0, "empty entering set");
   assertEq(entryRefusal(inst, inst, "base"), null);
 });
 
-Deno.test("re-key: tick does not resume a marked instance with mayEnter forced true", () => {
+Deno.test("re-key: tick does not resume a marked instance", () => {
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
   let flag = false;
@@ -995,8 +985,6 @@ Deno.test("re-key: tick does not resume a marked instance with mayEnter forced t
   assertEq(thread.ready(), true, "the thread is ready...");
 
   notifyInstancePoisoned(inst, new Trap("boom"));
-  forceEnterable(inst);
-  assertEq(inst.mayEnterFrom(null), true, "...and transiently enterable");
   assertEq(store.tick(), false, "but the marker excludes it from tick");
   assertEq(order.length, 0);
 });
@@ -1021,8 +1009,6 @@ Deno.test("re-key: requestCancellation leaves a marked callee's request pending"
   assertEq(task.state, "started");
 
   notifyInstancePoisoned(b, new Trap("boom"));
-  forceEnterable(b);
-  assertEq(b.mayEnterFrom(callerInst), true, "transiently enterable");
 
   task.requestCancellation(callerInst);
   assertEq(sawCancel, false, "delivery is refused by the marker");

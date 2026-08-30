@@ -6,7 +6,8 @@ the plan (`CoreDef::Trampoline` / `lower-import`). Producers of the
 requirement: the translator shim (per-plan manifest). Implementor: the runtime
 (`runtime/src/intrinsics/`).
 
-Status: **v0.2** (amended post-M0 and post-M1 — see amendment sections).
+Status: **v0.3** (amended post-M0, post-M1, and at the CM#705 pin advance —
+see amendment sections).
 
 Sources of truth (pinned `wasmtime-environ 47.0.3`):
 - (A) `wasmtime_environ::fact::Import` — every import FACT can emit.
@@ -147,6 +148,26 @@ core" is a feature, not a crash.
    correct per #5; a future amendment could permit lazily-trapping
    trampolines for exports the embedder never calls — deliberate
    silent-acceptance tradeoff, not adopted without discussion.
+
+## v0.3 amendments (CM#705 adoption, 2026-08-30)
+
+1. **The reentrance-gate portion of ground rule 3 is withdrawn**
+   ([#173](https://github.com/polymorph-components/polyengine/issues/173);
+   submodule pin `2f13265`). CM#705 removed `may_enter`, `entering_set`,
+   and the `enter_from`/`leave_to` bracket from the reference: no intrinsic
+   or trampoline checks or takes a reentrance gate anymore, and reentrance
+   into a live instance (host-mediated, dtor, `*-start-call`,
+   `enter-sync-call`) is valid. What entry sites still enforce is
+   **per-instance poisoning refusal** — a docs/architecture.md §6 named
+   divergence, not a reference rule: a trapped instance's corpse refuses
+   entry permanently with the recorded cause
+   ([#145](https://github.com/polymorph-components/polyengine/issues/145)),
+   with the same-instance exemption preserved for dtor self-drops.
+   `may_leave`/flags-global behavior (v0.1 amendment 2) is unchanged;
+   "`may_enter` is host-only state" there is historical — the state no
+   longer exists. The `ComponentInstanceState` model fields
+   (`mayEnter`, `parent`, the synthetic root) remain defined but inert
+   pending the plan-format amendment that deletes them.
 
 ## JSPI integration constraints (M2 phase 3, empirically derived)
 
