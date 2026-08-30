@@ -840,19 +840,18 @@ export const XFAIL: XfailEntry[] = [
   //     polyengine's own reentrance implementation. Only SIBLING adapters
   //     compile to real fused code at this pin. Classed `fact-reentrance-47`,
   //     https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmtime-environ bump).
-  //   - "cannot enter component instance ${index} (reentrance forbidden)" (NO
-  //     `wasm trap:` prefix) is polyengine's OWN `mayEnterFrom`/`enterFrom` gate
-  //     (runtime/src/exec/boundary.ts, intrinsics/fact_calls.ts), produced in
-  //     JS, not wasm — this is the class a prior triage round misattributed
-  //     every row in this file to (`cm705-gate-removal`). ZERO corpus rows in
-  //     this file actually hit that path: every failing row below carries the
-  //     `wasm trap:` prefix, so all are FACT-47 static-stub trips, not the
-  //     runtime's stale gate. CM#705's removal of may_enter/entering_set/
-  //     enter_from/leave_to from definitions.py (polyengine#173) is real and
-  //     still-open work, but this corpus cannot prove or disprove it: FACT-47
-  //     masks every row that would exercise the runtime gate before the gate
-  //     itself ever runs. #173 is tracked/pinned by runtime unit tests, not by
-  //     this file. See also the correction note at
+  //   - "cannot enter component instance ${index}" (NO `wasm trap:` prefix)
+  //     is polyengine's OWN entry refusal (runtime/src/exec/boundary.ts,
+  //     intrinsics/fact_calls.ts), produced in JS, not wasm — since the
+  //     CM#705 adoption landed (#251/#252/#255 + the model deletion,
+  //     polyengine#173) that refusal fires ONLY for a poisoned instance
+  //     (the per-instance corpse divergence, docs/architecture.md §6); the
+  //     transient reentrance gate it once signified is gone. ZERO corpus
+  //     rows in this file hit that path: every failing row below carries
+  //     the `wasm trap:` prefix, so all are FACT-47 static-stub trips.
+  //     The adoption cannot be proven or disproven here: FACT-47's stubs
+  //     trap before any polyengine runtime code runs. #173 is pinned by
+  //     runtime unit tests, not by this file. See also the correction note at
   //     https://github.com/polymorph-components/polyengine/issues/248#issuecomment-5471308919. ---
   {
     file: "async/reentrance.json",

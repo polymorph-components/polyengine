@@ -31,9 +31,6 @@ function assert(cond: boolean, msg: string): asserts cond {
 
 function fakeInst() {
   return {
-    mayEnterFrom: (_: unknown) => true,
-    enterFrom: (_: unknown) => {},
-    leaveTo: (_: unknown) => {},
   };
 }
 

@@ -53,13 +53,31 @@ export function requireMemory(opts: LiftOptions): MemInst {
 
 /**
  * Minimal component-instance stand-in for the value interpreter: a handle
- * table plus the `may_leave` gate. The full ComponentInstance (may_enter,
- * backpressure, threads, ...) belongs to the deferred task machinery.
+ * table plus the `may_leave` gate. The full ComponentInstance (backpressure,
+ * threads, ...) belongs to the task machinery, which cabi must not import.
  */
 export interface ComponentInstanceLike {
   handles: Table<unknown>;
   mayLeave: boolean;
 }
+
+/**
+ * Brand marking a value as a REAL component instance (task/mod.ts
+ * `ComponentInstanceState`), as opposed to the many structural
+ * `ComponentInstanceLike` stand-ins — imported/host resources carry no
+ * instance at all, and test harnesses supply bare `{handles, mayLeave}`
+ * doubles. cabi must not depend on task/, so the symbol lives here and
+ * `ComponentInstanceState` declares it; cabi/handles.ts `isComponentInstance`
+ * is the only reader.
+ *
+ * It replaced a structural match on the pre-CM#705 reentrance methods
+ * (`may_enter_from`/`enter_from`/`leave_to`), which polyengine#173 deleted
+ * along with the rest of the transient reentrance model. `ComponentInstanceLike`
+ * stays deliberately structural: the brand is NOT part of it.
+ */
+export const COMPONENT_INSTANCE: unique symbol = Symbol(
+  "polyengine.ComponentInstance",
+);
 
 /**
  * Borrow scopes (definitions.py `LiftLowerContext.borrow_scope`):

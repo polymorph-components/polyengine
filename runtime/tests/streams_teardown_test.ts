@@ -346,7 +346,8 @@ Deno.test("#84(c'): a spec-dropped future (the writer delivered its value) is un
 Deno.test("#84: one end's failing notification does not strand the remaining ends", () => {
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
-  const peer = { mayEnter: true };
+  // A non-instance peer stand-in: not poisoned, so it is notified normally.
+  const peer = {};
 
   // End 1: a stream whose parked peer's settler throws (a host callback, an
   // event thunk — anything the notification runs).
@@ -534,7 +535,7 @@ Deno.test("#97: cancelRead resolves the read exactly like end-of-stream does", a
 // cross-component (FACT) call into instance B (callee). A DIFFERENT,
 // perfectly healthy task of A is parked on an end of a stream/future whose
 // peer end B holds. B traps; the poisoning walk runs over B's table and
-// reaches A's parked side. The old health test (`mayEnter === false`) read A
+// reaches A's parked side. The old health test (non-enterability) read A
 // as a corpse — A was non-enterable merely because it was mid-call — and
 // retired it in silence: stranded, the outcome #66 exists to prevent. The
 // narrowed test (task/scheduler.ts's per-instance poison marker, recorded at
@@ -588,7 +589,7 @@ function inTask<T>(inst: ComponentInstanceState, fn: () => T): T {
 
 /**
  * `caller` is mid-cross-component-call into `callee`. Post-CM#705 that state
- * carries no instance-level flag at all (the pre-#705 `enterFrom` chain, whose
+ * carries no instance-level flag at all (the pre-#705 host-entry chain, whose
  * cleared `may_enter` on BOTH instances is what the old health test tripped
  * over, no longer exists), so this is documentation: neither instance is
  * marked, and only the marker decides.

@@ -42,9 +42,6 @@ function assert(cond: boolean, msg: string): asserts cond {
 /** The slice of `ComponentInstance` that `Store.tick` touches. */
 function fakeInst() {
   return {
-    mayEnterFrom: (_: unknown) => true,
-    enterFrom: (_: unknown) => {},
-    leaveTo: (_: unknown) => {},
   };
 }
 

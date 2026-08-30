@@ -2,13 +2,13 @@
 //
 // #156's shape: instance B's thread parked on an already-settled
 // `awaitValue` (tail queued in `store.settled`) while sibling instance A held
-// a host entry, which under the shared synthetic per-instantiation root made
-// B non-enterable — so B's tail was DEFERRED IN PLACE and `driveAsync` had to
-// park (not spin) until the lock released.
+// a host entry, which under the transient reentrance model's shared
+// per-instantiation root made B non-enterable — so B's tail was DEFERRED IN
+// PLACE and `driveAsync` had to park (not spin) until the lock released.
 //
 // Deferral can no longer occur: definitions.py @ 2f13265 has no
-// `may_enter`/`enter_from`/`leave_to`, the runtime takes no bracket anywhere,
-// and `dispatchableTail` is constant-true for a live instance. The pin below
+// `may_enter`/`enter_from`/`leave_to`, polyengine#173 deleted the model here
+// too, and every non-stale tail dispatches on the spot. The pin below
 // is the merged behavior — the tail dispatches immediately, with an unrelated
 // outstanding host call in flight, and the driver still reaches quiescence
 // (the outstanding call must not be mistaken for a reason to wedge).

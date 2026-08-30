@@ -1000,32 +1000,18 @@ interface PoisonedInstanceLike {
  * can no longer be entered (`tick` excludes poisoned instances). Host sentinels are
  * not instances at all, so they are always notified.
  *
- * #100: THE HEALTH TEST IS "POISONED", NOT "`mayEnter === false`". The
- * original test used non-enterability as a proxy for deadness. Settled twice
- * over now: CM#705 (polyengine#173) deleted `may_enter` from the reference
- * outright, so the marker is not merely the better test but the only one
- * left. The original argument, kept because it explains what the marker is
- * for — the proxy was unsound in one direction, and the unsoundness stranded
- * healthy tasks:
- *
- *  * (sound half, #84 audit) a healthy guest peer always parks with
- *    `mayEnter === true`. Every park — the callback ABI's waitable-set wait,
- *    and equally a sync-lowered/JSPI peer blocked inside `finishCopy`'s
- *    SITE 4 via `blockCurrentActivation` — yields the thread out of the
- *    scheduler's enter/leave bracket, and the bracket's `leaveTo` ran on the
- *    way out — `Thread.resumeWith`'s resume-side
- *    `assert_(mayEnterFrom(null))` would have fired otherwise. Blocking
- *    inside a wasm frame did NOT hold the enter bracket. (Both the bracket
- *    and that assert are gone as of polyengine#173.)
- *  * (unsound converse) `mayEnter === false` does not imply "poisoned". An
- *    instance that is merely mid-call is also non-enterable, and a CALLER
- *    instance stays non-enterable for the whole duration of a
- *    cross-component (FACT) call into an instance that traps
- *    (`ComponentInstanceState.enterFrom` clears `mayEnter` on the callee's
- *    entering set only, task/mod.ts). A *different*, healthy task of that
- *    caller, parked on an end of a stream/future the trapping callee also
- *    held, was classified dead here and retired silently — stranded, the
- *    exact outcome #66 exists to prevent.
+ * #100: THE HEALTH TEST IS "POISONED", NOT NON-ENTERABILITY. Historical: the
+ * original test used the transient reentrance gate (`may_enter === False`) as
+ * a proxy for deadness. That is settled twice over — CM#705 / polyengine#173
+ * deleted the whole reentrance model, so the poison marker is not merely the
+ * better test but the only one left — and the original argument is kept only
+ * because it explains what the marker is FOR: the proxy was unsound in one
+ * direction, and the unsoundness stranded healthy tasks. A caller instance
+ * stayed non-enterable for the whole duration of a cross-component (FACT)
+ * call into an instance that trapped, so a *different*, healthy task of that
+ * caller, parked on an end of a stream/future the trapping callee also held,
+ * was classified dead here and retired silently — stranded, the exact
+ * outcome #66 exists to prevent.
  *
  * So the test consults the poison marker itself. It is per-instance and
  * recorded at the single seam every poisoning site routes through
@@ -1035,17 +1021,15 @@ interface PoisonedInstanceLike {
  * and it is recorded *before* the retirement walk runs, so an instance's own
  * parked ends still see it during its own walk. `retiredInstances` is
  * consulted alongside it because the walk is also reachable directly (it is
- * set at walk entry, so the two agree); neither ever contains the synthetic
- * per-instantiation root, which every poison site skips or releases (plan v3
- * amendment 4, `releaseSyntheticRootOnPoison`).
+ * set at walk entry, so the two agree).
  *
  * Why this does not re-open review B2 (phantom events into a corpse): the
  * concern is that a DROPPED event queued onto a waitable of an instance that
  * can never be entered again would be serviced by a later driving loop and
  * resume machinery `tick` deliberately excludes. "Can never be entered
- * again" is precisely poisoning — a mid-call instance's `mayEnter` is
- * restored by its own `leaveTo` when the call returns, and its parked task
- * then resumes normally and consumes the event. The narrowed predicate
+ * again" is precisely poisoning — a merely mid-call instance is entirely
+ * ordinary, and its parked task resumes normally and consumes the event.
+ * The narrowed predicate
  * therefore excludes exactly the population B2 is about, and admits only
  * peers that will run again.
  *

@@ -13,6 +13,7 @@
 //      defers that feature with memory64.
 
 import { Table } from "../cabi/handles.ts";
+import { COMPONENT_INSTANCE } from "../cabi/context.ts";
 import type { ComponentInstanceLike } from "../cabi/context.ts";
 import type { ComponentValue, FuncType } from "../cabi/types.ts";
 import { assert_, trapIf } from "../cabi/trap.ts";
@@ -37,17 +38,6 @@ export * from "./waitable.ts";
 export * from "./subtask.ts";
 export * from "./streams.ts";
 
-/**
- * Synthetic-root registry: one root per `Store` (see
- * `ComponentInstanceState.rootOf`). A `WeakMap` so a dead store's root dies
- * with it.
- */
-const syntheticRoots = new WeakMap<Store, ComponentInstanceState>();
-/** `index` of the synthetic root — outside the real instance index space. */
-const ROOT_INDEX = -1;
-/** Constructor marker: "this one IS the root, do not give it a parent". */
-const ROOT_TOKEN = Symbol("synthetic-root");
-
 /** Anything a component instance's handle table can hold. */
 export type HandleTableEntry = unknown;
 
@@ -58,8 +48,19 @@ export type HandleTableEntry = unknown;
  * `mayLeave` is backed by a real `WebAssembly.Global(i32, mutable)` because
  * FACT adapters import that global (`flags` namespace) and read/write it as
  * the may_leave boolean (wasmtime 47 FACT treats the whole flags global as
- * may_leave; there is no bitmask). Initial value 1 (true). `mayEnter` is
- * host-side state: nothing wasm-visible reads it.
+ * may_leave; there is no bitmask). Initial value 1 (true).
+ *
+ * There is no `may_enter` counterpart and no instance tree: upstream
+ * component-model PR #705 (definitions.py @ 2f13265) deleted `may_enter`,
+ * `parent`, `entering_set`, `enter_from` and `leave_to` outright, so nothing
+ * gates entry into a live instance. polyengine#173 followed. What polyengine
+ * keeps beyond the reference is per-instance POISONING — a named divergence
+ * living entirely in ./scheduler.ts (`isInstancePoisoned`, `entryRefusal`),
+ * not in any state on this class.
+ *
+ * `COMPONENT_INSTANCE` brands this class as a real component instance for
+ * the layers that only see the structural `ComponentInstanceLike`
+ * (cabi/handles.ts `isComponentInstance`; cabi must not import task/).
  */
 export class ComponentInstanceState implements ComponentInstanceLike {
   readonly index: number;
@@ -67,83 +68,20 @@ export class ComponentInstanceState implements ComponentInstanceLike {
   handles: Table<HandleTableEntry> = new Table();
   /** definitions.py `ComponentInstance.threads` — a Table, so `thread.index`. */
   readonly threads: Table<Thread> = new Table();
-  mayEnter = true;
+  /** cabi's real-instance discriminator; see the class doc. */
+  readonly [COMPONENT_INSTANCE] = true;
   /** definitions.py `backpressure: int` — a *counter* (backpressure.{inc,dec}). */
   backpressure = 0;
   /** definitions.py `num_waiting_to_enter`. */
   numWaitingToEnter = 0;
   /** definitions.py `exclusive_thread`. */
   exclusiveThread: Thread | null = null;
-  /**
-   * definitions.py `ComponentInstance.parent`.
-   *
-   * The plan still gives us a flat instance space, but the tree is no longer
-   * needed: every instance of one instantiation gets the same **synthetic
-   * root** as its parent (contracts/plan-format.md v3 amendment 4 /
-   * polyengine#101). See `enteringSet` for why that is observably equivalent to
-   * the real chain. The root itself has no parent.
-   */
-  parent: ComponentInstanceState | null;
   readonly store: Store;
 
-  /**
-   * The synthetic per-instantiation root (v3 amendment 4). One per `Store`:
-   * a `Store` is exactly one component instantiation's scheduling scope, so
-   * "all `ComponentInstanceState`s sharing a `Store`" is the set that shares
-   * a top-level component — which is the granularity wasmtime's own
-   * top-level-instance-id comparison uses (concurrent.rs:1876-1886).
-   *
-   * It is a real `ComponentInstanceState` (index -1) rather than a bare flag
-   * so it flows through `selfAndAncestors`/`enteringSet` unchanged; its
-   * handle table stays empty and no task ever runs on it.
-   */
-  static rootOf(store: Store): ComponentInstanceState {
-    let root = syntheticRoots.get(store);
-    if (root === undefined) {
-      root = new ComponentInstanceState(ROOT_INDEX, store, ROOT_TOKEN);
-      syntheticRoots.set(store, root);
-    }
-    return root;
-  }
-
-  /** Is this the synthetic root (never a real component instance)? */
-  get isSyntheticRoot(): boolean {
-    return this.index === ROOT_INDEX && this.parent === null;
-  }
-
-  constructor(index: number, store?: Store, root?: typeof ROOT_TOKEN) {
+  constructor(index: number, store?: Store) {
     this.index = index;
     this.store = store ?? new Store();
     this.flags = new WebAssembly.Global({ value: "i32", mutable: true }, 1);
-    // The root is its own tree's top; everything else hangs off it. Built
-    // lazily here so no call site has to remember to wire it up.
-    this.parent = root === ROOT_TOKEN
-      ? null
-      : ComponentInstanceState.rootOf(this.store);
-  }
-
-  /**
-   * Release the synthetic root after a trap broke the enter/leave bracket
-   * (v3 amendment 4, and a **named divergence** from the reference).
-   *
-   * definitions.py poisons the whole entering set: `Store.lift` never reaches
-   * `leave_to`, so the root — which is in every host entry's entering set —
-   * stays `may_enter == False` forever and NO instance of the component can
-   * be entered again. wasmtime is the same by other means (it poisons the
-   * store). polyengine deliberately supports post-trap re-entry of instances the
-   * trap did not touch (exec/boundary.ts `poison`: "sibling instances stay
-   * usable, which is why the lock is released per-instance rather than by
-   * poisoning a whole store the way wasmtime does"), and the synthetic root
-   * must not silently convert that documented divergence into store-wide
-   * poisoning. So a trap poisons the LEAF set only, and the root is released
-   * here — the reentrance gate the root exists for (a *second, concurrent*
-   * host entry) is about a live entry, and after a trap unwinds to the host
-   * there is none.
-   */
-  releaseSyntheticRootOnPoison(): void {
-    for (const inst of this.selfAndAncestors()) {
-      if (inst.isSyntheticRoot) inst.mayEnter = true;
-    }
   }
 
   get mayLeave(): boolean {
@@ -154,87 +92,6 @@ export class ComponentInstanceState implements ComponentInstanceLike {
     this.flags.value = v ? 1 : 0;
   }
 
-  /** definitions.py `ComponentInstance.self_and_ancestors` (line 236). */
-  selfAndAncestors(): Set<ComponentInstanceState> {
-    const s = new Set<ComponentInstanceState>([this]);
-    let a = this.parent;
-    while (a !== null) {
-      s.add(a);
-      a = a.parent;
-    }
-    return s;
-  }
-
-  /**
-   * definitions.py `ComponentInstance.entering_set` (line 230):
-   * `self_and_ancestors() - caller.self_and_ancestors()`.
-   *
-   * CONTRACT (contracts/plan-format.md v3 amendment 4, polyengine#101): the plan
-   * still carries no wire form for the component-instance tree, and it no
-   * longer needs one. Every instance's parent is the synthetic
-   * per-instantiation root, so:
-   *
-   *   * host entry (`caller === null`): `{this, root}` — the reference's
-   *     entering set for a host entry is `self_and_ancestors()`, which always
-   *     contains the top-level root, so a second host entry anywhere in the
-   *     tree trips on the root either way. This is the divergence #101
-   *     reported (host -> A.f -> host import -> host enters a *different*
-   *     instance): now caught.
-   *   * guest-to-guest (`caller !== null`): `{this}` — the root is in the
-   *     caller's ancestor set and cancels out. Intermediate ancestors would
-   *     be the only difference from the real chain, and they are never
-   *     reachably consulted: FACT compiles same-instance and ancestor calls
-   *     to unconditional compile-time traps, and sibling cycles are
-   *     unreachable because instance imports form a DAG (polyengine#99
-   *     adjudication).
-   *
-   * So the synthetic root is observably equivalent to the full chain, and it
-   * matches wasmtime's own shortcut — a top-level instance-id comparison
-   * (concurrent.rs:1876-1886) — by construction. This reopens only if some
-   * future upstream shape makes nesting depth observable.
-   *
-   * One deliberate departure remains, at the trap path rather than here: see
-   * `releaseSyntheticRootOnPoison`.
-   */
-  enteringSet(caller: ComponentInstanceState | null): Set<ComponentInstanceState> {
-    const mine = this.selfAndAncestors();
-    if (caller === null) return mine;
-    for (const c of caller.selfAndAncestors()) mine.delete(c);
-    return mine;
-  }
-
-  /** definitions.py `ComponentInstance.may_enter_from` (line 214). */
-  mayEnterFrom(caller: ComponentInstanceState | null): boolean {
-    for (const inst of this.enteringSet(caller)) {
-      if (!inst.mayEnter) return false;
-    }
-    return true;
-  }
-
-  /** definitions.py `ComponentInstance.enter_from` (line 220). */
-  enterFrom(caller: ComponentInstanceState | null): void {
-    for (const inst of this.enteringSet(caller)) {
-      assert_(inst.mayEnter, "enter_from without may_enter");
-      inst.mayEnter = false;
-    }
-  }
-
-  /** definitions.py `ComponentInstance.leave_to` (line 225). */
-  leaveTo(caller: ComponentInstanceState | null): void {
-    for (const inst of this.enteringSet(caller)) {
-      assert_(!inst.mayEnter, "leave_to without a matching enter_from");
-      inst.mayEnter = true;
-    }
-  }
-
-  /** Backwards-compatible host-entry helpers (the M0 spelling). */
-  enter(): void {
-    this.enterFrom(null);
-  }
-
-  leave(): void {
-    this.leaveTo(null);
-  }
 }
 
 /** definitions.py `Task.State` (line 445). */

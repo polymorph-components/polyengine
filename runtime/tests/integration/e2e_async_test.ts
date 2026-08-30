@@ -94,7 +94,6 @@ Deno.test("async-probe: the task model is left clean after the call", async () =
   const f = component.exports["wait-then-double"] as (x: number) => unknown;
   assertEq(await f(1), 2);
   const inst = component.componentInstances[0];
-  assertEq(inst.mayEnter, true);
   assertEq(inst.mayLeave, true);
   // definitions.py `Task.exit_implicit_thread`: the exclusive thread is
   // released and the instance's thread table is empty again.
@@ -153,7 +152,6 @@ Deno.test("async-probe: a terminating activation leaves nothing behind", async (
   // released and the instance's thread table is empty again.
   assertEq(inst.exclusiveThread, null);
   assertEq([...inst.threads].length, 0);
-  assertEq(inst.mayEnter, true);
   // Nothing parked: neither on a scheduler condition nor mid-wasm-call.
   const store = (inst as unknown as {
     store: { waiting: unknown[]; awaiting: Set<unknown> };

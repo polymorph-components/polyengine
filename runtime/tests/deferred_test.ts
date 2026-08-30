@@ -57,8 +57,7 @@ const deferred: [name: string, reason: string][] = [
     "test_cross_component_realloc",
     "needs the component instance *tree* (ComponentInstance.parent) so a " +
     "callee can reach a caller's realloc across a nested lift; the plan has " +
-    "no wire form for instance nesting (see the CONTRACT note on " +
-    "ComponentInstanceState.enteringSet) — v0.3 contract friction, not a " +
+    "no wire form for instance nesting — v0.3 contract friction, not a " +
     "scheduler gap",
   ],
   [

@@ -19,6 +19,7 @@ import {
   PendingCapability,
   entryRefusal,
 } from "../task/scheduler.ts";
+import { COMPONENT_INSTANCE } from "./context.ts";
 import type {
   ComponentInstanceLike,
   LiftLowerContext,
@@ -162,28 +163,35 @@ export function canonResourceNew(
 }
 
 /**
- * The slice of `ComponentInstance` a dtor call needs to identify a real
- * component instance (as opposed to an imported/host resource, which has no
- * instance at all). `ResourceTypeInfo.impl` is typed as the
- * deliberately-minimal `InstanceLike` (cabi must not depend on task/), so it
- * is recognised structurally; the concrete implementor is `task/mod.ts`
- * `ComponentInstanceState`. The reentrance members are inert since CM#705
- * (polyengine#173) and are matched only as the structural discriminator,
- * pending the contract amendment that deletes the model.
+ * The slice of a real component instance a dtor call needs: its handle table
+ * (for the poisoning walk) plus the identity `entryRefusal` keys on.
  */
-interface ReentranceGate {
-  mayEnterFrom(caller: unknown): boolean;
-  enterFrom(caller: unknown): void;
-  leaveTo(caller: unknown): void;
+interface RealComponentInstance {
   handles: Iterable<unknown>;
 }
 
-function asGate(x: unknown): ReentranceGate | null {
+/**
+ * Is `x` a REAL component instance (`task/mod.ts` `ComponentInstanceState`),
+ * as opposed to something that has no instance behind it at all?
+ *
+ * Two populations must answer false, and both are load-bearing for
+ * `callDtorGated`: an imported/host-implemented resource, whose
+ * `ResourceTypeInfo.impl` is `null` by construction (exec/executor.ts
+ * `bindImportedResources`), and the bare `{handles, mayLeave}` doubles test
+ * harnesses supply — neither has an instance to refuse entry into or to
+ * poison. So this is deliberately NOT a structural match on
+ * `ComponentInstanceLike`, which those doubles satisfy: it reads the
+ * `COMPONENT_INSTANCE` brand, declared on `ComponentInstanceState` and
+ * defined in ./context.ts so that cabi does not have to import task/.
+ *
+ * (It replaced a structural match on `may_enter_from`/`enter_from`/`leave_to`,
+ * the reentrance methods CM#705 and polyengine#173 deleted. Same population,
+ * by construction: `ComponentInstanceState` was their only implementor.)
+ */
+function isComponentInstance(x: unknown): RealComponentInstance | null {
   if (x === null || typeof x !== "object") return null;
-  const g = x as Partial<ReentranceGate>;
-  return typeof g.mayEnterFrom === "function" &&
-      typeof g.enterFrom === "function" && typeof g.leaveTo === "function"
-    ? (x as ReentranceGate)
+  return (x as Record<symbol, unknown>)[COMPONENT_INSTANCE] === true
+    ? (x as RealComponentInstance)
     : null;
 }
 
@@ -234,14 +242,15 @@ export function callDtorGated(
   rep: number,
   caller: unknown,
 ): void {
-  const impl = asGate(rt.impl);
+  const impl = isComponentInstance(rt.impl);
   // Always the raw synchronous dtor: `dtorHost` is the host path's lifted
   // entry, which is not callable from inside a guest activation.
   const dtorFn = rt.dtor;
-  // No gate available: an imported (host-implemented) resource has
-  // `impl === null` by construction (executor.ts `bindImportedResources`),
-  // and there is no component instance to gate entry into. Test doubles that
-  // supply a bare `{handles, mayLeave}` instance land here too.
+  // No component instance behind the resource: an imported (host-implemented)
+  // resource has `impl === null` by construction (executor.ts
+  // `bindImportedResources`), so there is no instance to refuse entry into and
+  // none to poison. Test doubles that supply a bare `{handles, mayLeave}`
+  // instance land here too — see `isComponentInstance`.
   if (impl === null) {
     const r = dtorFn?.(rep) as unknown;
     trapIf(
@@ -250,16 +259,16 @@ export function callDtorGated(
     );
     return;
   }
-  // definitions.py `entering_set` (line 230): `self_and_ancestors() -
-  // caller.self_and_ancestors()`. The caller is only meaningful when it is a
-  // real component instance; a host-initiated drop passes null, which is the
-  // reference's `caller = None` (Store.invoke).
-  const callerInst = asGate(caller) === null ? null : caller;
+  // The caller is only meaningful when it is a real component instance; a
+  // host-initiated drop passes null, which is the reference's `caller = None`
+  // (Store.invoke). It feeds `entryRefusal`'s `caller !== callee` guard below.
+  const callerInst = isComponentInstance(caller) === null ? null : caller;
 
   // A poisoned target's refusal names the original trap (polyengine#145).
   // `callerInst` can legitimately BE `impl` here (a guest dropping its own
   // resource): `entryRefusal`'s vacuous-pass guard keeps that entry allowed
-  // even against a marked instance, matching the empty entering set.
+  // even against a marked instance, matching the pre-CM#705 reference's
+  // vacuous pass on an empty entering set.
   {
     const refusal = entryRefusal(
       impl,

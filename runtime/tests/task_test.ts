@@ -13,7 +13,6 @@ import {
   type Cancelled,
   chooseCandidate,
   ComponentInstanceState,
-  dispatchableTail,
   driveSyncLift,
   entryRefusal,
   EventCode,
@@ -196,85 +195,24 @@ Deno.test("canon_lift sync loop: traps when no thread can make progress", () => 
 });
 
 // ---------------------------------------------------------------------------
-// The RETAINED-BUT-INERT reentrance model (ComponentInstance.enter_from /
-// may_enter_from)
+// Post-CM#705 entry semantics (polyengine#173)
 // ---------------------------------------------------------------------------
 //
 // CM#705 (definitions.py @ 2f13265) removed `may_enter`, `entering_set`,
-// `enter_from`, `leave_to` and `ComponentInstance.parent` outright, and
-// polyengine#173 removed every CALL to them from the runtime: nothing gates
-// entry any more except the poison marker. The model's own arithmetic is
-// still defined in task/mod.ts pending the contract amendment that deletes
-// it, and these tests pin that arithmetic so the deletion PR is a clean
-// subtraction. They assert NOTHING about runtime behavior — no runtime path
-// consults them.
+// `enter_from`, `leave_to` and `ComponentInstance.parent` outright;
+// polyengine#173 removed every call to them and then the definitions
+// themselves, along with the per-instantiation root the plan used to stand
+// in for the instance tree. Nothing gates entry any more except
+// polyengine's own per-instance poison marker (pinned further below).
+//
+// What follows pins the MERGED semantics: the shapes that the deleted model
+// used to forbid, and that must now proceed.
 
-Deno.test("reentrance: an instance cannot be re-entered from the host", () => {
-  const inst = new ComponentInstanceState(0);
-  assertEq(inst.mayEnterFrom(null), true);
-  inst.enterFrom(null);
-  assertEq(inst.mayEnterFrom(null), false);
-  inst.leaveTo(null);
-  assertEq(inst.mayEnterFrom(null), true);
-});
-
-Deno.test("reentrance: the entering set excludes the caller's own ancestry", () => {
-  const inst = new ComponentInstanceState(0);
-  // definitions.py `entering_set`: `self_and_ancestors() - caller.self_and_ancestors()`.
-  // A call from an instance to *itself* enters nothing, so it is always
-  // permitted — that is what makes a self-recursive lift legal.
-  assertEq([...inst.enteringSet(inst)].length, 0);
-  inst.enterFrom(null);
-  assertEq(inst.mayEnterFrom(inst), true);
-});
-
-// ---------------------------------------------------------------------------
-// Synthetic per-instantiation root (plan v3 amendment 4 / polyengine#101)
-// ---------------------------------------------------------------------------
-
-Deno.test("root: a host entry locks the whole instantiation, not just the leaf", () => {
-  const store = new Store();
-  const a = new ComponentInstanceState(0, store);
-  const b = new ComponentInstanceState(1, store);
-  assertEq(a.parent === b.parent, true, "siblings share one synthetic root");
-  assertEq(a.parent!.isSyntheticRoot, true);
-
-  // definitions.py `entering_set(None)` = `self_and_ancestors()`, which in the
-  // reference always contains the top-level root. So a host entry into A
-  // forbids a host entry into B — the reachable divergence #101 reported.
-  assertEq([...a.enteringSet(null)].length, 2, "{leaf, root}");
-  a.enterFrom(null);
-  assertEq(a.mayEnterFrom(null), false);
-  assertEq(b.mayEnterFrom(null), false, "the sibling is locked through the root");
-  a.leaveTo(null);
-  assertEq(b.mayEnterFrom(null), true);
-});
-
-Deno.test("root: instantiations are independent", () => {
-  const a = new ComponentInstanceState(0, new Store());
-  const b = new ComponentInstanceState(0, new Store());
-  a.enterFrom(null);
-  assertEq(b.mayEnterFrom(null), true, "a different Store is a different root");
-});
-
-Deno.test("root: guest-to-guest entering sets are unchanged ({leaf})", () => {
-  const store = new Store();
-  const a = new ComponentInstanceState(0, store);
-  const b = new ComponentInstanceState(1, store);
-  // The root cancels out (it is in the caller's ancestry), so a guest->guest
-  // call locks only the callee — the DAG adjudication (#99/#101).
-  const set = [...b.enteringSet(a)];
-  assertEq(set.length, 1);
-  assertEq(set[0] === b, true);
-  // ...and a call to oneself still enters nothing.
-  assertEq([...a.enteringSet(a)].length, 0);
-});
-
-Deno.test("root: tick resumes a ready sibling thread during a live host entry", () => {
+Deno.test("cm705: tick resumes a ready sibling thread during a live host entry", () => {
   // INVERTED by polyengine#173 (CM#705). This shape used to be the #155
   // regression: `tick` filtered its candidates on host-enterability, and
-  // under the shared synthetic root a host entry into A made every sibling
-  // non-enterable, so B could not run until A's call returned.
+  // under that model's shared per-instantiation root a host entry into A made
+  // every sibling non-enterable, so B could not run until A's call returned.
   //
   // The merged reference (definitions.py @ 2f13265 `Store.tick`) resumes any
   // ready thread with no gate and no bracket, so B runs immediately.
@@ -322,8 +260,8 @@ Deno.test("root: tick resumes a ready sibling thread during a live host entry", 
 // --- issue #156: settled activation tails, post-CM#705 ---------------------
 //
 // History: `Store.settled` tails are dispatched through `Thread.resumeWith`,
-// which used to bracket the resumption with `enterFrom(null)`. Under the
-// shared synthetic root a host entry into ANY instance locked every sibling,
+// which used to bracket the resumption with a host entry. Under the shared
+// per-instantiation root a host entry into ANY instance locked every sibling,
 // so dispatching a sibling's tail in that window tripped `resumeWith`'s
 // enterability assert (and, mutating before asserting, stranded the thread
 // and lost the settle); #156 deferred such tails IN PLACE.
@@ -341,7 +279,7 @@ async function queueSettledTail(settle: () => void): Promise<void> {
   await Promise.resolve();
 }
 
-Deno.test("root: serviceSettled dispatches a sibling tail immediately", async () => {
+Deno.test("cm705: serviceSettled dispatches a sibling tail immediately", async () => {
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -377,10 +315,10 @@ Deno.test("root: serviceSettled dispatches a sibling tail immediately", async ()
   assertEq(store.awaiting.has(bThread), false);
 });
 
-Deno.test("root: the phantom-state gate holds for a serviceable tail", async () => {
-  // The tick gate relaxes ONLY for deferred tails: a serviceable unserviced
-  // tail still refuses tick, preserving the reference's atomic-resume
-  // discipline.
+Deno.test("cm705: the phantom-state gate holds for a serviceable tail", async () => {
+  // An unserviced tail refuses tick, preserving the reference's atomic-resume
+  // discipline. (Pre-#173 the gate relaxed for reentrance-deferred tails;
+  // there are none now, so the gate is simply "the queue is non-empty".)
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -417,7 +355,7 @@ Deno.test("root: the phantom-state gate holds for a serviceable tail", async () 
 
   await queueSettledTail(settle);
   assertEq(store.settled.length, 1);
-  assertEq(dispatchableTail(bThread), true, "the tail is serviceable");
+  assertEq(store.hasServiceableSettled(), true, "the tail is serviceable");
   assertEq(store.tick(), false, "a serviceable tail gates tick");
   assertEq(order.length, 0);
 
@@ -426,7 +364,7 @@ Deno.test("root: the phantom-state gate holds for a serviceable tail", async () 
   assertEq(order.join(","), "a ran");
 });
 
-Deno.test("root: a poisoned instance's tail retires without running", async () => {
+Deno.test("cm705: a poisoned instance's tail retires without running", async () => {
   // `resumeWith`'s poison early-return retires the tail: the queue drains and
   // the body does NOT run. (#66 / #156; unchanged by CM#705 — a corpse's
   // parked segments must never resume.)
@@ -459,7 +397,7 @@ Deno.test("root: a poisoned instance's tail retires without running", async () =
   assertEq(order.length, 0, "retired quietly: the body never ran");
 });
 
-Deno.test("root: stale settled entries are removed", async () => {
+Deno.test("cm705: stale settled entries are removed", async () => {
   // "Stale" = the thread was resumed elsewhere (driveAsync's race-winner
   // path), i.e. it is gone from `store.awaiting`. Such entries are dropped
   // whenever encountered, and dropping one is not progress.
@@ -490,7 +428,7 @@ Deno.test("root: stale settled entries are removed", async () => {
   assertEq(store.settled.length, 0, "but it is removed");
 });
 
-Deno.test("root: trap poisoning stays per-instance (named divergence)", () => {
+Deno.test("cm705: trap poisoning stays per-instance (named divergence)", () => {
   const store = new Store();
   const a = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
@@ -816,7 +754,7 @@ Deno.test("tick: a trap under tick records the poison marker", async () => {
   // A trap escaping `thread.resume()` under `Store.tick` poisons the
   // instance. Post-CM#705 there is no bracket to break, so recording the
   // MARKER is the entire act — and it is what `Thread.resumeWith`'s
-  // quiet-retire, `dispatchableTail` and `entryRefusal` all read
+  // quiet-retire and `entryRefusal` both read
   // (polyengine#145, #156, #251).
   const store = new Store();
   const b = new ComponentInstanceState(0, store);
@@ -867,7 +805,7 @@ Deno.test("tick: a trap under tick records the poison marker", async () => {
 
   // #156 interaction: the settled tail of the poisoned instance drains
   // quietly instead of hitting `resumeWith`'s backstop assert (or deferring
-  // forever, which is what `dispatchableTail` would do without the marker).
+  // forever if the tail were resumed as if the instance were healthy).
   await queueSettledTail(settle);
   assertEq(store.settled.length, 1, "the tail is queued");
   assertEq(store.serviceSettled(), true, "poisoned tails dispatch");
@@ -930,8 +868,8 @@ Deno.test("request_cancellation: a capability signal does not poison", () => {
 // White-box pins on the property the re-key bought and CM#705 then made
 // unavoidable: every entry-refusal DECISION reads the poison MARKER, which is
 // now the only refusal mechanism there is. Nothing locks an instance any
-// more, so these tests need no `mayEnter` manipulation — an unmarked instance
-// is always enterable, by construction.
+// more, so these tests need no reentrance-state manipulation — an unmarked
+// instance is always enterable, by construction.
 
 Deno.test("re-key: entryRefusal refuses a marked instance", () => {
   const store = new Store();

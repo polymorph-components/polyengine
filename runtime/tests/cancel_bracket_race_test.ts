@@ -7,7 +7,7 @@
 // built-ins, `exit-sync-call`, etc.) runs on a LATER microtask. A concurrent
 // host EXPORT call can enter the same instance in between.
 //
-// Originally the delivery was wrapped in an `enterFrom`/`leaveTo` bracket and
+// Originally the delivery was wrapped in a host-entry bracket and
 // the question was whether that bracket closed too early. CM#705
 // (polyengine#173) removed the bracket — and the whole reentrance gate —
 // from the reference and from this runtime, so the concurrent entry is now

@@ -34,7 +34,6 @@ import {
   EventCode,
   withActivation,
   hasRealHostCall,
-  dispatchableTail,
   type EventTuple,
   NeedsJspi,
   needsJspi,
@@ -1078,18 +1077,18 @@ async function driveAsync(
         (t) => !queued.has(t),
       );
       if (parked.length === 0) {
-        // Every awaiting thread's settle is deferred on a non-enterable
-        // instance. INERT since CM#705 (polyengine#173): nothing is ever
-        // non-enterable now, so `dispatchableTail` never defers and this
-        // branch is unreachable by construction rather than by argument. Kept
-        // textually intact pending the contract amendment that deletes the
-        // reentrance model.
-        //
-        // The way out is the lock holder finishing, and the only
-        // await-spanning host-entry lock is the async-dtor bracket, which
-        // registers in `pendingHostCalls` — so park on those, plus the
-        // driver-arrival one-shot: every park in this loop races it, so the
-        // stand-down below is prompt wherever we happen to be waiting.
+        // UNREACHABLE BY CONSTRUCTION since polyengine#173 deleted the
+        // reentrance model. `parked` is `store.awaiting` minus the threads
+        // whose tails are already queued in `store.settled`, and we only get
+        // here with `awaiting` non-empty and `hasServiceableSettled()` false
+        // — which now means the settled queue is EMPTY, so nothing was
+        // excluded. (Pre-CM#705 a queue of reentrance-deferred tails answered
+        // false while still excluding every parked thread; issue #156. The
+        // way out was the lock holder finishing, and the only await-spanning
+        // host-entry lock was the async-dtor bracket, which registers in
+        // `pendingHostCalls` — hence the park below, plus the driver-arrival
+        // one-shot every park in this loop races.) Retained as a wedge
+        // detector, not as expected behavior.
         if (store.pendingHostCalls.size > 0) {
           await Promise.race([
             ...store.pendingHostCalls,
@@ -1150,9 +1149,9 @@ async function driveAsync(
       // What holds regardless is the invariant the `driverDepth` note names:
       // a genuine resumption is preceded by `SuspensionPoint.resume`'s OWN
       // entry (jspi/bridge.ts, minted before the settle), and every
-      // resumption site here re-checks membership, promise identity and
-      // `dispatchableTail` synchronously — mechanisms (a) and (b), which is
-      // where that note already puts the weight.
+      // resumption site here re-checks membership and promise identity
+      // synchronously — mechanisms (a) and (b), which is where that note
+      // already puts the weight.
       const sole = storeDriverDepth(store) === 1;
       if (sole) store.addPendingResumption(chosen);
       let winner: AwaitWinner | null;
@@ -1182,13 +1181,7 @@ async function driveAsync(
       // has already consumed. Compare promise identity too.
       if (
         winner !== null && store.awaiting.has(winner.t) &&
-        winner.t.awaiting === winner.p &&
-        // Dispatch guard, the same predicate `Store.serviceSettled` uses
-        // (issue #156): never resume into an instance that is not
-        // host-enterable. The entry is (also) queued in `store.settled` by
-        // `noteAwaiting`'s continuation, and `serviceSettled` owns it once
-        // the lock releases.
-        dispatchableTail(winner.t)
+        winner.t.awaiting === winner.p
       ) {
         winner.t.resumeWith(winner.value, winner.failure);
       }
@@ -1770,8 +1763,8 @@ function dtorOptions(instance: ComponentInstanceState): ResolvedOptions {
  *
  * Before #160 the host-initiated path (embedder `drop()`, the GC backstop,
  * `dropOwn`) hand-rolled the bracket in cabi/handles.ts `callDtorGated`: a
- * bare call to the dtor with `enterFrom(null)` HELD across the returned
- * promise. Three defects followed from having no Task/Thread behind the
+ * bare call to the dtor with the pre-CM#705 host-entry bracket HELD across
+ * the returned promise. Three defects followed from having no Task/Thread behind the
  * activation:
  *
  *  - **#160 itself**: the held bracket left the impl instance non-enterable,
@@ -1779,9 +1772,10 @@ function dtorOptions(instance: ComponentInstanceState): ResolvedOptions {
  *    suspension point belonging to the dtor's own activation. The completion
  *    promise sat in `pendingHostCalls` looking like external work, and every
  *    driver parked on it forever.
- *  - it was the runtime's only `enterFrom(null)` bracket spanning an await —
+ *  - it was the runtime's only host-entry bracket spanning an await —
  *    the macro-scale reachability window of the #156 class, through which a
- *    sibling instance looked non-enterable from the synthetic root.
+ *    sibling instance looked non-enterable (the shared per-instantiation
+ *    root of the since-deleted reentrance model, polyengine#173).
  *  - built-ins reached inside the dtor had no ambient task (`currentTask()`
  *    → `PendingCapability`, or a foreign-task misattribution, the #24 class).
  *
