@@ -20,6 +20,7 @@ import {
   type Cancelled,
   CANCELLED_TRUE,
   chooseCandidate,
+  isInstancePoisoned,
   Store,
   dbgId,
   NeedsJspi,
@@ -509,7 +510,14 @@ export class Task {
         }
       }
     }
-    if (candidates.length > 0 && this.inst.mayEnterFrom(caller)) {
+    // Delivery needs the callee instance to be enterable — and NOT poisoned.
+    // The marker is the authoritative poisoning input (polyengine#173): a
+    // poisoned instance leaves the cancellation pending. Behaviorally
+    // identical today (the marker locks the leaf's `mayEnter` forever), but
+    // it survives the CM#705 deletion of `may_enter`; the `caller !== inst`
+    // guard is `entering_set`'s vacuous pass, as in `entryRefusal`.
+    const poisoned = caller !== this.inst && isInstancePoisoned(this.inst);
+    if (candidates.length > 0 && !poisoned && this.inst.mayEnterFrom(caller)) {
       this.state = "cancel-delivered";
       this.inst.enterFrom(caller);
       try {

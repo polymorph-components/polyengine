@@ -14,6 +14,7 @@ import {
   chooseCandidate,
   ComponentInstanceState,
   driveSyncLift,
+  entryRefusal,
   EventCode,
   packSubtaskResult,
   schedulerPolicy,
@@ -915,6 +916,117 @@ Deno.test("request_cancellation: a capability signal releases the gate", () => {
   );
   assertEq(b.mayEnterFrom(callerInst), true, "the gate is released");
   assertEq(isInstancePoisoned(b), false, "and nothing is poisoned");
+});
+
+// ---------------------------------------------------------------------------
+// Poisoning re-key (polyengine#173)
+// ---------------------------------------------------------------------------
+//
+// White-box pins on the property the re-key buys: every poisoning DECISION
+// reads the poison MARKER, not `mayEnter`. Each test below forces `mayEnter`
+// back to true on a marked instance — a state the runtime never produces
+// today — so the pin isolates the marker's authority and must survive the
+// CM#705 deletion of `may_enter` unchanged.
+
+/** Force a marked instance (and its synthetic root) back to enterable. */
+function forceEnterable(inst: ComponentInstanceState): void {
+  for (const i of inst.selfAndAncestors()) i.mayEnter = true;
+}
+
+Deno.test("re-key: entryRefusal refuses a marked instance with mayEnter forced true", () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  notifyInstancePoisoned(inst, new Trap("boom"));
+  forceEnterable(inst);
+  assertEq(inst.mayEnterFrom(null), true, "the transient gate is wide open");
+
+  const r = entryRefusal(inst, null, "cannot enter component instance");
+  assert(r !== null, "the marker alone refuses entry");
+  assertEq(r.includes("cannot enter component instance"), true);
+  assertEq(r.includes("instance poisoned by"), true, "the cause is named");
+  assertEq(r.includes("boom"), true, "and it is the original trap");
+});
+
+Deno.test("re-key: an unmarked but bracket-locked instance refuses with the bare base", () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  inst.enterFrom(null);
+  assertEq(
+    entryRefusal(inst, null, "cannot enter component instance"),
+    "cannot enter component instance",
+    "transient reentrance: byte-identical to the pre-re-key message",
+  );
+});
+
+Deno.test("re-key: an enterable instance is not refused", () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  assertEq(entryRefusal(inst, null, "base"), null);
+});
+
+Deno.test("re-key: caller === callee passes vacuously even when marked", () => {
+  // definitions.py `entering_set` (line 230) is empty for a self-call, so
+  // there is no instance to check. The dtor path (cabi/handles.ts) relies on
+  // this: a guest dropping its own resource is not refused by its own marker.
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  notifyInstancePoisoned(inst, new Trap("boom"));
+  forceEnterable(inst);
+  assertEq([...inst.enteringSet(inst)].length, 0, "empty entering set");
+  assertEq(entryRefusal(inst, inst, "base"), null);
+});
+
+Deno.test("re-key: tick does not resume a marked instance with mayEnter forced true", () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  let flag = false;
+  const order: string[] = [];
+  const task = mkTask(inst, SYNC_FT, SYNC_OPTS);
+  const thread = spawn(task, function* (thread) {
+    yield* task.enterImplicitThread(thread);
+    task.start();
+    yield* thread.waitUntil(() => flag, false);
+    order.push("ran");
+    task.return_([]);
+    task.exitImplicitThread(thread);
+  });
+  thread.resume();
+  flag = true;
+  assertEq(thread.ready(), true, "the thread is ready...");
+
+  notifyInstancePoisoned(inst, new Trap("boom"));
+  forceEnterable(inst);
+  assertEq(inst.mayEnterFrom(null), true, "...and transiently enterable");
+  assertEq(store.tick(), false, "but the marker excludes it from tick");
+  assertEq(order.length, 0);
+});
+
+Deno.test("re-key: requestCancellation leaves a marked callee's request pending", () => {
+  const store = new Store();
+  const callerInst = new ComponentInstanceState(0, store);
+  const b = new ComponentInstanceState(1, store);
+  let sawCancel = false;
+  const task = mkTask(b, ASYNC_FT, STACKFUL_OPTS);
+  const thread = spawn(task, function* (thread) {
+    yield* task.enterImplicitThread(thread);
+    task.start();
+    const cancelled = yield* thread.waitUntil(() => false, true);
+    if (cancelled) {
+      sawCancel = true;
+      task.cancel();
+    }
+    task.exitImplicitThread(thread);
+  });
+  thread.resume();
+  assertEq(task.state, "started");
+
+  notifyInstancePoisoned(b, new Trap("boom"));
+  forceEnterable(b);
+  assertEq(b.mayEnterFrom(callerInst), true, "transiently enterable");
+
+  task.requestCancellation(callerInst);
+  assertEq(sawCancel, false, "delivery is refused by the marker");
+  assertEq(task.state, "pending-cancel");
 });
 
 Deno.test("cancellation: task.cancel without a delivered request traps", () => {

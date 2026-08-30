@@ -209,6 +209,53 @@ export function withPoisonCause(inst: object, base: string): string {
   return `${base} — instance poisoned by: ${cause}`;
 }
 
+/**
+ * The entry-refusal decision, in one place: may `caller` enter `callee` right
+ * now, and if not, what does the refusal trap say? Returns `null` when entry
+ * is allowed, otherwise the exact trap message for `base`.
+ *
+ * THE POISONING RE-KEY (polyengine#173). Poisoning is decided by the POISON
+ * MARKER (`isInstancePoisoned`), not by `mayEnter`. Today the two agree —
+ * the marker is only ever set at a bracket-break site that simultaneously
+ * leaves the leaf's `mayEnter` false forever, and nothing restores it
+ * (`releaseSyntheticRootOnPoison` touches synthetic roots only, and roots are
+ * never marked) — so clause 1 implies clause 2 and the re-key is observably
+ * neutral. The point is what happens NEXT: CM PR #705 deletes `may_enter`
+ * entirely, and at that pin advance clause 2 is deleted wholesale while
+ * poisoning survives untouched, because it never depended on `may_enter`.
+ *
+ * Byte identity with the pre-re-key `if (!X.mayEnterFrom(Y)) trap(
+ * withPoisonCause(X, BASE))` at every call site:
+ *   - marked callee ⇒ clause 1 returns `withPoisonCause(callee, base)`, and
+ *     clause 2 would have fired too (marker ⇒ leaf locked forever), yielding
+ *     the same suffixed string;
+ *   - unmarked and locked ⇒ clause 2 returns `base`, which is exactly what
+ *     `withPoisonCause` returns for an unmarked instance;
+ *   - unmarked and enterable ⇒ no trap, then as now.
+ *
+ * The `caller !== callee` guard on clause 1 preserves the reference's
+ * vacuous pass on an EMPTY entering set (definitions.py `entering_set`,
+ * line 230: `self_and_ancestors() - caller.self_and_ancestors()`, empty when
+ * caller is callee). A dtor invoked from inside its own instance
+ * (cabi/handles.ts) is the live case: it must not be refused by its own
+ * instance's marker. With the synthetic-root shape (`{leaf, root}` ancestry,
+ * mod.ts `enteringSet`), "some member of `enteringSet(caller)` is marked" is
+ * exactly `caller !== callee && isInstancePoisoned(callee)`: the only other
+ * member a set can hold is the root, and roots are never marked.
+ */
+export function entryRefusal(
+  callee: { mayEnterFrom(caller: unknown): boolean },
+  caller: unknown,
+  base: string,
+): string | null {
+  if (caller !== callee && isInstancePoisoned(callee)) {
+    return withPoisonCause(callee, base);
+  }
+  // CM#705 deletes `may_enter`; this clause goes with it (polyengine#173).
+  if (!callee.mayEnterFrom(caller)) return base;
+  return null;
+}
+
 function describeCause(cause: unknown): string {
   try {
     // String(err) renders "Name: message" — for a `Trap`, exactly the
@@ -1170,8 +1217,12 @@ export class Store {
     // This cannot livelock: the entered call's host import settles from host
     // JS independently of `tick`, and when that call returns, `leaveTo(null)`
     // unlocks the root and the skipped threads run on the next turn.
+    // A poisoned instance is excluded by the MARKER, not by its (permanently
+    // false) `mayEnter` — the poisoning re-key of polyengine#173. Identical
+    // behavior today; keyed so the CM#705 removal of `may_enter` deletes only
+    // the second conjunct.
     const candidates = this.readyCandidates().filter((t) =>
-      t.task.inst.mayEnterFrom(null)
+      !isInstancePoisoned(t.task.inst) && t.task.inst.mayEnterFrom(null)
     );
     if (candidates.length === 0) return false;
     const thread = chooseCandidate(candidates);

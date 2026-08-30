@@ -25,7 +25,7 @@ import { trapIf } from "../cabi/trap.ts";
 import { assert_ } from "../cabi/trap.ts";
 import type { ResourceTypeInfo } from "../cabi/types.ts";
 import type { ComponentInstanceState } from "../task/mod.ts";
-import { maybeCurrentThread, maybeCurrentTask, PendingCapability, withPoisonCause } from "../task/mod.ts";
+import { entryRefusal, maybeCurrentThread, maybeCurrentTask, PendingCapability } from "../task/mod.ts";
 import type { WireTrampoline } from "../plan/format.ts";
 import type { CoreFn, ExecutionStats } from "../exec/boundary.ts";
 import { UnsupportedFeatureError } from "./errors.ts";
@@ -535,12 +535,13 @@ function createTrampolineBody(
           const callerInst = ctx.componentInstance(callerInstance >>> 0);
           const calleeInst = ctx.componentInstance(calleeInstance >>> 0);
           // A poisoned callee's refusal names the original trap (polyengine#145).
-          if (!calleeInst.mayEnterFrom(callerInst)) {
-            trap(withPoisonCause(
-              calleeInst,
-              "cannot enter component instance",
-            ));
-          }
+          // Check-only: no `enterFrom` here, so no bracket to break.
+          const refusal = entryRefusal(
+            calleeInst,
+            callerInst,
+            "cannot enter component instance",
+          );
+          if (refusal !== null) trap(refusal);
         }
         // `async_` records whether the callee is *async-lifted*. wasmtime
         // stores it on the guest task it creates here

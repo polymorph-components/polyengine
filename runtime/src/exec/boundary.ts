@@ -50,7 +50,7 @@ import {
   Task,
   type TaskOptions,
   Thread,
-  withPoisonCause,
+  entryRefusal,
 } from "../task/mod.ts";
 import { currentTask } from "../task/scheduler.ts";
 import { PlanError } from "../plan/loader.ts";
@@ -1376,11 +1376,13 @@ export function createLiftedFunction(input: {
     // entering set is the callee's `self_and_ancestors()`.
     // On refusal, distinguish the corpse from the crowd: a poisoned
     // instance's refusal names the original trap (polyengine#145 ask 1).
-    if (!inst.mayEnterFrom(null)) {
-      trap(withPoisonCause(
+    {
+      const refusal = entryRefusal(
         inst,
+        null,
         `cannot enter component instance ${inst.index} (reentrance forbidden)`,
-      ));
+      );
+      if (refusal !== null) trap(refusal);
     }
     // The set this entry locked (definitions.py `ComponentInstance.enter_from`
     // iterates `entering_set`). Remembered so a trap can leave exactly these
