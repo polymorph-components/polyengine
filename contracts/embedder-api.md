@@ -247,9 +247,12 @@ without interference).
 **Terminology note.** The spec calls variant alternatives **cases**
 (Explainer, definitions.py `case_label`); prose here follows that. The
 discriminant *property* is named `kind` with payload `value` (A10),
-matching the canonical variant dictionary in the draft web embedding
-(WebAssembly/component-model PR #686) — if that shape holds, native
-support and this API agree for free. v0.2 named them `{ tag, val }` after
+matching the canonical variant dictionary in the draft JS-API
+(WebAssembly/component-model PR #686; the shape survived the PR's
+2026-08 redesign from WebIDL web-embedding to JS-API, which also boxes
+`option<option<T>>` into the variant family exactly as the option rule
+below does) — if that shape holds, native support and this API agree for
+free. v0.2 named them `{ tag, val }` after
 jco's convention; A10 supersedes that argument. `case` itself stays out:
 it is a JS reserved word — legal as a property, but `v.case` reads like
 syntax. The value of `kind` is always the case name, kebab-case verbatim.
@@ -310,10 +313,16 @@ class PeerTrappedError extends Error {  // A7: a stream/future op whose peer ins
   `Trap` rejections are always distinguishable by class.
 - **Host import with `result<T, E>`**: the host function returns `T` for
   ok and `throw`s `new ComponentException(payload)` for err — the ergonomic
-  throw-for-error pattern, **branded**. (The name matches PR #686's draft
-  `ComponentException`; ours does not derive from `DOMException` — absent
-  in the bare `sm`/`jsc` shell lanes — and carries the structured
-  `payload` instead. Revisit inheritance if the draft's shape stabilizes.)
+  throw-for-error pattern, **branded**. (The name followed PR #686's
+  *original* draft `ComponentException`. Correction 2026-08-30: the PR's
+  2026-08 JS-API redesign converged on our shape — extends `Error`,
+  structured `payload`, `DOMException` derivation gone — but renamed the
+  class to `WebAssembly.ComponentError`. Renaming ours to follow is a
+  breaking runtime+protocol event (brand key, predicates, consumer
+  migration) deliberately deferred until the draft stabilizes; tracked in
+  issue #115. The draft also converts *any* thrown JS value to `E` at the
+  import boundary — the branded-only rule below is a deliberate,
+  retained divergence.)
 - **An unbranded throw from a host import is a host bug and becomes a
   trap** (with a message naming the import), never a guest-visible err —
   the inversion of jco's convention, where any stray `TypeError` was fed
@@ -515,9 +524,13 @@ Ownership at the boundary, both directions:
 
 A host-implemented resource does not need a hand-written class: when a WIT
 resource's shape matches a native platform class, pass the class itself —
-the pattern the draft web embedding builds its import story on
-(WebAssembly/component-model PR #686 "interface object" imports; tracked
-in polyengine#115), available here today because the pieces already line up:
+the pattern the draft JS-API builds its import story on
+(WebAssembly/component-model PR #686 post-redesign: the constructor
+satisfies the resource type import, tagged `[method]`/`[static]` imports
+are read off it and its `.prototype`, and the brand check is a new
+well-known symbol `@@isWasmResourceOf` with an `instanceof` fallback;
+tracked in polyengine#115), available here today because the pieces
+already line up:
 method dispatch is a per-call `self[camelCase(member)]` lookup, WIT
 constructor args flow to `new Class(...)`, and the value conventions are
 the natural JS shapes (`Uint8Array` IS a `BufferSource`; a record is a
