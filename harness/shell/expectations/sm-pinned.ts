@@ -34,6 +34,17 @@
 // Any future re-pin (pins.json version bump) that changes these totals is a
 // FINDING to triage before the pin bump lands, not silently absorbed here —
 // bump this file's totals only after re-measuring against the new pin.
+//
+// CM#705 pin advance to 2f13265 (polyengine#173): re-measured (this host is
+// aarch64) — full Deno-lane parity holds exactly, zero deltas, zero stale
+// xfails. Corpus grew 1416->1475 commands (new reentrance.wast/
+// during-sync-scheduling-candidates.wast/during-sync-call-exclusive-resume.
+// wast files, new kebab.wast/max-value-size.wast assert_invalid rows, plus
+// a few line-shifted-but-unchanged rows); the new xfail classes
+// (fact-reentrance-47, cm705-sync-sched, cm707-cancel, name-rules-47,
+// max-value-size-47, plus growth in the pre-existing wasmparser
+// thread-built-in pin-drift class) are translate-time / our-own-runtime
+// drift, engine-independent by construction — see harness/src/xfail.ts.
 
 import type { ShellLaneExpectation } from "./types.ts";
 
@@ -48,19 +59,12 @@ export const smPinned: ShellLaneExpectation = {
     "browser, which prefs it — see header). Required gate — promoted from " +
     "the sm-nightly canary.",
   deltas: [],
-  // +21 commands / +20 xfail / +1 pending-runtime vs the seed measurement:
-  // upstream during-sync-call-* tests (CM submodule bump to 4142913) fail
-  // at TRANSLATION (wasmparser pin drift, engine-independent — see
-  // harness/src/xfail.ts), so the shift is uniform across lanes.
-  // +3 passed / -3 xfail when #13 closed drop-stream:158 +
-  // drop-cross-task-borrow:309 (trap-wording parity, engine-independent)
-  // and binary:1421 (plan v4 core-module exports).
   totals: {
-    commands: 1416,
-    executed: 1369,
-    passed: 1257,
+    commands: 1475,
+    executed: 1428,
+    passed: 1263,
     failed: 0,
-    xfail: 112,
+    xfail: 165,
     pendingRuntime: 42,
     pendingCapability: 0,
     unsupportedDirective: 5,

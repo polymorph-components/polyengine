@@ -48,6 +48,19 @@
 //   - unreachable trap wording: `"Unreachable code should not be executed"`
 //     — already a `TRAP_MESSAGE_EQUIVALENTS` row in `harness/src/runner.ts`,
 //     no matcher work needed here.
+//
+// CM#705 pin advance to 2f13265 (polyengine#173): totals bumped to the
+// engine-independent Deno-lane baseline (1475/1428/1263 passed/165 xfail/42
+// pending-runtime/5 unsupported-directive — see harness/src/xfail.ts and
+// sm-pinned.ts's header for the new-class breakdown) WITHOUT a local
+// re-measurement: this lane is x86_64-only and self-skips on this
+// aarch64 dev host. Every OTHER shell lane re-measured on aarch64 this
+// round (sm-pinned, node-pinned, sm-nightly, bun-pinned) hit EXACT
+// Deno-lane parity with zero per-row deltas, and this lane tracks
+// jsc-pinned exactly (same rev, same hash) — so this bump is UNVERIFIED ON
+// AARCH64, MEASURED-BY-CI: canary.yml's weekly x64 run is what actually
+// re-confirms it (or reports trunk drift, per this file's own findings-only
+// discipline).
 
 import type { ShellLaneExpectation } from "./types.ts";
 
@@ -60,19 +73,12 @@ export const jscTrunk: ShellLaneExpectation = {
     "trip, multi-memory, wasm-GC, EH, memory64, tail-calls, relaxed-simd). " +
     "Trunk drift is a finding to triage, never a gate.",
   deltas: [],
-  // +21 commands / +20 xfail / +1 pending-runtime vs the seed measurement:
-  // upstream during-sync-call-* tests (CM submodule bump to 4142913) fail
-  // at TRANSLATION (wasmparser pin drift, engine-independent — see
-  // harness/src/xfail.ts), so the shift is uniform across lanes.
-  // +3 passed / -3 xfail when #13 closed drop-stream:158 +
-  // drop-cross-task-borrow:309 (trap-wording parity, engine-independent)
-  // and binary:1421 (plan v4 core-module exports).
   totals: {
-    commands: 1416,
-    executed: 1369,
-    passed: 1257,
+    commands: 1475,
+    executed: 1428,
+    passed: 1263,
     failed: 0,
-    xfail: 112,
+    xfail: 165,
     pendingRuntime: 42,
     pendingCapability: 0,
     unsupportedDirective: 5,
