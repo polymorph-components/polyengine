@@ -500,7 +500,13 @@ class PeerTrappedError extends Error {  // A7: a stream/future op whose peer ins
   exported from `@polyengine/runtime/embedder` — application machinery in
   A22's sense, like `createStream`: only an instantiating application
   holds export functions, so this is deliberately NOT host-module
-  vocabulary and does not touch `@polyengine/protocol`. Recognition is by
+  vocabulary and does not touch `@polyengine/protocol`. A host module
+  MUST NOT import the runtime to get it (A22's rule is unchanged): a host
+  module whose shape wants a synchronous guest callback is **handed one
+  by the application** — `sync(exports.f)` produces a plain function —
+  exactly as a host module wanting writer-driven push is handed a
+  `StreamWriter` (A22); placement stays with the deploying application.
+  Recognition is by
   brand (`polyengine.syncCallable/1`, a registry symbol per A9) so views
   work across mixed runtime copies. Dispatch by target shape:
 
