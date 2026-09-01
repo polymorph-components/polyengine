@@ -1,14 +1,14 @@
-//! TypeScript codegen implementing the C1 embedder-facing conventions
-//! (`contracts/embedder-api.md`, normative — track C2-B). Emits **types
+//! TypeScript codegen implementing the embedder-facing conventions
+//! (`contracts/embedder-api.md`, normative). Emits **types
 //! only**: `Imports`/`Exports` interfaces, value types per the mapping
 //! table, resource classes, `ComponentException`-typed fallible signatures,
 //! `Stream<T>`/`Future<T>` references, plus the existing WORLD_DIGEST +
 //! `verify()` digest handshake and a thin `bind()` cast. No runtime
-//! behavior is emitted or assumed to exist yet (C2-A owns the runtime
-//! facade concurrently) — every generated file must `deno check` standalone.
+//! behavior is emitted or assumed to exist yet (the runtime's own facade is
+//! a separate crate) — every generated file must `deno check` standalone.
 //!
-//! Built on `wit_bindgen_core::Source`/`Files` for text accumulation, same
-//! as the M1-C predecessor of this file; still a hand-written generator,
+//! Built on `wit_bindgen_core::Source`/`Files` for text accumulation, still
+//! a hand-written generator, not a `WorldGenerator` trait implementation,
 //! not a `WorldGenerator` trait implementation (CONTRACT: docs/architecture.md §9 doesn't
 //! mandate the trait specifically, only "built on wit-bindgen-core").
 
@@ -42,7 +42,7 @@ pub const DEFAULT_IMPORT_BASE: &str = concat!(
 );
 
 /// Default specifier for `@polyengine/protocol` imports in generated
-/// bindings (amendment A22, contracts/embedder-api.md §"The host-ABI
+/// bindings (contracts/embedder-api.md §"The host-ABI
 /// surface and its version": the handle vocabulary — `Stream`/`Future`/
 /// `ErrorContext`/`ComponentException`/`Trap`/the source-union types — now
 /// lives in protocol, not the runtime's embedder module). Protocol's
@@ -189,9 +189,10 @@ pub fn generate(
     // Stream<T>/Future<T>/ErrorContext/ComponentException/Trap plus the source-union
     // types used at parameter positions (StreamSource<T>/FutureSource<T>,
     // contracts/embedder-api.md §"Streams and futures": "lowering accepts
-    // the natural JS producers") come from `@polyengine/protocol` (amendment
-    // A22: the handle vocabulary moved out of the runtime's embedder
-    // module). `EmbedderInstance`/`EmbedderOptions`/`InstantiateSource` (the
+    // the natural JS producers") come from `@polyengine/protocol` (per
+    // §"The host-ABI surface and its version": the handle vocabulary moved
+    // out of the runtime's embedder module). `EmbedderInstance`/
+    // `EmbedderOptions`/`InstantiateSource` (the
     // `bind()` input shape) stay application surface, from the embedder
     // facade module.
     writeln!(
@@ -507,7 +508,7 @@ fn is_async_kind(kind: &FunctionKind) -> bool {
 /// contracts/embedder-api.md §"Functions and async"), constructor is typed
 /// as an ordinary synchronous JS constructor.
 ///
-/// **Constructors are synchronous** (C2 amendment, contracts/embedder-api.md
+/// **Constructors are synchronous** (contracts/embedder-api.md
 /// §"Resources"): a JS class constructor cannot await, so `new R(...)` is
 /// the one exception (alongside future-typed results) to the
 /// uniformly-Promise-shaped rule. A guest constructor that does not
@@ -535,9 +536,8 @@ fn emit_resource_class(
             " * Guest-implemented resource (host holds handles). `{name}` instances\n\
              * are transferred/invalidated per own/borrow semantics — see\n\
              * contracts/embedder-api.md §\"Resources\".\n\
-             * @remarks the constructor is synchronous by C2 amendment\n\
-             * (\"Constructors are synchronous\" — contracts/embedder-api.md\n\
-             * §\"Resources\"): a guest constructor that fails to complete\n\
+             * @remarks the constructor is synchronous (contracts/embedder-api.md §\"Resources\"):\n\
+             * a guest constructor that fails to complete\n\
              * synchronously raises a named runtime error rather than\n\
              * half-constructing."
         )?;
@@ -725,8 +725,8 @@ fn param_list_skip_self(resolve: &Resolve, f: &Function) -> Result<String> {
 fn func_return(resolve: &Resolve, f: &Function, is_export: bool) -> Result<(String, Option<String>)> {
     let is_async = is_async_kind(&f.kind);
     if let Some(t) = f.result {
-        // Future results are eager handles (C2 amendment,
-        // contracts/embedder-api.md §"Streams and futures"): JS promise
+        // Future results are eager handles (contracts/embedder-api.md
+        // §"Streams and futures"): JS promise
         // resolution unconditionally adopts thenables, so a Promise can
         // never resolve *to* a `Future<T>` (itself `PromiseLike<T>`) —
         // wrapping would make `drop`/`cancel` unreachable. The function
@@ -742,9 +742,8 @@ fn func_return(resolve: &Resolve, f: &Function, is_export: bool) -> Result<(Stri
         }
         if let Some((ok, err)) = as_top_level_result(resolve, t) {
             // Empty sides resolve `undefined` (`ComponentException.payload ===
-            // undefined` on the err side) — C2 amendment,
-            // contracts/embedder-api.md value mapping table's
-            // function-result row.
+            // undefined` on the err side) — contracts/embedder-api.md
+            // value mapping table's function-result row.
             let ok_ts = match ok {
                 Some(t) => ts_value_type(resolve, t)?,
                 None => "undefined".to_string(),
@@ -898,7 +897,7 @@ fn ts_typedef_value_type(resolve: &Resolve, id: TypeId) -> Result<String> {
         }
         TypeDefKind::FixedLengthList(el, _) => format!("({})[]", ts_value_type(resolve, *el)?),
         // map<K,V> -> its despecialization list<tuple<K,V>> -> `[K, V][]`
-        // (C2 amendment, value mapping table).
+        // (contracts/embedder-api.md value mapping table).
         TypeDefKind::Map(k, v) => format!(
             "[{}, {}][]",
             ts_value_type(resolve, *k)?,

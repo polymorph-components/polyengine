@@ -1,7 +1,8 @@
 //! `resource-stream` guest: consumes streams whose elements are OWNED
 //! HOST RESOURCES (the tcp `listen` shape; see wit/world.wit).
 //! `sum-tickets` drains; `take-then-drop` abandons the reader mid-stream
-//! so the host's un-taken-element release path (amendment A13) is
+//! so the host's un-taken-element release path (contracts/embedder-api.md
+//! §"Streams and futures") is
 //! observable from the host's dtor counts.
 
 wit_bindgen::generate!({

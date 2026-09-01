@@ -108,7 +108,7 @@ export function newStats(): ExecutionStats {
  * Structurally compatible with cabi's `MemInst` (same public surface).
  */
 export class LiveMemory {
-  readonly addrType: PtrType = "i32"; // memory64 components: out of M0 scope
+  readonly addrType: PtrType = "i32"; // memory64 components: not yet implemented
   #provider: () => WebAssembly.Memory | undefined;
   #label: string;
   #buffer: ArrayBufferLike | null = null;
@@ -376,7 +376,7 @@ function isPromiseLike(v: unknown): v is PromiseLike<unknown> {
 
 
 // ---------------------------------------------------------------------------
-// Handshake probe (M2 phase 3l)
+// Handshake probe
 // ---------------------------------------------------------------------------
 //
 // Env-gated tracing of the drive loops. This exists because site 1 is the
@@ -533,7 +533,7 @@ function tagAwait(t: AwaitWinner["t"]): Promise<AwaitWinner> {
  * repeat. Reimplementing it there diverged: that copy only drained
  * `store.awaiting` and never awaited `pendingHostCalls`, so a guest parked on
  * a Promise-returning host import was never resumed and the host's read of
- * the stream it was feeding hung (C0 finding R-1).
+ * the stream it was feeding hung (host-pump starvation of `pendingHostCalls`).
  *
  * Callers that must not hit the deadlock traps below (the host pump: an
  * embedder that never does its half is documented to hang, not trap) can
@@ -924,7 +924,7 @@ async function driveAsync(
     // therefore stops the scheduler while waiting for something that needs the
     // scheduler: a pure-microtask stall with no trap and no rejection.
     // Observed on `async/async-calls-sync.wast` the moment site 1 became the
-    // first lit suspension site (M2 phase 3l): turn N serviced a promise that
+    // first lit suspension site: turn N serviced a promise that
     // never settled while three other parked threads and three ready-able
     // suspension points went unexamined.
     //
@@ -995,12 +995,12 @@ async function driveAsync(
           // set changing: the same activation resumes off an engine
           // continuation chunk during the probe's macrotask turn (jspi
           // pin (j) — a sync-completing Suspending import still defers its
-          // continuation), runs, and re-parks through the A1 arm, which
+          // continuation), runs, and re-parks through the suspending mark arm, which
           // registers a fresh `pendingHostCalls` entry. The activation
           // promise never settled and `awaiting` membership is unchanged,
           // but the park is externally wakeable now — the verdict's own
           // precondition (`pendingHostCalls.size === 0`) no longer holds.
-          // Observed on wasi-shims' A5 poll (sync fast path): probe sampled
+          // Observed on wasi-shims' stream/future round-trip poll (sync fast path): probe sampled
           // hostCalls=0 between a settled park and the next one, then
           // trapped a live workload with hostCalls=1. Re-check ⇒ re-probe.
           // Likewise a SERVICEABLE settled entry (issue #156): dispatching
@@ -1050,7 +1050,7 @@ async function driveAsync(
       // snapshot's `parked[0]` is then `undefined` — the exact check-then-act
       // shape that made the host pump's copy of this loop throw
       // `TypeError: ... (reading 'awaiting')` into `store.hostFailure`, where
-      // it poisoned a later unrelated call (C0 finding R-2). Nothing to
+      // it poisoned a later unrelated call via check-then-act on `store.hostFailure`. Nothing to
       // service ⇒ go back to the top and re-evaluate `done`.
       // Same re-check for the settled queue, and for the same reason: the
       // probe's macrotask turn can land a fresh, SERVICEABLE activation tail
@@ -1068,7 +1068,7 @@ async function driveAsync(
       // never be held hostage by it. The claimed thread's promise may only be
       // settleable by further scheduler progress (a promising-wrapped nested
       // activation whose own suspension points this loop must still resume);
-      // blocking on it alone is the pure-microtask stall of M2 phase 3l.
+      // blocking on it alone is the pure-microtask stall described above.
       // Same exclusion as the probe (issue #156): a thread whose tail is
       // already queued in `store.settled` must not be raced — its tag is
       // settled, so it re-wins instantly and livelocks the event loop,
@@ -1256,7 +1256,7 @@ function takeHostFailure(store: Store): unknown {
 /**
  * The plain-entered variant of a **sync-typed** lifted export in jspi mode,
  * attached to the promising-wrapped lifted function under this symbol
- * (contracts/embedder-api.md §"Functions and async", amendment A25).
+ * (contracts/embedder-api.md §"Functions and async", §"Functions and async").
  *
  * In jspi mode every promising-wrapped entry returns a Promise even when the
  * activation completes without suspending (jspi pin (e)). Some host contexts
@@ -1271,7 +1271,7 @@ function takeHostFailure(store: Store): unknown {
  *    constructor (§"Resources") and a JS constructor cannot await, so the
  *    embedder layer reads this symbol unconditionally for `[constructor]`
  *    exports;
- *  * **the embedder `sync()` adapter** (A25) — the explicit per-use
+ *  * **the embedder `sync()` adapter** — the explicit per-use
  *    synchronous view of any sync-typed export.
  *
  * The cost is confined to genuinely-suspending activations: a blocking
@@ -1328,7 +1328,7 @@ export function createLiftedFunction(input: {
   allowAsyncCompletion?: boolean;
   /**
    * Refuse — synchronously, before entering — a call made while the instance
-   * has HOP-parked activations, instead of deferring it (amendment A25,
+   * has HOP-parked activations, instead of deferring it (§"Functions and async",
    * failure-ladder arm 2).
    *
    * Set for the `SYNC_ENTRY` variant, which is built with
@@ -1616,7 +1616,7 @@ export function createLiftedFunction(input: {
       // abandoned mid-loop — leaking the exclusive thread and its table slot.
       // The lifted call is over when the task has resolved AND this task's
       // activation is no longer mid-wasm-call. Those are two different events
-      // and both matter (M2 phase 3e):
+      // and both matter:
       //
       //   * "task resolved" alone abandons a still-running activation. Under
       //     JSPI the guest calls `task.return` while suspended, so returning
@@ -1658,7 +1658,7 @@ export function createLiftedFunction(input: {
   };
 
   return (...hostArgs: ComponentValue[]): unknown => {
-    // A25 arm 2: the synchronous variant refuses rather than deferring, and
+    // sync() arm 2: the synchronous variant refuses rather than deferring, and
     // does so FIRST — before the arity check's sibling logic reaches
     // `invokeNow` — because the refusal must be pre-enter to stay
     // non-poisoning. See `refuseOnEntryHops` above for why the mode-keyed
@@ -1920,7 +1920,7 @@ export function hostDtorCall(rt: ResourceTypeInfo, rep: number): void {
  * This is the whole of the jspi entry seam. In **plain** mode the entry is not
  * `promising`-wrapped, `callCore` returns core values, and this returns them
  * without yielding — no await, no Promise allocation, the identical
- * synchronous path M1 shipped. In **jspi** mode the entry *is* wrapped, so the
+ * synchronous path plain mode always used. In **jspi** mode the entry *is* wrapped, so the
  * call returns a Promise (jspi pin (e)) and we park the thread on it via the
  * `awaitValue` block request; the driving loop resumes us with the values, or
  * throws the rejection in (a post-resume trap).
@@ -2111,16 +2111,16 @@ export function createLoweredImport(input: {
   stats: ExecutionStats;
   /** Executor's suspension mode; decides whether a sync lower may park. */
   mode: SuspensionMode;
-  /** Host fn carries the `suspending()` brand (embedder-api.md A1). */
+  /** Host fn carries the `suspending()` brand (embedder-api.md suspending mark). */
   suspendable: boolean;
   /**
-   * Host fn carries the `deferCancel()` brand (embedder-api.md A23): the
+   * Host fn carries the `deferCancel()` brand (embedder-api.md cancellation discard): the
    * import must run to completion, so a cancellation is accepted and ignored
    * instead of taking the default discard.
    */
   deferCancel: boolean;
   /**
-   * Host fn carries the `abortable()` brand (embedder-api.md A24): every call
+   * Host fn carries the `abortable()` brand (embedder-api.md abortable()): every call
    * receives a fresh `AbortSignal` appended after the WIT-declared params, and
    * the runtime aborts it when — and only when — the call is discarded by a
    * guest cancellation.
@@ -2226,23 +2226,23 @@ export function createLoweredImport(input: {
     // embedding to hand back the cancellation behaviour of whatever it is
     // hosting. A wasmtime host gets a real one for free — dropping a Rust
     // future IS cancellation. A JS Promise has no such channel, so polyengine
-    // answers on the host's behalf; amendment A23 makes the DEFAULT answer the
+    // answers on the host's behalf; §"Functions and async" makes the DEFAULT answer the
     // reference's prompt-cancel host (`on_cancel = () => on_resolve(None)`),
     // installed by the async arm below.
     //
     // The no-op assigned HERE is only the placeholder for paths where
     // `subtask.cancel` is unreachable, so no answer can ever be demanded of
     // it: an eagerly-resolving callee never mints a subtask handle (the
-    // fast-path return below is a bare state), and a sync-typed import's A1
+    // fast-path return below is a bare state), and a sync-typed import's suspending mark
     // park never mints one either. It is also the FINAL handler for a
-    // `deferCancel()`-branded import — accept and ignore, the pre-A23
+    // `deferCancel()`-branded import — accept and ignore, the pre-cancellation discard
     // behaviour, now per-declaration.
     //
     // Leaving `on_cancel` null instead made a *legal* `subtask.cancel` crash
     // with an internal AssertionError, which is neither reference behaviour
     // nor a sanctioned incompleteness signal.
     subtask.onCancel = () => {};
-    // A24 (contracts/embedder-api.md §"Functions and async"): a marked import
+    // abortable() (contracts/embedder-api.md §"Functions and async"): a marked import
     // is handed a fresh `AbortSignal` after its WIT-declared parameters. The
     // mark controls the SIGNATURE UNCONDITIONALLY — a marked function receives
     // a signal on every call, including the paths where it can never fire
@@ -2268,8 +2268,9 @@ export function createLoweredImport(input: {
           // Suspending wrap is applied per-declaration (`importValue`), so an
           // unmarked import physically cannot suspend, whatever the mode.
           //
-          // A capability signal is expressly NON-poisoning (amendment 2, #91
-          // scope clarification): the caller keeps running, so the borrows
+          // A capability signal is expressly NON-poisoning (the
+          // trap-unwind/lender-release obligation, contracts/intrinsics.md §A):
+          // the caller keeps running, so the borrows
           // `onStart` lifted into this subtask must be discharged here or
           // its lenders stay elevated forever and later `resource.drop`s
           // trap "handle still lent out" on a healthy instance (found
@@ -2287,7 +2288,7 @@ export function createLoweredImport(input: {
                 `(contracts/embedder-api.md §"Functions and async")`,
           );
         }
-        // The park (A1): the reference's plain, NON-cancellable wait — a
+        // The park: the reference's plain, NON-cancellable wait — a
         // cancel request against the caller stays pending-cancel and is
         // delivered at its next cancellable wait, exactly as for any other
         // mid-frame block. The instance-entry gate stays HELD across the park
@@ -2334,8 +2335,8 @@ export function createLoweredImport(input: {
         //  * produce SUCCESS   -> `onResolve` + `deliverResolve` release the
         //    lenders; the `onSettled` backstop below observes
         //    `resolveDelivered()` and is a no-op.
-        //  * produce THROW     -> exempt-by-poisoning under amendment 2
-        //    (contracts/intrinsics.md v0.2 §2: release is owed only on exits
+        //  * produce THROW     -> exempt under the trap-unwind/lender-release
+        //    obligation (contracts/intrinsics.md §A: release is owed only on exits
         //    that do NOT poison the caller). Every rejection that reaches
         //    this park is a poisoning trap in the CALLER's own frame:
         //    branded `ComponentException`s on fallible imports were already resolved
@@ -2386,7 +2387,7 @@ export function createLoweredImport(input: {
       const promise = Promise.resolve(raw).then(
         (v) => {
           store.pendingHostCalls.delete(promise);
-          // A23: the subtask may already be resolved when the host promise
+          // cancellation discard: the subtask may already be resolved when the host promise
           // settles — the discard `onCancel` below resolved it
           // CANCELLED_BEFORE_RETURNED (the only pre-settle resolver on this
           // arm). The value has no addressee, and `onResolve` would run
@@ -2413,7 +2414,7 @@ export function createLoweredImport(input: {
       );
       store.pendingHostCalls.add(promise);
       if (!deferCancel) {
-        // A23 DISCARD (contracts/embedder-api.md §"Functions and async";
+        // cancellation discard DISCARD (contracts/embedder-api.md §"Functions and async";
         // polyengine#241) — the reference's prompt-cancel host,
         // `on_cancel = () => on_resolve(None)` (definitions.py canon_lower's
         // null branch, line ~2267).
@@ -2436,7 +2437,7 @@ export function createLoweredImport(input: {
           store.pendingHostCalls.delete(promise);
           onResolve(null);
           if (controller !== null) {
-            // A24: tell the host its result was discarded, so it can stop the
+            // abortable(): tell the host its result was discarded, so it can stop the
             // underlying operation — clear a timer, abort a fetch, close a
             // dial. Reachable only from this arm by construction: a
             // `deferCancel()` import never discards, so its signal never
@@ -2454,7 +2455,7 @@ export function createLoweredImport(input: {
             // CANCELLED_BEFORE_RETURNED first, the host observes the abort a
             // tick later. Any settlement the abort provokes (typically an
             // `AbortError` rejection) arrives at the settle continuation above
-            // with the subtask already resolved, so it lands on the A23
+            // with the subtask already resolved, so it lands on the cancellation discard
             // resolved-subtask guards and is discarded like any other late
             // settlement — never a `store.hostFailure`.
             Promise.resolve().then(() => controller.abort());

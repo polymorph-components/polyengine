@@ -1,4 +1,4 @@
-// The deadlock trap across a sync-lowered call (M2).
+// The deadlock trap across a sync-lowered call.
 //
 // `testdata/deadlock-sync-call.wasm`: a sync-lowered caller parks on an
 // async-lifted callee (FACT `sync-start-call`) which itself parks on a

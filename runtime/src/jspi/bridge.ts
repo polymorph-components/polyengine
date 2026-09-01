@@ -61,7 +61,8 @@ export type SuspensionMode = "plain" | "jspi";
  * `requested` is the embedder's opt-in. We additionally require the engine to
  * actually implement JSPI: on an engine without it every blocking site falls
  * back to the precise `NeedsJspi` it raised before this module existed, which
- * is the M3 browser-matrix degradation path (docs/milestones.md M3).
+ * is the browser-matrix degradation path for engines without JSPI (see
+ * `just browsers`).
  */
 export function chooseMode(
   requested: boolean | undefined,
@@ -440,8 +441,8 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
      * transition this point takes — produce-success, produce-throw, or
      * `abandon` (issue #102). It is the seam a blocking built-in uses to
      * discharge state it owns for the duration of the park (the FACT
-     * start-calls' borrow-lender scopes, contracts/intrinsics.md v0.2
-     * amendment 2) without having to trust that `produce` runs.
+     * start-calls' borrow-lender scopes, contracts/intrinsics.md §A's
+     * trap-unwind/lender-release obligation) without having to trust that `produce` runs.
      *
      * INVARIANTS this hook must respect, so bridge.ts's own contracts are
      * not disturbed:

@@ -57,10 +57,9 @@ export interface WirePlan {
    * `ResourceIndex = importedResources.length + DefinedResourceIndex`
    * (wasmtime `Component::resource_index`).
    *
-   * plan-format.md v0.1 amendment #2 documents this as a *gap*; the field is
-   * a **v0.2 proposal** emitted by the shim. Optional here so plans produced
-   * by a v0.1 shim still load — absent is read as "no imported resources",
-   * which is exactly what v0.1 asserted.
+   * The `importedResources` field (contracts/plan-format.md schema); optional
+   * here so plans produced by an older shim still load — absent is read as
+   * "no imported resources".
    */
   importedResources?: WireImportedResource[];
   imports: WireImport[];
@@ -139,9 +138,9 @@ export interface WireExportItem {
 
 /**
  * Trampoline declarations, tag-for-tag with the wasmtime `Trampoline` enum.
- * Only the M0-relevant variants are given precise field types; the rest are
- * matched by `kind` and rejected at instantiate time with milestone-aware
- * errors (contracts/intrinsics.md §B).
+ * Only the variants the executor implements are given precise field types;
+ * the rest are matched by `kind` and rejected at instantiate time with
+ * capability-aware errors (contracts/intrinsics.md §B).
  * @internal
  */
 export type WireTrampoline =
@@ -168,8 +167,9 @@ export type WireTrampoline =
      */
     results: number;
     /**
-     * `results` interned into `plan.types` as a tuple type (plan v3,
-     * contracts/plan-format.md v3 amendment 3). `null` is accepted on the
+     * `results` interned into `plan.types` as a tuple type (the task-return
+     * trampoline's raw `results` key + interned `resultType`;
+     * contracts/plan-format.md schema). `null` is accepted on the
      * wire for a task with no declared result type; the current producer
      * never emits it (wasmtime's `TaskReturn.results` is not an `Option` —
      * a no-result task carries the empty tuple).
@@ -294,7 +294,8 @@ export type WireExport =
   | { kind: "type"; name: string; type: WireTypeExport }
   /**
    * An exported embedded core module; `module` indexes the static module
-   * space (`modules`). plan-format.md v4 amendment 2.
+   * space (`modules`); the `module` export kind (contracts/plan-format.md
+   * schema notes).
    */
   | { kind: "module"; name: string; module: number };
 

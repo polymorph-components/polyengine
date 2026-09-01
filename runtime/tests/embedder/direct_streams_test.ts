@@ -1,5 +1,5 @@
 // Direct-access byte edges through the CONVENTIONS facade
-// (contracts/embedder-api.md §"Streams and futures", amendment A21,
+// (contracts/embedder-api.md §"Streams and futures", §"Streams and futures",
 // 2026-08-22, polyengine#128).
 //
 // The raw seam and session live in runtime/tests/direct_streams_test.ts;
@@ -8,12 +8,12 @@
 //   * `StreamWriter.writeDirect` parks until the lowering site binds the
 //     element type, then requires `u8` — the `write` refusal shape;
 //   * `Stream.readDirect` goes through the same `#require()` gate as `read`
-//     (unbound refusal, and the A15 post-transfer guard), plus the `u8` check;
-//   * the A7 interplay: a peer trap rejects the session with
+//     (unbound refusal, and the deadlock-verdict suppression post-transfer guard), plus the `u8` check;
+//   * the loud component fault interplay: a peer trap rejects the session with
 //     `PeerTrappedError` carrying the delivered byte count.
 //
 // Fixture note: `examples/guests/stream-echo` is `stream<u32>`, so it cannot
-// carry A21 (which is `stream<u8>` only). The u8 fixture is
+// carry direct-access byte edge (which is `stream<u8>` only). The u8 fixture is
 // `examples/guests/stream-pass` — `take` (guest consumes a host-fed
 // `stream<u8>`), `open-then-trap` (guest produces bytes then traps) and
 // `pass-through-text` (a non-u8 element type, for the refusal). No new
@@ -33,7 +33,7 @@ function assert(cond: boolean, msg: string): asserts cond {
 }
 
 Deno.test({
-  name: "A21 e2e: StreamWriter.writeDirect feeds a real guest",
+  name: "direct-access byte edge e2e: StreamWriter.writeDirect feeds a real guest",
   ignore: !ready,
   fn: async () => {
     // `take: async func(input: stream<u8>, count: u32) -> u64` reads `count`
@@ -71,14 +71,14 @@ Deno.test({
 
 Deno.test({
   name:
-    "A21 e2e: Stream.readDirect consumes guest output, and a peer trap rejects with the delivered count",
+    "direct-access byte edge e2e: Stream.readDirect consumes guest output, and a peer trap rejects with the delivered count",
   ignore: !ready,
   fn: async () => {
     // `open-then-trap: async func(n: u32) -> stream<u8>` writes n bytes from
     // a background task and then traps, so the write end dies in the
     // poisoned handle table while our session is parked. Bytes copied BEFORE
     // the fault are delivered; the session then rejects rather than faking a
-    // clean end (amendment A7, inherited by A21).
+    // clean end (§"Streams and futures", inherited by direct-access byte edge).
     const c = await instantiateFixture(FIXTURE, { sink: () => 0n });
     const out = await c.exports.openThenTrap(3) as Stream<number>;
     const got: number[] = [];
@@ -98,7 +98,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "A21: readDirect inherits read's refusals (unbound, and the A15 transfer guard)",
+    "direct-access byte edge: readDirect inherits read's refusals (unbound, and the deadlock-verdict suppression transfer guard)",
   ignore: !ready,
   fn: async () => {
     // Unbound: `Stream.create()` has no element type until a lowering site
@@ -112,7 +112,7 @@ Deno.test({
       `unbound names the reason: ${unbound}`,
     );
 
-    // A15 (#162): once the handle's shared object has been passed to a guest,
+    // deadlock-verdict suppression (#162): once the handle's shared object has been passed to a guest,
     // the guest owns the readable end and a host read here would operate a
     // phantom duplicate.
     const c = await instantiateFixture(FIXTURE, { sink: () => 0n });
@@ -122,7 +122,7 @@ Deno.test({
     assert(e instanceof TypeError, `transferred: TypeError, got ${e}`);
     assert(
       String(e.message).includes("already been passed to a guest"),
-      `names the A15 guard: ${e}`,
+      `names the deadlock-verdict suppression guard: ${e}`,
     );
     await writer.close();
     out.drop();
@@ -130,7 +130,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "A21: a non-u8 element type is refused on both direct forms",
+  name: "direct-access byte edge: a non-u8 element type is refused on both direct forms",
   ignore: !ready,
   fn: async () => {
     // `pass-through-text` is `stream<string>`: the writer parks until that
@@ -147,7 +147,7 @@ Deno.test({
       assert(e instanceof TypeError, `${who}: TypeError, got ${e}`);
       assert(
         String(e.message).includes("stream<u8> only"),
-        `${who} names A21's scope: ${e}`,
+        `${who} names direct-access byte edge's scope: ${e}`,
       );
     }
     await writer.close();
@@ -157,10 +157,10 @@ Deno.test({
 
 Deno.test({
   name:
-    "A21: host<->host through a round trip — two direct sessions are refused",
+    "direct-access byte edge: host<->host through a round trip — two direct sessions are refused",
   ignore: !ready,
   fn: async () => {
-    // `pass-through` hands the stream straight back (A5 identity), so both
+    // `pass-through` hands the stream straight back (stream/future round-trip identity), so both
     // endpoints end up host-side. A chunk form on either side is fine; two
     // direct sessions are not, and the ARRIVING one is what fails.
     const c = await instantiateFixture(FIXTURE, { sink: () => 0n });
@@ -194,7 +194,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "A21: host<->host at the same floor — each direct form against the peer chunk form",
+    "direct-access byte edge: host<->host at the same floor — each direct form against the peer chunk form",
   ignore: !ready,
   fn: async () => {
     // Both mixed rows of the host↔host matrix, through the conventions layer
@@ -217,7 +217,7 @@ Deno.test({
       out.drop();
     }
 
-    // readDirect vs a chunk write: the view IS the offered chunk (A5 borrow).
+    // readDirect vs a chunk write: the view IS the offered chunk (stream/future round-trip borrow).
     {
       const { stream, writer } = Stream.create<number>();
       const out = await c.exports.passThrough(stream) as Stream<number>;

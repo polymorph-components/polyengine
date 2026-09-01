@@ -1,5 +1,5 @@
 // wasi:cli@0.2 — stdout/stderr capture, exit recording (contracts/
-// embedder-api.md §"WASI examination"; C2 gate: "stdout capture, exit
+// embedder-api.md §"WASI examination": "stdout capture, exit
 // recording").
 
 import { assertEq, assertThrows, assertTrue } from "./asserts.ts";

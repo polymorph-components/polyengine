@@ -1,6 +1,6 @@
 // wasi:clocks@0.2 + wasi:clocks@0.3 — monotonicity, `waitFor` actually
-// waiting (coarse timing), the D-1 union shape (contracts/embedder-api.md
-// §"Version canonicalization"; C0 finding D-1).
+// waiting (coarse timing), the union-provider shape (contracts/embedder-api.md
+// §"Version canonicalization").
 
 import { assertEq, assertTrue } from "./asserts.ts";
 import { clocks } from "../src/clocks.ts";
@@ -48,7 +48,7 @@ Deno.test("clocks@0.3: waitUntil waits until the given instant", async () => {
   assertTrue(elapsed >= 10, `waitUntil actually parked (got ${elapsed}ms)`);
 });
 
-Deno.test("clocks@0.3: the D-1 union exposes both drafts' functions on one provider", () => {
+Deno.test("clocks@0.3: the union provider exposes both drafts' functions on one provider", () => {
   const { imports } = clocks();
   const mono03 = imports["wasi:clocks/monotonic-clock@0.3"] as Record<string, unknown>;
   // iroh/experiment-mosh family:

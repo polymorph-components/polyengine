@@ -3,10 +3,10 @@
 // The four claims, in one place because they are one rule seen from four
 // sides:
 //   1. a guest export's `result<T, E>` err lifts as a `ComponentException`
-//      whose `payload` is the WIT err value (A10);
+//      whose `payload` is the WIT err value;
 //   2. a host import's `throw new ComponentException(payload)` lowers to the
 //      guest's err case;
-//   3. a HAND-ROLLED branded exception is honored identically — A9's
+//   3. a HAND-ROLLED branded exception is honored identically — module identity's
 //      zero-import legality, demonstrated by `probe_zero_import.ts`, which
 //      imports nothing at all;
 //   4. an UNBRANDED host throw is a host BUG and becomes a trap naming the
@@ -68,7 +68,7 @@ Deno.test({
       });
       await t.attempt("throw-componentException", () => err.exports.run());
 
-      // A9: hand-rolled brand, zero protocol imports on the throwing side.
+      // module identity: hand-rolled brand, zero protocol imports on the throwing side.
       const hand = await instantiateFixture(HOST_RESULT, {
         "host:api/fallible": {
           check: () => {
@@ -120,7 +120,7 @@ Deno.test({
       });
       await t.attempt("err/canonical", () => err.exports.run());
 
-      // Identical treatment for the hand-rolled brand — the point of A9.
+      // Identical treatment for the hand-rolled brand — the point of module identity.
       const hand = await instantiateFixture(HOST_PAYLOAD, {
         "host:api/fallible": {
           tryIt: () => {
@@ -165,7 +165,7 @@ Deno.test({
         sink: (_d: unknown) => 0n,
       });
       // `open-then-trap(n)`: the guest returns a stream, writes n bytes from a
-      // background task, then traps. A7: reads that genuinely COMPLETED keep
+      // background task, then traps. loud component fault: reads that genuinely COMPLETED keep
       // their result; the fault surfaces on the handle's next operation, and
       // is never presented as a clean end-of-stream.
       const s = await c.exports.openThenTrap(2) as {
@@ -174,7 +174,7 @@ Deno.test({
       t.note("lifted", { classified: classify(s) });
       await t.attempt("read", () => s.read(8));
       // `tag: "peerTrapped"` in the golden IS the predicate verdict, and the
-      // walked `cause` chain is A20's requirement that the underlying fault
+      // walked `cause` chain is realm boundary's requirement that the underlying fault
       // stay reachable.
       await t.attempt("read-after-trap", () => s.read(8));
     });

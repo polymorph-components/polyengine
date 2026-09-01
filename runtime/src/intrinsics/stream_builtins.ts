@@ -892,8 +892,8 @@ export function createFutureTransfer(ctx: AsyncTransferContext): CoreFn {
  * rather than removing it, so the source keeps its own.
  */
 /**
- * Plan v3 (contracts/plan-format.md v3 amendment 2): `instanceOf` resolves
- * through the plan's `errorContextTables` section — the
+ * `instanceOf` resolves through the plan's `errorContextTables` section
+ * (contracts/plan-format.md schema) — the
  * `TypeComponentLocalErrorContextTableIndex` space these arguments actually
  * live in. It replaced a resource-table lookup, which shared neither the
  * index space nor (in a multi-instance composition) the answer.

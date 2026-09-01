@@ -2,8 +2,7 @@
 // of the wire descriptor IR (contracts/descriptor-ir.md JSON) into the cabi
 // in-memory type model (runtime/src/cabi/types.ts, the normative model).
 //
-// Wire -> in-memory deltas handled here (recorded in the M0 contract
-// friction report):
+// Wire -> in-memory deltas handled here:
 //   - `result.err` (wire, per descriptor-ir.md) -> `result.error` (types.ts)
 //   - func params `{label, type}[]` (wire) -> unlabeled `ValType[]`
 //     (types.ts drops ABI-irrelevant names; labels are preserved separately
@@ -74,7 +73,7 @@ export class TranslateError extends Error {
  * the *resource*-table mapping before, a different space) — and
  * `task-return`'s `resultType` / raw `results` split, which lets a FACT
  * callee task carry its declared result type.
- * v2 (M2 phase 2c): `streamTables` / `futureTables` — the element types the
+ * v2: `streamTables` / `futureTables` — the element types the
  * stream and future built-ins need to size their copy buffers.
  * v1 (contracts/plan-format.md v0.3): `CoreDef` gained `"unsafe-intrinsic"`.
  * The change is purely additive, but the contract's compat rule is a strict
@@ -108,7 +107,7 @@ export interface LoadedPlan {
   /**
    * Number of imported resource types. `ResourceIndex =
    * numImportedResources + DefinedResourceIndex`
-   * (plan-format.md v0.1 amendment #2 / v0.2 `importedResources`).
+   * (the `importedResources` field; contracts/plan-format.md schema).
    */
   numImportedResources: number;
   /** Element type per stream table (plan v2); `null` = zero-width payload. */
@@ -224,7 +223,7 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
   }
 
   // Identity tokens: one per RESOURCE, aliased through every table that
-  // names it — NOT one per table. plan-format.md C2 amendment #1: "one
+  // names it — NOT one per table. plan-format.md "Type exports index into `resourceTables`": "one
   // resource type can be reachable through several distinct table indices …
   // Consumers keying per-resource state must key by `resourceTables[n]
   // .resource`, treating table indices as aliases." Minting per-table broke
@@ -704,7 +703,8 @@ function validateExport(exp: unknown, where: string): void {
       validateTypeExport(e.type, `${where}.type`);
       return;
     case "module":
-      // plan-format.md v4 amendment 2: exported embedded core module.
+      // The `module` export kind (contracts/plan-format.md schema notes):
+      // exported embedded core module.
       expectString(e, "name", where);
       expectNumber(e, "module", where);
       return;

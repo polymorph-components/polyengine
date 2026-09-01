@@ -161,7 +161,7 @@ export class Thread implements SchedulableThread {
     // belongs to an activation that was in flight when a SIBLING activation
     // trapped (#66 retired the handle tables). Resuming would re-enter the
     // corpse, and asserting turned one legible trap into an assert cascade
-    // (the wosh-M2 shape: `list too long`, then this assert as second
+    // (the classic double-fault shape: `list too long`, then this assert as second
     // victim). Retire quietly: the abandoned call's own driver reports, via
     // its deadlock trap naming the export.
     if (isInstancePoisoned(inst)) return;

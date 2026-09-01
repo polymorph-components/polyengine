@@ -1,5 +1,5 @@
 // Golden pin for the brand vocabulary (contracts/embedder-api.md §"Module
-// identity and @polyengine/protocol", amendment A9; issue #83).
+// identity and @polyengine/protocol"; issue #83).
 //
 // Every key string is pinned LITERALLY here on purpose: the brands are
 // process-global registry symbols shared with copies this repo never sees, so
@@ -30,20 +30,21 @@ const EXPECTED: Record<string, symbol> = {
   "polyengine.runtimeCopies/1": brands.RUNTIME_COPIES,
 };
 
-// The realm-local pill (amendment A20) is a STRING key, not a registry
+// The realm-local pill (contracts/embedder-api.md §"Realm boundaries and
+// structured-clone-safe forms") is a STRING key, not a registry
 // symbol, so it sits outside the table above — but it is shared vocabulary
 // across copies exactly as the brands are, and renaming it is the same
 // breaking ecosystem event. Pinned literally for the same reason.
 const EXPECTED_REALM_LOCAL = "polyengine.realmLocal/1";
 
-Deno.test("A9: every brand key is exactly the contract's table entry", () => {
+Deno.test("every brand key is exactly the contract's table entry", () => {
   for (const [key, sym] of Object.entries(EXPECTED)) {
     assertEquals(sym, Symbol.for(key), `brand key drift for ${key}`);
     assertEquals(Symbol.keyFor(sym), key, `${key} is not a registry symbol`);
   }
 });
 
-Deno.test("A9: the table is exhaustive — no unpinned exported brand", () => {
+Deno.test("the table is exhaustive — no unpinned exported brand", () => {
   const exported = (Object.values(brands) as unknown[])
     .filter((v): v is symbol => typeof v === "symbol")
     .map((s) => Symbol.keyFor(s) ?? "<not a registry symbol>")
@@ -51,19 +52,19 @@ Deno.test("A9: the table is exhaustive — no unpinned exported brand", () => {
   assertEquals(exported, Object.keys(EXPECTED).sort());
 });
 
-Deno.test("A20: the realm-local pill key is exactly the contract's spelling", () => {
+Deno.test("the realm-local pill key is exactly the contract's spelling", () => {
   assertEquals(brands.REALM_LOCAL, EXPECTED_REALM_LOCAL);
   assertEquals(EXPECTED_REALM_LOCAL.endsWith(`/${PROTOCOL_GENERATION}`), true);
 });
 
-Deno.test("A9: the protocol generation matches the key suffix", () => {
+Deno.test("the protocol generation matches the key suffix", () => {
   assertEquals(PROTOCOL_GENERATION, 1);
   for (const key of Object.keys(EXPECTED)) {
     assertEquals(key.endsWith(`/${PROTOCOL_GENERATION}`), true, key);
   }
 });
 
-Deno.test("A9: brands are non-enumerable and non-writable on prototypes", () => {
+Deno.test("brands are non-enumerable and non-writable on prototypes", () => {
   const d = Object.getOwnPropertyDescriptor(
     ComponentException.prototype,
     brands.COMPONENT_EXCEPTION,

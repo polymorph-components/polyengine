@@ -1,5 +1,5 @@
 // Version-canonical import resolution (contracts/embedder-api.md
-// §"Version canonicalization"; C2 checklist item 1).
+// §"Version canonicalization").
 //
 // Authorities under test: the spec's `canonversion` track split and
 // wasmtime's `alternate_lookup_key` + max-wins linker claim.
@@ -48,7 +48,7 @@ Deno.test("a track key spelling is not a semver version", () => {
 });
 
 Deno.test("D-2: one @0.2 track provider serves 0.2.6 / 0.2.9 / 0.2.12", () => {
-  // The C0 D-2 shape: the p2 corpus names the same interface at three patch
+  // The p2 corpus names the same interface at three patch
   // versions. Under wasmtime's linker one provider serves all three; the
   // v0.1 draft's "version-exact keys" rule would have forced triplication.
   const clocks = { now: () => 0n };
@@ -93,7 +93,7 @@ Deno.test("prereleases are exact-only, in both directions", () => {
   void rel;
   // A prerelease import has no track, so the 0.2 release provider is NOT
   // reachable from it — the historic WASI rc snapshots named different
-  // function sets at the same nominal track (C0 finding D-1's phenomenon).
+  // function sets at the same nominal track.
   assertEq(r.resolve(`${P}@0.2.0-rc-2023-10-19`), undefined);
   // And the prerelease registration claims no track of its own.
   const only = new ImportResolver({ [`${P}@0.2.0-rc-1`]: rc });
@@ -143,7 +143,7 @@ Deno.test("two track keys on one track are refused", () => {
 });
 
 Deno.test("unversioned folding is refused, both directions", () => {
-  // C0 finding D-1's actual defect: version-agnostic keys merging distinct
+  // The banned defect: version-agnostic keys merging distinct
   // semver tracks. An unversioned key is a legal EXACT match (unversioned WIT
   // interfaces exist) but may never serve a versioned import.
   const r = new ImportResolver({ [P]: {} });

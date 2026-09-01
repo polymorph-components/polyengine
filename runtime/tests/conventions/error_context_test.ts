@@ -1,12 +1,12 @@
 // ROW (g) — ERROR-CONTEXT (contracts/embedder-api.md §"Realm boundaries and
-// structured-clone-safe forms", amendment A20: "Error-context is
+// structured-clone-safe forms": "Error-context is
 // message-valued").
 //
 // An error-context's state is exactly its debug message (definitions.py), so
-// A20 supersedes "lowering accepts only lifted instances": lowering accepts
+// this supersedes "lowering accepts only lifted instances": lowering accepts
 // ANY branded carrier of a string `message`, minting a fresh LOCAL context —
 // a new local value, never "the same" one. A branded carrier WITHOUT a string
-// message keeps the loud A9 cross-copy refusal, because that shape is a
+// message keeps the loud cross-copy refusal (§"Module identity"), because that shape is a
 // genuinely foreign stateful handle rather than a message carrier.
 //
 // Fixture: `error-context-relay.wat` (this directory) — the only component
@@ -50,14 +50,14 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/g: A20 — a hand-rolled branded message carrier lowers",
+  name: "conventions/g: a hand-rolled branded message carrier lowers",
   ignore: !ready,
   fn: async () => {
     await transcript("g-error-context-message-valued", async (t) => {
       const c = await instantiateFixture(FIXTURE, {
         "host:api/ec": {
           // Zero protocol imports on this side: the brand key spelled out by
-          // hand, plus a string `message`. A20 mints a fresh LOCAL context
+          // hand, plus a string `message`. Lowering mints a fresh LOCAL context
           // from it — there is nothing to alias, so identity is not in play.
           relay: (_ctx: ErrorContext) => handRolledErrorContext("from-host!"),
         },
@@ -76,7 +76,7 @@ Deno.test({
       const c = await instantiateFixture(FIXTURE, {
         "host:api/ec": {
           relay: (_ctx: ErrorContext) => {
-            // Branded, but message-less: the shape A20 leaves under A9's loud
+            // Branded, but message-less: the shape lowering still leaves under the loud
             // cross-copy refusal, because it is a foreign stateful handle
             // whose machinery lives in another copy's tables.
             const foreign: Record<string | symbol, unknown> = {};

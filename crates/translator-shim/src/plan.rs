@@ -44,7 +44,7 @@ use wasmtime_environ::{EntityIndex, ModuleInternedTypeIndex, PrimaryMap, WasmVal
 /// v1 (contracts/plan-format.md v0.3): additive — `CoreDef` gained the
 /// `"unsafe-intrinsic"` variant (previously a hard `unsupported` rejection).
 ///
-/// v2 (M2 phase 2c): additive — `streamTables` / `futureTables`, mapping the
+/// v2: additive — `streamTables` / `futureTables`, mapping the
 /// `streamTable` / `futureTable` indices the stream and future trampolines
 /// already carried to their *element types*. Without them a consumer knows a
 /// `stream.read` targets table 3 but not what a table-3 element is, so it
@@ -52,8 +52,9 @@ use wasmtime_environ::{EntityIndex, ModuleInternedTypeIndex, PrimaryMap, WasmVal
 /// direction (`task_return_type`, a `TypeTupleIndex` with no mapping into
 /// `plan.types`) was still open at v2 — see below.
 ///
-/// v3 (2026-08-10, contracts/plan-format.md "v3 amendments", polyengine#89):
-/// closes both v2 gaps.
+/// v3 (contracts/plan-format.md schema: the errorContextTables section and
+/// the task-return raw `results` + interned `resultType` keys): closes both
+/// v2 gaps.
 ///   * `errorContextTables` — the `error-context-transfer` trampoline's table
 ///     arguments live in the `TypeComponentLocalErrorContextTableIndex` space
 ///     and had no section, so the runtime resolved them through the
@@ -107,8 +108,8 @@ pub struct Plan {
     /// arguments live in (fact/trampoline.rs:3526-3539). Emitted from
     /// `ComponentTypes::error_context_tables` (`TypeErrorContextTable`,
     /// types.rs:1144-1151), which carries nothing but the owning instance —
-    /// hence no `element` here. Plan v3 (contracts/plan-format.md v3
-    /// amendment 2).
+    /// hence no `element` here. Plan v3 — the errorContextTables section
+    /// (contracts/plan-format.md schema).
     pub error_context_tables: Vec<ErrorContextTableDecl>,
     /// Resource types this component *imports*, in `ResourceIndex` order
     /// (entry `i` is `ResourceIndex(i)`). Defined resources follow:
@@ -116,10 +117,11 @@ pub struct Plan {
     /// exactly wasmtime's `Component::resource_index`
     /// (wasmtime-environ 47.0.3, `component/info.rs:222`).
     ///
-    /// contracts/plan-format.md v0.1 amendment #2 named this gap; the field
-    /// is a **v0.2 proposal** (see the M1-A track report). Emitting it is
+    /// The `importedResources` field (contracts/plan-format.md schema)
+    /// closes this gap; the field
+    /// is a **v0.2 proposal**. Emitting it is
     /// purely additive — v0.1 consumers ignore it, and it is empty for every
-    /// component that imports no resource type, which is every M0 fixture.
+    /// component that imports no resource type, which is every current fixture.
     pub imported_resources: Vec<ImportedResourceDecl>,
     pub imports: Vec<ImportDecl>,
     pub exports: Vec<ExportDecl>,
@@ -283,8 +285,8 @@ pub struct ExportItemJson {
 /// trampoline's own index (redundant with array position, kept for
 /// greppability). Type-table references: `type`/`results` point into the plan
 /// `types` table; `resource` into `resourceTables`; `streamTable`/
-/// `futureTable`/`errorContextTable` are raw wasmtime table indices (M2
-/// machinery, no plan-level table yet); `options` into `canonicalOptions`;
+/// `futureTable`/`errorContextTable` are raw wasmtime table indices (task-
+/// scheduler machinery, no plan-level table yet); `options` into `canonicalOptions`;
 /// `memory`/`callback`/`postReturn` are runtime extraction indices.
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
@@ -306,8 +308,9 @@ pub enum TrampolineDecl {
     ///     anything in the plan, which is exactly why
     ///     `canon_task_return`'s result-type check was skipped for FACT
     ///     tasks.
-    ///   * `result_type` is that tuple interned into `plan.types` (the field
-    ///     contracts/plan-format.md v3 amendment 3 names). `Option` for wire
+    ///   * `result_type` is that tuple interned into `plan.types` — the
+    ///     task-return raw `results` + interned `resultType` keys
+    ///     (contracts/plan-format.md schema). `Option` for wire
     ///     symmetry with the other nullable decl fields only: wasmtime's
     ///     `Trampoline::TaskReturn.results` is a plain `TypeTupleIndex`
     ///     (info.rs:789-796, no `Option`), so this producer always emits a
@@ -572,7 +575,8 @@ pub enum ExportDecl {
         r#type: TypeExportJson,
     },
     /// An exported embedded core module; `module` indexes the static module
-    /// space (`plan.modules`). plan-format.md v4 amendment 2.
+    /// space (`plan.modules`) — the `module` export kind
+    /// (contracts/plan-format.md schema notes).
     Module {
         name: String,
         module: u32,
@@ -1356,8 +1360,8 @@ impl<'a> PlanBuilder<'a> {
             }
             // A component exporting one of its own embedded core modules:
             // the StaticModuleIndex is the plan's static module space
-            // directly (plan-format.md v4 amendment 2; conformance pin
-            // binary.wast:1421).
+            // directly (the `module` export kind, contracts/plan-format.md
+            // schema notes; conformance pin binary.wast:1421).
             Export::ModuleStatic { index, .. } => ExportDecl::Module {
                 name: name.to_string(),
                 module: index.as_u32(),
@@ -1365,7 +1369,8 @@ impl<'a> PlanBuilder<'a> {
             Export::ModuleImport { .. } => unsupported!(
                 "re-exporting an imported module is not supported (export \
                  '{name}'); module imports have no instantiation story yet \
-                 (plan-format.md v4 amendment 3)"
+                 (the Export::ModuleImport rejection, contracts/plan-format.md \
+                 schema notes)"
             ),
         })
     }

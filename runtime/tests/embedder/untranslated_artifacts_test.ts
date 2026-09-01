@@ -1,5 +1,5 @@
-// The untranslated artifacts shape (contracts/embedder-api.md amendment
-// A3): `instantiate` accepts `{ componentBytes, translator }` and runs the
+// The untranslated artifacts shape (contracts/embedder-api.md
+// §"Module wiring and instantiation"): `instantiate` accepts `{ componentBytes, translator }` and runs the
 // translation internally — bytes in, instance out. Both translator
 // spellings are pinned: raw shim wasm bytes (compiles per call) and a
 // shared `Translator` instance (the multi-component pattern).
@@ -23,7 +23,7 @@ const IMPORTS = {
 };
 
 Deno.test({
-  name: "A3: instantiate({ componentBytes, translator: bytes }) translates internally",
+  name: "module wiring: instantiate({ componentBytes, translator: bytes }) translates internally",
   ignore: !ready,
   fn: async () => {
     const componentBytes = (await readArtifact(testdata("imports")))!;
@@ -33,7 +33,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "A3: a shared Translator instance serves several instantiations",
+  name: "module wiring: a shared Translator instance serves several instantiations",
   ignore: !ready,
   fn: async () => {
     const translator = await Translator.create(shimWasm!);

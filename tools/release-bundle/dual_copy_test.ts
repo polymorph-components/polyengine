@@ -1,5 +1,5 @@
 // THE dual-copy pin (contracts/embedder-api.md §"Module identity and
-// @polyengine/protocol", amendment A9; issue #83).
+// @polyengine/protocol"; issue #83).
 //
 // Two GENUINELY distinct runtime copies in one process:
 //
@@ -21,7 +21,8 @@
 // cross-copy error rather than silently adapted; and an unbranded throw in a
 // multi-copy graph says so.
 //
-// Amendment A22 shrinks the SHIPPED bundle (./entry.ts) to application
+// contracts/embedder-api.md §"The host-ABI surface and its version" shrinks
+// the SHIPPED bundle (./entry.ts) to application
 // surface only — it no longer re-exports `@polyengine/protocol` vocabulary,
 // on purpose (contracts/embedder-api.md §"The host-ABI surface and its
 // version"). This test builds copy B from ./test_entry.ts instead: the same
@@ -72,7 +73,7 @@ const CODEC = {
 };
 
 Deno.test({
-  name: "A9 dual-copy pin: source + bundle copies honor the brands and refuse foreign handles",
+  name: "dual-copy pin: source + bundle copies honor the brands and refuse foreign handles",
   ignore: !ready,
   fn: async () => {
     const out = await buildBundle(
@@ -93,7 +94,7 @@ Deno.test({
       `copy B (bundle) is registered: ${[...urls].join(", ")}`,
     );
     // The bundle's own view of the registry is the SAME array (globalThis +
-    // registry symbol), which is the mechanism the whole amendment rests on.
+    // registry symbol), which is the mechanism the module-identity contract rests on.
     assertEq(B.runtimeCopies().length, copies.length, "one shared registry");
     const census = copyCensus();
     assert(census.startsWith(`${copies.length} polyengine copies loaded: `), census);

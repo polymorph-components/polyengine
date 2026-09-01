@@ -5,14 +5,15 @@
 // ported networking program actually takes:
 //
 //   std::net -> wasi-libc -> two-phase start/finish ops looping on
-//   would-block with pollable.block (the io.ts parking kernel, A14) ->
+//   would-block with pollable.block (the io.ts parking kernel,
+//   embedder-api.md §"The WASI parking kernel") ->
 //   wasi:io socket streams (non-blocking read + subscribe,
 //   check-write/write/blocking-flush) -> node:net / node:dgram
 //
 // The guest runs a listener + client self-echo over loopback and a UDP
 // pair entirely inside itself, so the gate needs no host-side peer.
 // Blocking socket ops park: instantiation is jspi (default mode
-// selection picks it from the A14 marks).
+// selection picks it from the park-capable marks).
 //
 // Skip-if-absent on the shim + fixture corpus, like the other gates.
 

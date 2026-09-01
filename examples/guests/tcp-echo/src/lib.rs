@@ -3,7 +3,8 @@
 //! driving shape (`listener-core/src/tcp.rs`); `start-echo-server` runs
 //! the accept path — `stream<tcp-socket>` elements arriving as live
 //! resources — and its teardown (dropping the accept stream) must close
-//! the host's OS listener through the A13 producer-cancellation hook.
+//! the host's OS listener through the producer-cancellation hook
+//! (contracts/embedder-api.md §"Streams and futures").
 
 wit_bindgen::generate!({
     world: "tcp-echo",
@@ -87,7 +88,7 @@ impl Guest for Component {
                 let _ = send_done.await;
                 // `conn` drops here: the accepted socket closes.
             }
-            // Dropping the accept stream is the A13 cancellation path: the
+            // Dropping the accept stream is the cancellation path: the
             // host's parked accept must retire and the OS listener close.
             drop(accepts);
             drop(sock);

@@ -12,7 +12,8 @@
 // runtime, translator, wasi and ct-runner are a LOCKSTEP set (one emission
 // version between them — either the caller's `--version` stamp, or their
 // agreeing manifest version when no stamp is given). @polyengine/protocol is
-// policy-exempt from the lockstep (embedder-api amendment A10): it ALWAYS
+// policy-exempt from the lockstep (contracts/embedder-api.md §"Version
+// canonicalization"): it ALWAYS
 // emits at its own manifest version, on both registries, regardless of
 // `--version`. Dependency edges follow the same asymmetry: a lockstep
 // package depending on a lockstep sibling pins the exact emission version
@@ -20,7 +21,8 @@
 // protocol's manifest version (`^0.1.0`), matching what `deno publish`
 // itself does when it rewrites workspace cross-deps for the JSR emission —
 // letting a protocol bump dedup across lockstep versions built before and
-// after it, per A9's preference for one copy in a consumer's graph.
+// after it, per contracts/embedder-api.md §"Module identity and
+// @polyengine/protocol"'s preference for one copy in a consumer's graph.
 //
 // Tool: dnt (jsr:@deno/dnt), which transpiles the TS sources, rewrites `.ts`
 // specifiers to `.js`, and emits `.d.ts`. Output is ESM ONLY and that is not a
@@ -32,7 +34,8 @@
 // THE INVARIANT THIS FILE EXISTS TO PROTECT: cross-package imports become real
 // npm `dependencies`, never inlined source. Duplicate copies of the runtime or
 // the protocol package in one module graph are the latent-failure mode that
-// contracts/embedder-api.md amendment A9 is a response to; registry symbols
+// contracts/embedder-api.md §"Module identity and @polyengine/protocol" is
+// a response to; registry symbols
 // make a duplicate survivable, not correct. `mappings` below forces every
 // `@polyengine/*` specifier — including subpath forms like
 // `@polyengine/runtime/shim` — onto the npm package at the exact same version.
@@ -61,7 +64,8 @@ const PACKAGES = [
 /**
  * The lockstep set (mirrors release.yml's "compute tag and version" guard):
  * these four share one emission version. @polyengine/protocol is deliberately
- * excluded — embedder-api amendment A10 — and always emits at its own
+ * excluded — contracts/embedder-api.md §"Version canonicalization" — and
+ * always emits at its own
  * manifest version.
  */
 const LOCKSTEP = ["runtime", "translator", "wasi", "ct-runner"] as const;
@@ -132,7 +136,7 @@ async function main() {
   // release workflow's lockstep guard already pins to agree) or the caller's
   // stamp for a prerelease. A torn set would produce packages depending on
   // sibling versions that were never published. protocol is NOT part of
-  // this — it rides its own manifest version always (A10; see header).
+  // this — it rides its own manifest version always (see header).
   for (const p of LOCKSTEP) {
     const v = manifests.get(p)!.version;
     const ref = manifests.get("runtime")!.version;
@@ -164,7 +168,7 @@ async function main() {
     // alongside); protocol is pinned by CARET of its own manifest version —
     // JSR parity, since `deno publish` rewrites workspace cross-deps to
     // caret, and it lets a protocol bump dedup across mixed lockstep
-    // versions in one consumer's graph (A9).
+    // versions in one consumer's graph.
     const depVersion = pkg === "protocol"
       ? `^${protocolVersion}`
       : emissionVersion(pkg);

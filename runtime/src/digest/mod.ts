@@ -6,7 +6,7 @@
  * **This is not embedder API.** The entry point exists as a support surface
  * for bindgen-generated bindings — whose typed `instantiate` wrapper
  * verifies the digest before instantiating (contracts/embedder-api.md
- * amendment A17) — and for the runtime's own internals. No host program
+ * §"Module wiring and instantiation") — and for the runtime's own internals. No host program
  * should hand-write an import of this module.
  *
  * **Its contents are completely unstable: there is no compatibility promise

@@ -8,13 +8,13 @@
 // (49/49 green), so any divergence localizes a jspi-path defect to a single
 // export name.
 //
-// It earned its place. It is what caught Fix 1 (M2): the callee's `promising`
+// It earned its place. It is what caught a real regression: the callee's `promising`
 // wrap made an async-lowered call into a SYNC-lifted callee report its subtask
 // as STARTED when an unwrapped run reported RETURNED, and the six
 // `async-calls-sync-*` exports diverged while all others matched exactly.
 // A suite run showed only "6 RuntimeError: unreachable" with no hint of shape.
 //
-// TARGET: zero divergences — REACHED (M2 endgame). The six
+// TARGET: zero divergences — REACHED. The six
 // `async-calls-sync-*` divergences (async-lowered call into a sync-lifted
 // callee reporting STARTED where an unwrapped run reports RETURNED) were
 // resolved by two changes working together:

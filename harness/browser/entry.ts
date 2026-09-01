@@ -1,5 +1,5 @@
 /// <reference lib="dom" />
-// In-page conformance runner (M3 browser lane).
+// In-page conformance runner (browser lane).
 //
 // This module is bundled to `harness/browser/dist/entry.js` and loaded by
 // `index.html`. It is deliberately *dumb*: it executes the same command loop

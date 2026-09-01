@@ -589,8 +589,8 @@ Deno.test("tcp listen: accepted sockets are independent of the listener", async 
 });
 
 Deno.test("tcp listen: cancel() retires a parked accept and closes the listener", async () => {
-  // cancel is the A13 producer-cancellation hook: the runtime's pump
-  // invokes it when the guest drops the accept stream while the loop is
+  // cancel is the producer-cancellation hook (embedder-api.md §"Streams
+  // and futures"): the runtime's pump invokes it when the guest drops the accept stream while the loop is
   // parked in accept(); this test plays the pump's role.
   const socket = TcpSocket.create("ipv4");
   const stream = await socket.listen();

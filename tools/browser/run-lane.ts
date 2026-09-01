@@ -1,5 +1,5 @@
 // ============================================================================
-// Browser conformance lane driver (docs/milestones.md M3).
+// Browser conformance lane driver.
 //
 // Runs the FULL testgen conformance corpus (`harness/generated/**`) inside a
 // real browser and compares the outcome against the Deno lane.

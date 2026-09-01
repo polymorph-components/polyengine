@@ -1,5 +1,5 @@
 // Bidirectional value-shape adaptation (contracts/embedder-api.md
-// §"Value mapping"; C2 checklist item 5).
+// §"Value mapping").
 //
 // FROM: the runtime's raw boundary, whose shapes are the definitions.py
 //       interpreter's — single-key variants (`{ "circle": 1.5 }`), `{some}` /
@@ -15,7 +15,7 @@
 //
 // The adapter is driven entirely by the plan's `ValType`s — no generated code
 // participates, which is what lets the same facade serve an untyped embedder
-// and a bindgen-typed one (the C2 design ruling: runtime-driven facade,
+// and a bindgen-typed one (the design ruling: runtime-driven facade,
 // compile-time-only bindgen).
 
 import type { ComponentValue, ValType } from "../cabi/types.ts";
@@ -54,8 +54,8 @@ export interface ValueBridge {
   /** The host is passing a `borrow<R>` (no transfer). */
   lowerBorrow(v: unknown, t: ValType & { kind: "borrow" }): number;
   /**
-   * Destroy a LOWERED `own<R>` the guest will never receive (amendment
-   * A13: a stream element the producer lowered but the reader never took).
+   * Destroy a LOWERED `own<R>` the guest will never receive (a resource
+   * stream element the producer lowered but the reader never took).
    * Runs the resource's destructor — for a host-implemented R the
    * instance's `[Symbol.dispose]`, for a guest-implemented R the guest
    * dtor — exactly as if the guest had taken the handle and dropped it.
@@ -348,7 +348,7 @@ export function fromHost(
         return v.internal as unknown as ComponentValue;
       }
       if (v instanceof InternalErrorContext) return v as unknown as ComponentValue;
-      // A20 (contracts/embedder-api.md §"Error-context is message-valued";
+      // realm boundary (contracts/embedder-api.md §"Error-context is message-valued";
       // issue #131; definitions.py — an error-context's state is exactly
       // its debug message): a branded carrier of a string `message`, from
       // any copy (or hand-rolled), is accepted by minting a FRESH local
@@ -361,7 +361,7 @@ export function fromHost(
           (v as { message: string }).message,
         ) as unknown as ComponentValue;
       }
-      // Branded but no string `message` (amendment A9, superseded above only
+      // Branded but no string `message` (§"Module identity and @polyengine/protocol", superseded above only
       // for the message-valued case): a genuinely foreign stateful handle —
       // it lives in another copy's handle table, so it can never be lowered
       // here — but "recognized and named" beats the generic "expected an
@@ -565,7 +565,7 @@ function elemCodec(
     where: o.where,
     toHost: (v) => element === null ? undefined : toHost(v, element, o),
     fromHost: (v) => element === null ? null : fromHost(v, element, o),
-    // A13: `own` elements a producer lowered but the reader never took
+    // resource stream: `own` elements a producer lowered but the reader never took
     // must be destroyed, not leaked — an un-taken element may hold a live
     // platform resource (the tcp `listen` shape: an accepted connection).
     // Top-level `own` is the supported element shape; nested owns inside

@@ -2,10 +2,11 @@
 ;; instance together with functions producing and borrowing it, then owns,
 ;; borrows and drops handles of a type it did not define.
 ;;
-;; This is the shape plan-format.md v0.1 amendment #2 records as a gap:
+;; This is the shape the `importedResources` field
+;; (contracts/plan-format.md schema) records:
 ;; `ResourceIndex = importedResources.len() + DefinedResourceIndex`, so the
 ;; plan must carry `importedResources` for the runtime to resolve resource
-;; tables at all (contracts v0.2 proposal).
+;; tables at all.
 (component
   (import "host:api/res" (instance $api
     (export "R" (type $R (sub resource)))

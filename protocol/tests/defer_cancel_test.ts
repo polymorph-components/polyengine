@@ -1,5 +1,5 @@
 // The cancel-discard opt-out marker (contracts/embedder-api.md §"Functions
-// and async", amendment A23; polyengine#241).
+// and async"; polyengine#241).
 //
 // What is pinned HERE is the vocabulary half: the mark is a process-global
 // brand, so it is readable by any runtime copy and hand-rollable by a
@@ -10,7 +10,7 @@
 import { assert, assertEquals, assertFalse, assertThrows } from "./assert.ts";
 import { deferCancel, isDeferCancel, isSuspending, suspending } from "../src/mod.ts";
 
-Deno.test("A23: deferCancel() marks in place and the brand reads back", () => {
+Deno.test("deferCancel() marks in place and the brand reads back", () => {
   const fn = (a: number) => a;
   const marked = deferCancel(fn);
   assert(marked === fn, "the value is marked in place");
@@ -26,7 +26,7 @@ Deno.test("A23: deferCancel() marks in place and the brand reads back", () => {
   );
 });
 
-Deno.test("A23: the mark is the process-global brand, not a module-local symbol", () => {
+Deno.test("the mark is the process-global brand, not a module-local symbol", () => {
   const fn = deferCancel(() => 1);
   assertEquals(
     (fn as unknown as Record<symbol, unknown>)[
@@ -44,7 +44,7 @@ Deno.test("A23: the mark is the process-global brand, not a module-local symbol"
   assert(isDeferCancel(hand));
 });
 
-Deno.test("A23: the mark is non-enumerable (invisible to imports-record walks)", () => {
+Deno.test("the mark is non-enumerable (invisible to imports-record walks)", () => {
   const fn = deferCancel(() => 1);
   assertEquals(Object.getOwnPropertySymbols(fn).length, 1);
   assertEquals(
@@ -56,7 +56,7 @@ Deno.test("A23: the mark is non-enumerable (invisible to imports-record walks)",
   assert(isDeferCancel(fn));
 });
 
-Deno.test("A23: @deferCancel marks instance and static methods", () => {
+Deno.test("@deferCancel marks instance and static methods", () => {
   class Provider {
     @deferCancel
     flush(): number {
@@ -73,7 +73,7 @@ Deno.test("A23: @deferCancel marks instance and static methods", () => {
   assert(isDeferCancel(Provider.commit));
 });
 
-Deno.test("A23: the decorator refuses non-method positions at class-definition time", () => {
+Deno.test("the decorator refuses non-method positions at class-definition time", () => {
   // A silent no-op would surface as a DISCARDED COMMIT — the guest told the
   // write was cancelled while it lands anyway — arbitrarily far from the
   // mistake. Refuse at class-definition time instead.
@@ -86,7 +86,7 @@ Deno.test("A23: the decorator refuses non-method positions at class-definition t
   }
 });
 
-Deno.test("A23: the legacy experimentalDecorators convention is refused with guidance", () => {
+Deno.test("the legacy experimentalDecorators convention is refused with guidance", () => {
   // Under that convention the decorator receives the PROTOTYPE, not the
   // method: marking it would brand the wrong object AND corrupt the descriptor.
   const e = assertThrows(
@@ -105,7 +105,7 @@ Deno.test("deferCancel(): a non-function is refused", () => {
   );
 });
 
-Deno.test("A23: independent of suspending() — both brands may ride one function", () => {
+Deno.test("independent of suspending() — both brands may ride one function", () => {
   // Different questions (calling convention vs. cancellation answer), so
   // neither predicate may see the other's mark, and marking one must not
   // disturb the other.

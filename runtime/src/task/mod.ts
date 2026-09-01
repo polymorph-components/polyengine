@@ -171,7 +171,8 @@ export class Task {
    * A FACT callee task's result type arrives as the raw wasmtime
    * `TypeTupleIndex` `prepare-call` passes as `task_return_type`; v3's
    * `task-return.results` / `resultType` pair is the dictionary for it
-   * (contracts/plan-format.md v3 amendment 3). It resolves for every callee
+   * (the task-return trampoline's raw `results` key + interned `resultType`;
+   * contracts/plan-format.md schema). It resolves for every callee
    * that has a `task.return` trampoline of its own — which is every callee
    * that can call `task.return` — but a callee with none (sync-lifted,
    * reached through an async-to-sync adapter) contributes no entry, and then

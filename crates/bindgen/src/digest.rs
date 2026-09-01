@@ -4,9 +4,9 @@
 //! must compute byte-identical canonical JSON (and therefore identical
 //! sha256) from a *loaded plan* for the same WIT world. The full
 //! normalization spec is documented in both files' module comments and is
-//! the primary deliverable of this track (resolves contracts/plan-format.md
-//! v0.1 amendment #7). A copy suitable for pasting into a v0.2 contract
-//! amendment lives in the track report.
+//! the primary deliverable of this track (resolves the legacy shim
+//! `worldDigest`, contracts/plan-format.md schema; the normative digest is
+//! contracts/digest.md).
 //!
 //! ## Normalization spec (authoritative copy; keep in sync with digest.ts)
 //!
@@ -46,8 +46,9 @@
 //!
 //! What is explicitly EXCLUDED (documented "intersection" decisions):
 //!   - **Function parameter labels.** WIT carries them; the plan's wire
-//!     `FuncType.params` also carries them (`{label, type}[]`,
-//!     descriptor-ir.md v0.1 amendment #1) — so they *do* survive to the
+//!     `FuncType.params` also carries them (`{label, type}[]`, the pinned
+//!     wire↔memory divergences, contracts/descriptor-ir.md §"Value type
+//!     model") — so they *do* survive to the
 //!     plan. They are excluded anyway: renaming a parameter is not an ABI
 //!     change (JS calls positionally; this runtime has no named-argument
 //!     calling convention), so a digest that reacted to it would force a
@@ -76,7 +77,7 @@
 //!     `list<tuple<K,V>>` structurally by this digest to stay on the plan
 //!     side's supported subset (fixture-only path, untested by the sync
 //!     corpus — none of hello/values/resources use `map`).
-//!   - **`stream`/`future`/`error-context`.** M2 concerns; represented
+//!   - **`stream`/`future`/`error-context`.** Task-scheduler concerns; represented
 //!     structurally (so a digest CAN be computed if a future world uses
 //!     them) but untested by the sync fixture corpus.
 //!

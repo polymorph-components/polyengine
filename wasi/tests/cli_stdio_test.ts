@@ -2,8 +2,9 @@
 // p2 fed-stdin / budgeted-stdout streams (THE parking customers — their
 // blocking ops return Promises that the suspending kernel turns into
 // frame parks), the 0.3 stream-shaped stdio, and the mark relay this all
-// rides on (A14: the blocking declarations are marked on io.ts's
-// REGISTERED prototypes; these duck-typed impls override behavior only).
+// rides on (the blocking declarations are marked on io.ts's
+// REGISTERED prototypes, per embedder-api.md §"The WASI parking kernel";
+// these duck-typed impls override behavior only).
 
 import { ComponentException, isSuspending } from "@polyengine/protocol";
 import { cliStdio } from "../src/cli_stdio.ts";
@@ -52,11 +53,12 @@ function feeder(): {
   };
 }
 
-// --- the A14 premise -------------------------------------------------------------
+// --- the parking-marks premise ---------------------------------------------------
 
-Deno.test("cli-stdio: the registered io prototypes carry the A14 marks (the relay premise)", () => {
+Deno.test("cli-stdio: the registered io prototypes carry the suspending marks (the relay premise)", () => {
   // The runtime reads suspendability from the REGISTERED class's
-  // prototype at wrap time (A2); cli-stdio's parking streams only work
+  // prototype at wrap time (embedder-api.md §"Functions and async" —
+  // "prototype declares, instances behave"); cli-stdio's parking streams only work
   // because io.ts marks these declarations.
   for (
     const [proto, member] of [
@@ -236,7 +238,7 @@ Deno.test("cli-stdio fragment: both tracks; injected stdio round-trips through 0
   assertTrue("wasi:cli/stdin@0.2" in imports && "wasi:cli/stdin@0.3" in imports, "both tracks");
 
   // 0.3 stdout: the guest's stream drains to the sink; the promise is the
-  // future source (A12).
+  // future source (embedder-api.md §"Streams and futures").
   const stdout03 = imports["wasi:cli/stdout@0.3"] as {
     writeViaStream(data: AsyncIterable<Uint8Array>): Promise<CliIoResult>;
   };

@@ -3,7 +3,7 @@
 // boundary". The host provides a PLAIN CLASS — the WIT constructor is the JS
 // constructor, methods are camelCase members, statics are static members — and
 // the runtime owns the instance↔rep mapping. Method `self` IS the instance: no
-// reps, no side tables (the C0 findings this deletes). When the guest drops its
+// reps, no side tables. When the guest drops its
 // last own handle the runtime calls `instance[Symbol.dispose]?.()`.
 //
 // The transcript's load-bearing content is the ORDER of host-observable
@@ -87,11 +87,11 @@ Deno.test({
 const importsReady = await haveFixture(testdata("imports"));
 
 Deno.test({
-  name: "conventions/d: A2 — a class instance is a legal interface provider",
+  name: "conventions/d: suspending mark — a class instance is a legal interface provider",
   ignore: !importsReady,
   fn: async () => {
     await transcript("d-interface-provider-class", async (t) => {
-      // A2: "interface members are invoked with their containing object as
+      // suspending mark: "interface members are invoked with their containing object as
       // receiver", matching the resource static arm. A provider whose methods
       // read `this` is therefore a fully supported spelling — the failure mode
       // this pins is a silent unbound call, which reads as a wrong answer.

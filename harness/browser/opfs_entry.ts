@@ -17,8 +17,9 @@
 //
 //   2. COMPOSED: the fs-probe wasip2 fixture (std::fs through wasi-libc)
 //      instantiated with `filesystemWeb` serving a real OPFS preopen —
-//      every sync 0.2 descriptor method parks through the A14 suspending
-//      marks, so this half is ALSO the browser exercise of the parking
+//      every sync 0.2 descriptor method parks through the suspending marks
+//      (contracts/embedder-api.md §"The WASI parking kernel"), so this half
+//      is ALSO the browser exercise of the parking
 //      kernel over real async storage. Needs JSPI (Chromium default-on;
 //      Firefox behind the pref the driver sets).
 //
@@ -297,12 +298,12 @@ export async function runComposed(report: OpfsSmokeReport): Promise<void> {
         ...wasi(),
         ...filesystemWeb({ preopens: { "/": dir }, writable: true }).imports,
       },
-      // Default mode selection picks jspi from the A14 marks; make the
+      // Default mode selection picks jspi from the suspending marks; make the
       // requirement explicit so a silent fallback cannot pass vacuously.
       { jspi: true },
     );
     const summary = await c.exports.run() as string;
-    push("std::fs battery over real OPFS (parking via A14/JSPI)", summary === "fs probe ok", summary);
+    push("std::fs battery over real OPFS (parking via JSPI)", summary === "fs probe ok", summary);
     // The guest cleaned up: its preopen is empty again.
     let leftovers = 0;
     for await (const _ of dir.entries()) leftovers++;

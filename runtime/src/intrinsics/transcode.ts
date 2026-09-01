@@ -1,5 +1,5 @@
 // FACT string-transcoder intrinsics (`wasmtime_environ::component::Trampoline
-// ::Transcoder`, contracts/intrinsics.md §B "M1").
+// ::Transcoder`, contracts/intrinsics.md §B).
 //
 // FACT emits these when a cross-component call has to move a string between
 // two components whose canonical `string-encoding` options disagree (or, for

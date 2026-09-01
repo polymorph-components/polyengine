@@ -44,9 +44,8 @@ export function verify(plan: WirePlan): Promise<DigestMismatch | null> {
  * Guest-implemented resource (host holds handles). `Counter` instances
 * are transferred/invalidated per own/borrow semantics — see
 * contracts/embedder-api.md §"Resources".
-* @remarks the constructor is synchronous by C2 amendment
-* ("Constructors are synchronous" — contracts/embedder-api.md
-* §"Resources"): a guest constructor that fails to complete
+* @remarks the constructor is synchronous (contracts/embedder-api.md §"Resources"):
+* a guest constructor that fails to complete
 * synchronously raises a named runtime error rather than
 * half-constructing.
  */

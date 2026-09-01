@@ -1,4 +1,4 @@
-// Host imports that fire DURING instantiation (C2-C defect).
+// Host imports that fire DURING instantiation.
 //
 // A core module's `start` function runs inside `runInitializers`, i.e. before
 // `instantiateComponent`'s promise resolves — and real guests call imports from

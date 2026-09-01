@@ -1,5 +1,5 @@
 // The ZERO-IMPORT probe host module (contracts/embedder-api.md §"Module
-// identity and @polyengine/protocol", amendment A9: "Brands are contract
+// identity and @polyengine/protocol": "Brands are contract
 // markers, not a security boundary. A hand-rolled object carrying the right
 // brand is a legal value … This is what makes zero-import host modules
 // possible").
@@ -9,19 +9,19 @@
 // spells them out by hand agrees with every copy of the engine and of
 // `@polyengine/protocol` without sharing a module with either.
 //
-// The keys are the A18/A19 spellings from the brand table in §"Module
+// The keys are the spellings from the brand table in §"Module
 // identity"; the generation suffix `/1` is part of the key.
 
-/** `polyengine.componentException/1` — carried by err-result values (A19). */
+/** `polyengine.componentException/1` — carried by err-result values. */
 export const COMPONENT_EXCEPTION_KEY = "polyengine.componentException/1";
-/** `polyengine.suspending/1` — carried by the marked function (A1/A2). */
+/** `polyengine.suspending/1` — carried by the marked function (suspending mark). */
 export const SUSPENDING_KEY = "polyengine.suspending/1";
-/** `polyengine.errorContext/1` — message-valued at lowering since A20. */
+/** `polyengine.errorContext/1` — message-valued at lowering (§"Realm boundaries and structured-clone-safe forms"). */
 export const ERROR_CONTEXT_KEY = "polyengine.errorContext/1";
 
 /**
  * An err value with no protocol import anywhere in its provenance. `payload`
- * is the WIT err value (A10); `message` is diagnostic.
+ * is the WIT err value; `message` is diagnostic.
  */
 export function handRolledException(payload: unknown, message: string): Error {
   const e = new Error(message) as Error & { payload: unknown };
@@ -32,7 +32,7 @@ export function handRolledException(payload: unknown, message: string): Error {
   return e;
 }
 
-/** A suspending-marked function with no protocol import (A1). */
+/** A suspending-marked function with no protocol import. */
 export function handRolledSuspending<F extends (...a: never[]) => unknown>(
   fn: F,
 ): F {
@@ -41,7 +41,7 @@ export function handRolledSuspending<F extends (...a: never[]) => unknown>(
 }
 
 /**
- * A branded string-`message` carrier: what A20 makes lowerable where the guest
+ * A branded string-`message` carrier: what realm boundary makes lowerable where the guest
  * expects an `error-context`, by minting a FRESH local context — never "the
  * same" one, since an error-context's state is exactly its message.
  */

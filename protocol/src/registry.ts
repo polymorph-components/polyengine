@@ -1,15 +1,15 @@
 // The runtime-copy registry (contracts/embedder-api.md §"Module identity and
-// @polyengine/protocol", amendment A9; issue #83).
+// @polyengine/protocol"; issue #83).
 //
 // Each embedder module instance appends itself here when it is evaluated. The
 // array lives on `globalThis` under the registry symbol `polyengine.runtimeCopies/1`,
 // so copies that share no modules still share the census — that is the point.
 //
 // Multiple copies are DIAGNOSED, NEVER REFUSED: two isolated bundles on one
-// page that exchange no values are legal (and cross-copy value exchange has
-// been legal for the stateless brands since A9 anyway). The registry exists so
+// page that exchange no values are legal (and cross-copy value exchange is
+// legal for the stateless brands regardless of copy identity). The registry exists so
 // that the failures which remain — foreign stateful handles, unbranded throws
-// from a pre-A9 copy — name the copies instead of leaving a latent puzzle.
+// from an unregistered copy — name the copies instead of leaving a latent puzzle.
 
 import { RUNTIME_COPIES } from "./brands.ts";
 

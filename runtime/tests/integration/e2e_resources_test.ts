@@ -1,4 +1,4 @@
-// BONUS (M0 stretch, not gating): the `resources` fixture through the same
+// BONUS (stretch, not gating): the `resources` fixture through the same
 // path — own/borrow handles at the host boundary (as raw reps, the cabi v1
 // layer's representation), guest-side resource.new/rep/drop trampolines,
 // and observable destructor runs via live-counters.

@@ -1,7 +1,7 @@
 // Deferred run_tests.py areas: explicitly-ignored placeholders so `deno test`
 // output shows what is not yet ported and why.
 //
-// M2 phase 1 (task core + callback ABI) landed the task/thread/waitable
+// The task core + callback ABI landed the task/thread/waitable
 // machinery, so the entries that were blocked purely on "the scheduler does
 // not exist" are gone — their content now lives in real tests:
 //
@@ -26,7 +26,7 @@
 //
 // What remains ignored is blocked on a *capability*, not on the scheduler:
 // a host-API addition, the component instance tree, and 🧵 threads. The two
-// JSPI-blocked entries retired at the M2 flip:
+// JSPI-blocked entries retired once auto-detection landed:
 //
 //   test_sync_using_wait            -> a sync task's blocking waitable-set.wait
 //                                      is lit (jspi site 2) and exercised green

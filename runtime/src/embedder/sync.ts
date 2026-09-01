@@ -1,19 +1,19 @@
 // `sync()` — the explicit synchronous view of a WIT-sync export (contracts/
-// embedder-api.md §"Functions and async", amendment A25, 2026-08-30).
+// embedder-api.md §"Functions and async", §"Functions and async", 2026-08-30).
 //
-// Placement (A22): application machinery exported from
+// Placement: application machinery exported from
 // `@polyengine/runtime/embedder`, like `createStream` — only an instantiating
 // application holds export functions, so this is deliberately NOT host-module
 // vocabulary and does not touch `@polyengine/protocol`.
 //
 // Recognition is by brand (`polyengine.syncCallable/1`, a registry symbol per
-// A9) so views work across mixed runtime copies. Unlike the boolean brands in
+// module identity) so views work across mixed runtime copies. Unlike the boolean brands in
 // `@polyengine/protocol`'s `brands.ts` (whose payload is always `true`), this
 // brand carries a PAYLOAD describing the callable's synchronous form — the
 // dispatch shapes below are what `instantiate.ts` / `resources.ts` attach at
 // wrap time and what this module reads back.
 
-/** The registry symbol. `Symbol.for` per A9: N runtime copies agree on it
+/** The registry symbol. `Symbol.for` per module identity: N runtime copies agree on it
  * without sharing modules. */
 export const SYNC_CALLABLE: unique symbol = Symbol.for(
   "polyengine.syncCallable/1",
@@ -39,7 +39,7 @@ export type SyncPayload =
  * Stamp `payload` on `target` under the brand: non-enumerable, non-writable,
  * matching `@polyengine/protocol`'s `defineBrand` (protocol/src/brands.ts) —
  * implemented locally since the runtime does not add application-tier
- * vocabulary to the protocol package (A22).
+ * vocabulary to the protocol package.
  *
  * @internal — written by `instantiate.ts` and `resources.ts` at wrap/
  * class-build time; not part of the public `sync()` surface.
@@ -187,7 +187,7 @@ function classView(cls: object): unknown {
  * function or a nested resource class/instance/record maps recursively;
  * anything else (including an unbranded function) passes through unchanged.
  *
- * CONTRACT (contracts/embedder-api.md §"Functions and async" A25, the
+ * CONTRACT (contracts/embedder-api.md §"Functions and async" sync(), the
  * `sync(record)` bullet): the bullet says a record's members are "mapped by
  * these same rules, recursively" — read most literally, an async-typed
  * member nested in a record should behave exactly as `sync(asyncFn)` does at
@@ -274,7 +274,7 @@ export type Sync<F> = F extends (...a: infer A) => Promise<infer R>
 
 /**
  * The synchronous form of a WIT-sync export (contracts/embedder-api.md
- * §"Functions and async", amendment A25).
+ * §"Functions and async", §"Functions and async").
  *
  * - `sync(fn)` — a lifted export function (plain export, interface member,
  *   or resource static): returns the synchronous form `(...args) => T`.

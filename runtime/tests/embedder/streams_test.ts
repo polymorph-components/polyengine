@@ -1,6 +1,5 @@
 // Streams and futures through the conventions facade
-// (contracts/embedder-api.md §"Streams and futures"; C2 checklist item 4,
-// which folds in the R-fix review's four stream advisories).
+// (contracts/embedder-api.md §"Streams and futures").
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
@@ -193,7 +192,7 @@ Deno.test({
   name: "streams: wrapping one shared object is idempotent (same wrapper back)",
   ignore: false,
   fn: () => {
-    // Amendment A5 (pass-through investigation): a stream that round-trips
+    // §"Streams and futures" (pass-through investigation): a stream that round-trips
     // host -> guest -> host lifts back as the SAME wrapper the host already
     // holds. The old behavior — a hard "already wrapped" assert — turned the
     // spec-legal transfer chain into a failure; the hazard it guarded

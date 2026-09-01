@@ -8,7 +8,7 @@ package polyengine:resource-stream;
 /// arrive as live handles; each guest-side drop runs the host dtor; and
 /// elements the producer lowered but the reader never took (reader
 /// dropped mid-stream) are RELEASED, dtors run — never leaked
-/// (contracts/embedder-api.md amendment A13).
+/// (contracts/embedder-api.md §"Streams and futures").
 world resource-stream {
   /// Host-implemented; minted host-side as stream elements.
   resource ticket {

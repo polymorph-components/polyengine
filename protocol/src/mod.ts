@@ -1,6 +1,6 @@
 // `@polyengine/protocol` — the embedder contract's VOCABULARY, dependency-free
-// (contracts/embedder-api.md §"Module identity and @polyengine/protocol",
-// amendment A9; issue #83).
+// (contracts/embedder-api.md §"Module identity and @polyengine/protocol";
+// issue #83).
 //
 // What lives here: the process-global brand symbols, the canonical error
 // classes, `suspending()`/`isSuspending`, the recognition predicates, the
@@ -55,7 +55,7 @@ export {
 } from "./errors.ts";
 
 // Stream/future handles (contracts/embedder-api.md §"Streams and futures";
-// amendment A22, §"The host-ABI surface and its version"): executable
+// §"The host-ABI surface and its version"): executable
 // structural interfaces, aux types, and brand predicates. The runtime's
 // concrete classes `implements` these; this package never imports them.
 export {
@@ -75,7 +75,8 @@ export {
   type StreamWriter,
 } from "./handles.ts";
 
-// Realm-boundary crossings (amendment A20; issue #131). The envelope TAG is
+// Realm-boundary crossings (contracts/embedder-api.md §"Realm boundaries and
+// structured-clone-safe forms"; issue #131). The envelope TAG is
 // deliberately not exported: the form is version-internal, and an exported
 // constant invites persistence on it.
 export {

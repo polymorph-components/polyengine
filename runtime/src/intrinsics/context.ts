@@ -95,7 +95,7 @@ export function createUnsafeIntrinsic(
   const match = /^context-(get|set)-i32-(\d+)$/.exec(symbol);
   if (match === null) {
     throw new UnsupportedFeatureError(
-      "M2",
+      "task-core",
       `component imports the unsafe intrinsic '${symbol}', which has no ` +
         `portable meaning in a JS host (only context.{get,set} do)`,
     );

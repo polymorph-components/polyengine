@@ -2,7 +2,7 @@
 // futures": "Lowering accepts the natural JS producers"). Where the guest
 // expects `stream<T>` the host may pass an array, a `ReadableStream`, an
 // `AsyncIterable`, or a `Stream` handle; where it expects `future<T>`, a
-// `Promise`, a `Future` handle, or any thenable. Plus amendment A12: an import
+// `Promise`, a `Future` handle, or any thenable. Plus §"Streams and futures": an import
 // whose WIT RESULT is `future<T>` returns the future SOURCE — the call
 // completes immediately and the future settles on the producer's schedule.
 //
@@ -68,12 +68,12 @@ Deno.test({
   fn: async () => {
     await transcript("b-future-handle-source", async (t) => {
       const c = await instantiateFixture(guest("future-user"));
-      // C2: an export whose WIT result is `future<T>` returns the handle
+      // An export whose WIT result is `future<T>` returns the handle
       // EAGERLY — call without awaiting to hold it.
       const f = c.exports.makeFuture(41) as unknown;
       t.note("export-result", { classified: classify(f), value: f });
 
-      // A16: such a handle is DEFERRED — its host end materializes when the
+      // handle disposal: such a handle is DEFERRED — its host end materializes when the
       // producing call completes. Lowering it before then is refused, loudly.
       await t.attempt("lower-while-in-flight", () => c.exports.doubleFuture(f));
 
@@ -90,7 +90,7 @@ Deno.test({
 const passReady = await haveFixture(guest("stream-pass"));
 
 Deno.test({
-  name: "conventions/b: a Stream HANDLE is a lowering source (A5 round trip)",
+  name: "conventions/b: a Stream HANDLE is a lowering source (round trip)",
   ignore: !passReady,
   fn: async () => {
     await transcript("b-stream-handle-source", async (t) => {
@@ -106,7 +106,7 @@ Deno.test({
       // Read ONE element off it, so the end carries observable position.
       await t.attempt("hop1/read", () => s1.read(8));
 
-      // Hop 2: that HANDLE is the lowering source. A5: lifting a stream the
+      // Hop 2: that HANDLE is the lowering source. stream/future round-trip: lifting a stream the
       // host already handled is idempotent — a handle over the same underlying
       // END. Note it is NOT the same wrapper OBJECT: the contract promises an
       // end, and the engine mints a fresh wrapper per lift.
@@ -116,7 +116,7 @@ Deno.test({
         sameWrapperObject: (s2 as unknown) === (s1 as unknown),
       });
 
-      // A15's companion refusal: s1's end went to the guest, so a host read
+      // deadlock-verdict suppression's companion refusal: s1's end went to the guest, so a host read
       // through the old handle would operate a phantom duplicate.
       await t.attempt("hop1/read-after-transfer", () => s1.read(8));
 
@@ -136,7 +136,7 @@ Deno.test({
     await transcript("b-stream-handle-import-position", async (t) => {
       let seen = "none";
       const c = await instantiateFixture(guest("stream-pass"), {
-        // The guest hands the host's own stream back through an import. A5:
+        // The guest hands the host's own stream back through an import. stream/future round-trip:
         // "host -> guest -> host pass-through works with the guest never
         // reading; the payload then moves host<->host without touching guest
         // memory."
@@ -160,7 +160,7 @@ Deno.test({
 const futureImportReady = await haveFixture(guest("future-import"));
 
 Deno.test({
-  name: "conventions/b: A12 — an import whose result is future<T> returns the source",
+  name: "conventions/b: future import result — an import whose result is future<T> returns the source",
   ignore: !futureImportReady,
   fn: async () => {
     await transcript("b-a12-future-result-import", async (t) => {
@@ -201,7 +201,7 @@ Deno.test({
       await t.attempt("run-next", () => running);
 
       // The livelock probe: `run-send` writes the stream only after the sync
-      // import returned, so a reply at all is the A12 property.
+      // import returned, so a reply at all is the future import result property.
       await t.attempt("run-send", () => c.exports.runSend(4));
       // The tcp-receive shape: stream + future out of one sync import.
       await t.attempt("run-recv", () => c.exports.runRecv());

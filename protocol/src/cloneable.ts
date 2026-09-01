@@ -1,17 +1,17 @@
 // Structured-clone-safe forms (contracts/embedder-api.md §"Realm boundaries
-// and structured-clone-safe forms", amendment A20; issue #131).
+// and structured-clone-safe forms"; issue #131).
 //
 // Why this exists: two realms are two runtimes by construction (issue #129),
 // and `structuredClone` strips prototypes and symbol-keyed properties — so a
 // branded error posted raw arrives as an unbranded husk with its `payload`
 // gone, and a `Stream` as an empty object. No import-map discipline can help.
-// A20 defines the sanctioned crossing (`toCloneable`/`fromCloneable`) and the
+// This module defines the sanctioned crossing (`toCloneable`/`fromCloneable`) and the
 // realm-local pill (brands.ts `defineRealmLocal`) makes the unsanctioned one
 // fail loudly, in the SENDER realm, with a `DataCloneError`.
 //
 // Two rules govern every line below:
 //
-//   * Detection is by BRAND, never `instanceof` (A9) — a hand-rolled branded
+//   * Detection is by BRAND, never `instanceof` — a hand-rolled branded
 //     value encodes identically to a canonical class instance, which is what
 //     keeps zero-import host modules possible.
 //   * `fromCloneable` mints values branded by the LOCAL copy: a new local
@@ -77,8 +77,7 @@ export interface ToCloneableOptions {
 
 /**
  * Convert `v` into plain data safe for `structuredClone`/`postMessage` — no
- * transfer list required (contracts/embedder-api.md §"Realm boundaries…",
- * A20).
+ * transfer list required (contracts/embedder-api.md §"Realm boundaries…").
  *
  * Branded errors, error-contexts and wasi exit unwinds become envelopes;
  * containers are rebuilt fresh; realm-local values (streams, stream writers,
@@ -97,7 +96,7 @@ export function toCloneable(v: unknown, opts?: ToCloneableOptions): unknown {
 
 /**
  * Rehydrate `toCloneable` output (typically after a structured clone) into
- * values branded by THIS copy (A20).
+ * values branded by THIS copy.
  *
  * The round-trip law: `fromCloneable(structuredClone(toCloneable(v)))` is
  * behaviorally indistinguishable from `v` for every matcher the embedder
@@ -153,7 +152,7 @@ function isBinary(v: object): boolean {
 // the named cases plus the few universally-clonable platform types, and
 // TypeError for every other prototype — refusing loudly at the sender beats
 // handing the serializer something it will reject anyway with a worse
-// message. See contracts/embedder-api.md §"Realm boundaries…" (A20).
+// message. See contracts/embedder-api.md §"Realm boundaries…".
 const CLONABLE_EXOTICS = [
   "Date",
   "RegExp",
@@ -175,12 +174,12 @@ function isPassThroughExotic(v: object): boolean {
 }
 
 /**
- * Realm-local check (A20): `isRealmLocal` (the pill), the stateful handle
+ * Realm-local check: `isRealmLocal` (the pill), the stateful handle
  * brands, and resource wrappers.
  *
- * `STREAM_WRITER` (amendment A22) is listed for consistency with the other
+ * `STREAM_WRITER` is listed for consistency with the other
  * stateful handle brands, not because it changes behavior here: every
- * `StreamWriter` already carries the A20 pill (`defineRealmLocal` in its
+ * `StreamWriter` already carries the realm-local pill (`defineRealmLocal` in its
  * constructor, runtime/src/embedder/streams.ts), so `isRealmLocal(v)` above
  * already refuses one — this is belt-and-suspenders against a hand-rolled
  * writer that carries the brand but skipped the pill.
@@ -202,7 +201,7 @@ function refuseRealmLocal(path: string): never {
       `lives in the realm that minted it, so a copy in another realm could ` +
       `only ever be a husk. Proxy the interface, not the handle ` +
       `(contracts/embedder-api.md §"Realm boundaries and ` +
-      `structured-clone-safe forms", amendment A20; issue #131).`,
+      `structured-clone-safe forms"; issue #131).`,
   );
 }
 
@@ -241,12 +240,12 @@ function encode(
     case "function":
       throw new TypeError(
         `${path} is a function, which structured clone cannot carry ` +
-          `(contracts/embedder-api.md §"Realm boundaries…", A20).`,
+          `(contracts/embedder-api.md §"Realm boundaries…").`,
       );
     case "symbol":
       throw new TypeError(
         `${path} is a symbol, which structured clone cannot carry ` +
-          `(contracts/embedder-api.md §"Realm boundaries…", A20).`,
+          `(contracts/embedder-api.md §"Realm boundaries…").`,
       );
   }
   if (v === null) return null;
@@ -256,13 +255,13 @@ function encode(
     throw new TypeError(
       `${path} is a cyclic reference. WIT values have no aliasing ` +
         `semantics, so a genuine cycle is refused rather than looped over ` +
-        `(contracts/embedder-api.md §"Realm boundaries…", A20).`,
+        `(contracts/embedder-api.md §"Realm boundaries…").`,
     );
   }
 
   // Envelope-encodable brands take precedence over the realm-local pill: an
   // `ErrorContext` instance carries BOTH (it is a lifted handle and a message
-  // carrier), and it encodes — error-context is message-valued since A20.
+  // carrier), and it encodes — error-context is message-valued at lowering.
   for (const brand of ERROR_BRANDS) {
     if (hasBrand(o, brand)) {
       return encodeBrandedError(o, brand, path, seen, opts);
@@ -341,7 +340,7 @@ function encode(
       throw new TypeError(
         `${path} already carries the envelope tag ${JSON.stringify(TAG)}. ` +
           `The encoding has no escaping scheme by design ` +
-          `(contracts/embedder-api.md §"Realm boundaries…", A20).`,
+          `(contracts/embedder-api.md §"Realm boundaries…").`,
       );
     }
     seen.add(o);
@@ -361,7 +360,7 @@ function encode(
     `${path} has a prototype the cloneable form does not cover ` +
       `(${describeProto(o)}). Only plain objects, arrays, binary data and ` +
       `the branded taxonomy cross a realm boundary ` +
-      `(contracts/embedder-api.md §"Realm boundaries…", A20).`,
+      `(contracts/embedder-api.md §"Realm boundaries…").`,
   );
 }
 
@@ -429,7 +428,7 @@ function decode(v: unknown, path: string, seen: Set<object>): unknown {
   if (v === null || typeof v !== "object") return v;
   const o = v as object;
   if (seen.has(o)) {
-    throw new TypeError(`${path} is a cyclic reference (A20).`);
+    throw new TypeError(`${path} is a cyclic reference.`);
   }
   if (isBinary(o)) return o;
   if (Array.isArray(o)) {
@@ -539,7 +538,7 @@ function rehydrate(
       }
       case "polyengine.errorContext/1": {
         // A branded plain object, which the runtime accepts at lowering by
-        // minting a fresh LOCAL context (A20: error-context is
+        // minting a fresh LOCAL context (error-context is
         // message-valued).
         const ctx = { message };
         defineBrand(ctx, ERROR_CONTEXT);
@@ -547,7 +546,7 @@ function rehydrate(
       }
       case "polyengine.wasiExit/1": {
         // The protocol package does not import the wasi package — the BRAND
-        // is the contract (A20), so the exit unwind is hand-rolled here.
+        // is the contract, so the exit unwind is hand-rolled here.
         const e = Object.assign(new Error(message), {
           ok: env.ok,
         }) as unknown as
@@ -582,6 +581,6 @@ function rehydrate(
       `The envelope is version-internal, so an unknown tag means the two ` +
       `realms run different engine versions — outside the supported matrix ` +
       `(contracts/embedder-api.md §"Realm boundaries and ` +
-      `structured-clone-safe forms", amendment A20).`,
+      `structured-clone-safe forms").`,
   );
 }

@@ -1,15 +1,15 @@
 // The PROBE HOST MODULE — written exactly the way a consumer writes one
-// (contracts/embedder-api.md §"The host-ABI surface and its version", A22:
+// (contracts/embedder-api.md §"The host-ABI surface and its version", host-ABI version:
 // "Host modules MUST NOT import `@polyengine/runtime`").
 //
 // Everything below reaches the engine through the boundary only. The single
 // import is `@polyengine/protocol`, for VOCABULARY: the recognition predicates,
 // `suspending()`, `ComponentException`. No runtime import, no class-identity
 // check, no `instanceof` against an engine class — recognition is by brand
-// everywhere (A9).
+// everywhere.
 //
 // `probe_zero_import.ts` is the same story with the import removed entirely:
-// hand-rolled `Symbol.for` brands, which A9 declares legal values ("a
+// hand-rolled `Symbol.for` brands, which module identity declares legal values ("a
 // hand-rolled object carrying the right brand IS a ComponentException to every
 // copy"). If that file ever grows an import, the property it demonstrates is
 // gone.
@@ -131,7 +131,7 @@ export class Gauge {
 }
 
 /**
- * The A2 suspending mark on a class PROTOTYPE method: the prototype is the
+ * The suspending mark on a class PROTOTYPE method: the prototype is the
  * per-declaration brand authority, read at wrap time, so every instance
  * dispatched through it parks.
  */
@@ -158,7 +158,7 @@ SuspendingGauge.prototype.read = suspending(
 ) as typeof SuspendingGauge.prototype.read;
 
 /**
- * An interface provider that is a CLASS INSTANCE (A2: "interface members are
+ * An interface provider that is a CLASS INSTANCE (suspending mark: "interface members are
  * invoked with their containing object as receiver"). `add` reads instance
  * state, so a wrong receiver is a wrong answer rather than a silent pass.
  */

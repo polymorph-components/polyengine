@@ -2,7 +2,7 @@
 // instantiate it. This is the only file here allowed to touch
 // `@polyengine/runtime` — the harness plays the embedding application, whose
 // job (instantiate, resolve artifacts, enumerate `requiredImports`) is exactly
-// what `@polyengine/runtime/embedder`'s surface is for after amendment A22.
+// what `@polyengine/runtime/embedder`'s surface is for after §"The host-ABI surface and its version".
 //
 // The PROBE HOST MODULE (`probe.ts`) is the other side, and imports none of
 // it. Keep the split: a runtime import leaking into probe.ts would void the
@@ -71,7 +71,7 @@ export function local(name: string): string {
   return `runtime/tests/conventions/${name}.wasm`;
 }
 
-/** JSPI is the engine floor for the `suspending()` row (A1). */
+/** JSPI is the engine floor for the `suspending()` row. */
 export function jspiSupported(): boolean {
   return typeof (WebAssembly as { Suspending?: unknown }).Suspending ===
     "function";

@@ -1,4 +1,4 @@
-// The other side of the A20 realm boundary (contracts/embedder-api.md
+// The other side of the realm boundary (contracts/embedder-api.md
 // §"Realm boundaries and structured-clone-safe forms"; issue #131).
 //
 // A module worker is a genuinely separate realm with its own module graph:

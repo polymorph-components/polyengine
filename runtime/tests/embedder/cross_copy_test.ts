@@ -1,4 +1,4 @@
-// Cross-copy identity: the fast unit half of amendment A9's pin
+// Cross-copy identity: the fast unit half of §"Module identity and @polyengine/protocol"'s pin
 // (contracts/embedder-api.md §"Module identity and @polyengine/protocol"; issue
 // #83). The end-to-end half — two REAL runtime copies, source + bundle — is
 // tools/release-bundle/dual_copy_test.ts, which needs a bundle build; this
@@ -49,7 +49,7 @@ function caught(fn: () => unknown): unknown {
   throw new Error("expected a throw");
 }
 
-Deno.test("A9: importing the embedder registers this copy on the census", () => {
+Deno.test("module identity: importing the embedder registers this copy on the census", () => {
   const urls = runtimeCopies().map((c) => c.url);
   assertTrue(urls.includes(COPY_URL), "this copy registered itself");
   const me = runtimeCopies().find((c) => c.url === COPY_URL)!;
@@ -57,15 +57,15 @@ Deno.test("A9: importing the embedder registers this copy on the census", () => 
   assertEq(me.protocolGeneration, 1);
 });
 
-Deno.test("A9: RUNTIME_VERSION matches runtime/deno.json (no fs read at runtime)", async () => {
+Deno.test("module identity: RUNTIME_VERSION matches runtime/deno.json (no fs read at runtime)", async () => {
   const cfg = JSON.parse(
     await Deno.readTextFile(new URL("../../deno.json", import.meta.url)),
   );
   assertEq(RUNTIME_VERSION, cfg.version);
 });
 
-Deno.test("A9: a foreign Stream is refused at lowering, not pumped as an iterable", () => {
-  // The silent path A9 bans: without the brand check this object would fall
+Deno.test("module identity: a foreign Stream is refused at lowering, not pumped as an iterable", () => {
+  // The silent path module identity bans: without the brand check this object would fall
   // through to producer adaptation.
   const src = foreign("polyengine.stream/1", {
     [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
@@ -78,7 +78,7 @@ Deno.test("A9: a foreign Stream is refused at lowering, not pumped as an iterabl
   assertTrue(m.includes("src.readable()"), "names the by-value remediation");
 });
 
-Deno.test("A9: a foreign Future is refused, not silently adopted as a thenable", () => {
+Deno.test("module identity: a foreign Future is refused, not silently adopted as a thenable", () => {
   const src = foreign("polyengine.future/1", {
     then: (ok: (v: number) => void) => ok(1),
   });
@@ -89,8 +89,8 @@ Deno.test("A9: a foreign Future is refused, not silently adopted as a thenable",
   assertTrue(m.includes("Promise.resolve(f)"), "names the by-value remediation");
 });
 
-Deno.test("A9: a foreign error-context is named cross-copy, not 'expected an ErrorContext' (A20: only without a string message)", () => {
-  // A20 (contracts/embedder-api.md §"Error-context is message-valued";
+Deno.test("module identity: a foreign error-context is named cross-copy, not 'expected an ErrorContext' (realm boundary: only without a string message)", () => {
+  // realm boundary (contracts/embedder-api.md §"Error-context is message-valued";
   // issue #131): a branded carrier of a STRING message is now message-valued
   // and accepted (mints a fresh local context) — the loud cross-copy
   // refusal survives only for a branded carrier WITHOUT a string message,
@@ -104,16 +104,16 @@ Deno.test("A9: a foreign error-context is named cross-copy, not 'expected an Err
   assertTrue(!m.includes("expected an ErrorContext"), m);
 });
 
-Deno.test("A9: an unbranded value at a handle site keeps its original diagnosis", () => {
+Deno.test("module identity: an unbranded value at a handle site keeps its original diagnosis", () => {
   const e = caught(() =>
     fromHost({}, { kind: "error-context" } as never, { where: "export 'f'" } as never)
   );
   assertTrue(String((e as Error).message).includes("expected an ErrorContext"));
 });
 
-Deno.test("A9: a foreign resource wrapper is named cross-copy, not 'not a resource handle'", () => {
+Deno.test("module identity: a foreign resource wrapper is named cross-copy, not 'not a resource handle'", () => {
   // Same brand KEY, a foreign copy's state object (whose SHAPE we must never
-  // read — the A9 table pins only the key).
+  // read — the module identity table pins only the key).
   const w = new GuestResource();
   (w as unknown as Record<symbol, unknown>)[Symbol.for("polyengine.resourceState/1")] = {
     copyUrl: "file:///some/other/copy/mod.ts",
@@ -130,7 +130,7 @@ Deno.test("A9: a foreign resource wrapper is named cross-copy, not 'not a resour
   assertTrue(!m.includes("no longer valid"), m);
 });
 
-Deno.test("A9: this copy's own wrappers are unaffected", () => {
+Deno.test("module identity: this copy's own wrappers are unaffected", () => {
   const w = new GuestResource();
   initWrapper(w, {
     rep: 3,
@@ -146,12 +146,12 @@ Deno.test("A9: this copy's own wrappers are unaffected", () => {
   assertEq(takeRep(w, false, "export 'f'"), 3);
 });
 
-Deno.test("A9: a non-handle object still gets the plain diagnosis", () => {
+Deno.test("module identity: a non-handle object still gets the plain diagnosis", () => {
   const e = caught(() => takeRep({}, false, "export 'f'"));
   assertTrue(String((e as Error).message).includes("not a resource handle"));
 });
 
-Deno.test("A9: the census is empty for a single-copy graph and names both when not", () => {
+Deno.test("module identity: the census is empty for a single-copy graph and names both when not", () => {
   assertEq(copyCensus(), "", "the healthy graph adds nothing to any message");
   registerRuntimeCopy({
     url: "file:///fake/second/copy.mjs",

@@ -13,7 +13,7 @@
 //
 // SYNC BY CONSTRUCTION: every backend op uses node's `*Sync` API, so the
 // 0.2 track's sync WIT functions are served without parking — guests run
-// in plain callback mode, no JSPI required (the A14 marks stay off; see
+// in plain callback mode, no JSPI required (the park-capable marks stay off; see
 // fs_provider.ts). The 0.3 track returns plain values from async funcs,
 // which the runtime accepts.
 //

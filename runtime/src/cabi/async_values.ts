@@ -39,8 +39,9 @@ import {
 } from "../task/streams.ts";
 
 /**
- * Diagnostic for a handle-table entry that carries the A9 error-context brand
- * without being one of THIS copy's `ErrorContext`s (amendment A9, issue #83).
+ * Diagnostic for a handle-table entry that carries the error-context brand
+ * without being one of THIS copy's `ErrorContext`s (contracts/embedder-api.md
+ * §"Module identity").
  *
  * A backstop, deliberately: the embedder's lowering site (embedder/values.ts)
  * refuses a foreign error-context before it can ever reach a handle table, so
@@ -59,7 +60,7 @@ export function errorContextTrapMessage(where: string, e: unknown): string {
   return `${where}: this error-context was minted by a DIFFERENT polyengine ` +
     `runtime copy and cannot be used through this one` +
     `${census === "" ? "" : ` (${census})`} ` +
-    `(contracts/embedder-api.md amendment A9, issue #83)`;
+    `(contracts/embedder-api.md §"Module identity")`;
 }
 
 /** definitions.py `contains_borrow` — async values may never carry borrows. */
@@ -108,7 +109,7 @@ function liftAsyncValue(
   const holder = end.shared as { boundStore?: unknown };
   const store = (inst as unknown as { store?: unknown }).store;
   if (holder.boundStore != null && store != null) {
-    // A9: when several runtime copies are loaded, "a second store" is very
+    // module identity: when several runtime copies are loaded, "a second store" is very
     // often "a second COPY" — the shared object was minted by one runtime and
     // is being driven by another. The two stores are indistinguishable from
     // here (stores carry no copy identity), so the census is appended as the
@@ -124,7 +125,7 @@ function liftAsyncValue(
     );
   }
   holder.boundStore ??= store;
-  // Host-wrapper re-arm hook (#162, embedder-api amendment A15): the readable
+  // Host-wrapper re-arm hook (#162, contracts/embedder-api.md §"Streams and futures"): the readable
   // end just left a guest table, so whoever receives it can act on it again.
   // See `bindOnLower` in exec/host_streams.ts for the retention rule.
   (end.shared as { onLifted?: ((i: unknown) => void) | null }).onLifted?.(inst);

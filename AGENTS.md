@@ -17,8 +17,7 @@ implementation safe.
   versioned events made only by the orchestrator**; implementation tracks
   report contract friction, they never edit around it.
 - Design and decisions: [docs/architecture.md](docs/architecture.md).
-  Milestone record: [docs/milestones.md](docs/milestones.md). Consumer
-  track: [docs/consumers.md](docs/consumers.md). Upstream links:
+  Consumer track: [docs/consumers.md](docs/consumers.md). Upstream links:
   [docs/references.md](docs/references.md).
 
 ## Gates (exact commands)
@@ -46,7 +45,7 @@ just sched-seeds          # seeded-shuffle reruns: POLYENGINE_SCHED_SEED=1, =424
 just shells               # pinned engine/runtime lanes: sm + node everywhere, jsc on x64, bun findings-only
 just browsers             # chromium + firefox lanes incl. worker/shared-worker realm rows (`just browsers-install` once)
 just smoke-tls            # polymorph-tls suite (issue #18)
-just smoke-c0             # C0 smoke legs
+just smoke-c0             # consumer smoke legs
 ```
 
 Conformance discipline: the harness fails loudly on unexpected failures *and*
@@ -108,7 +107,7 @@ Standing rules:
   missing result is not missing work.
 - Never run one-off `npm:` specifiers (e.g. `deno run npm:yaml`) from the
   workspace root: Deno records them into the root `deno.lock`, silently
-  dirtying the tree (bitten twice by YAML-parsing one-offs). Use python3 or
+  dirtying the tree. Use python3 or
   run from `/tmp`; check `git diff deno.lock` before staging.
 - `main` is branch-protected: required checks = the `core` CI matrix,
   force-pushes and deletions blocked, auto-merge enabled. Admin direct
@@ -125,13 +124,13 @@ Standing rules:
   commit via release.yml `workflow_dispatch` with `release=true` (guards:
   lockstep, tag-exists, green `pre-<shorthash>` present), followed
   immediately by a manifest-bump PR to the next patch — the four manifests
-  plus runtime's A9 copy-identity constant `RUNTIME_VERSION`
+  plus runtime's copy-identity constant `RUNTIME_VERSION`
   (runtime/src/embedder/copy.ts; `just test-runtime` pins the sync).
   `@polyengine/protocol`
   versions independently; bumping its manifest publishes it for real at the
   next cut. Prereleases (`pre-<shorthash>`, every green `main`) are GitHub
   releases carrying artifacts only — JSR and npm are published by cut
-  releases exclusively (#223).
+  releases exclusively.
 - Breaking changes are declared by PR **label**, one per package:
   `breaking/{runtime,translator,wasi,ct-runner,protocol}`. A label asserts
   that the PR breaks that package's published surface (caret-incompatible);
@@ -144,13 +143,13 @@ Standing rules:
   logic): `local` mode, first in `just gates` and an unconditional
   `gha::core` step (label-free tree checks — lockstep agreement,
   monotonicity, the protocol byte-identity tear check — so pre-push runs
-  and direct pushes are covered without PR context; the #232 lesson);
+  and direct pushes are covered without PR context);
   `pr` mode in `gha::core` (lockstep agreement, monotonicity,
   label ↔ minor-bump agreement both ways, protocol-tear warning — an early
   warning only, since label edits deliberately do not re-trigger CI);
   `publish` mode in release.yml's publish step, both modes (in-tree
   protocol must be byte-identical to the published version its manifest
-  names — the authoritative guard against the #219 tear, which PR-time
+  names — the authoritative tear guard, which PR-time
   checks cannot own because they miss post-run label edits, direct pushes
   to main, and their own staleness at cut time; on the prerelease path
   nothing publishes, so it is early detection of a tear the next cut would
@@ -158,7 +157,8 @@ Standing rules:
   `release=true`, which turns the window's labels into the minor-bump
   requirement and renders the release notes.
 - **The host ABI is versioned by `@polyengine/protocol`, gated by goldens**
-  (contracts/embedder-api.md amendment A22). The conventions suite
+  (contracts/embedder-api.md §"The host-ABI surface and its version"). The
+  conventions suite
   (`runtime/tests/conventions/`, rides `just test-runtime`; focused run:
   `just test-conventions`) pins the host-facing lift/lower behavior as
   committed transcripts under `runtime/tests/conventions/golden/`.
@@ -193,14 +193,15 @@ Standing rules:
   (The `pre` dist-tag is retired with the prerelease-publishing flow and
   stays frozen wherever it last pointed.)
 - Two registries, one version (protocol rides its own manifest version on
-  both — A10). JSR is published inline by release.yml; npm
+  both). JSR is published inline by release.yml; npm
   is published by npm-publish.yml, triggered by the GitHub release, from
   packages built by `tools/npm-build/build.ts` (dnt). The npm side reads
   name/version/exports out of the same `deno.json` manifests, so adding an
   entry point or bumping a version needs no second edit — but `just
   test-npm` is the gate that proves it, and the property it exists to pin
   is that cross-package imports stay npm **dependencies** rather than
-  inlined source (duplicate copies are the A9 failure mode). npm auth is
+  inlined source (duplicate copies are the multi-runtime-copy failure
+  mode the protocol brands exist to diagnose). npm auth is
   OIDC trusted publishing keyed on the `npm-publish.yml` filename; there
   is no npm token in the repository or its secrets.
 - Consumer checkouts (the polymorph family, under `~/p/polymorph/`) are

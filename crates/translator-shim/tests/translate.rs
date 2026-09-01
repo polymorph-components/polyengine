@@ -1,4 +1,4 @@
-//! Plan-v0 emission tests: the S0 spike assertions adapted to the plan
+//! Plan-v0 emission tests: the translator-spike assertions adapted to the plan
 //! schema, plus determinism and a golden-ish shape test for the hello
 //! fixture (contracts/plan-format.md).
 
@@ -100,7 +100,7 @@ fn linked_generates_fact_adapter() {
         .collect();
     assert_eq!(adapter_inits.len(), t.adapters.len());
 
-    // Manifest categories cover the S0-observed intrinsic surface
+    // Manifest categories cover the translator-spike-observed intrinsic surface
     // (intrinsics.md §A): callee core-def, instance flags, task-may-block,
     // trap + enter/exit-sync-call trampolines.
     let manifests: Vec<String> = adapter_entries(&t)
@@ -215,7 +215,7 @@ fn determinism() {
     }
 }
 
-/// Golden-ish shape test for the hello fixture (M0 exit criterion component):
+/// Golden-ish shape test for the hello fixture:
 /// wit-bindgen sync guest with strings, realloc and post-return.
 #[test]
 fn hello_plan_shape() {
@@ -306,7 +306,7 @@ fn hello_plan_shape() {
     assert!(plan.world_digest.starts_with("sha256:"));
 }
 
-/// The whole M0 fixture corpus must map without hitting unmapped variants
+/// The whole fixture corpus must map without hitting unmapped variants
 /// (fail-loudly contract): hello, values, resources.
 #[test]
 fn m0_fixture_corpus_translates() {
@@ -500,7 +500,7 @@ fn relend_fixture_shape() {
 /// A cross-encoding string transfer must surface as a `Transcoder`
 /// trampoline carrying the `Transcode::desc()` op name and the two
 /// `RuntimeMemoryIndex`es the runtime needs to do the copy
-/// (contracts/intrinsics.md §B "M1").
+/// (contracts/intrinsics.md §B).
 #[test]
 fn transcoder_trampoline_shape() {
     let bytes = build("transcode");
@@ -581,7 +581,7 @@ fn verdict_phase_unsupported() {
 }
 
 // ---------------------------------------------------------------------------
-// Component imports (plan-format.md v0.1 amendment #4) and imported resources
+// Component imports (`imports[].path`, contracts/plan-format.md schema) and imported resources
 // ---------------------------------------------------------------------------
 
 /// Direct function imports and instance imports: the latter produce one plan
@@ -664,12 +664,11 @@ fn imported_resources_are_emitted() {
     );
 }
 
-/// Plan v3 (contracts/plan-format.md v3 amendments 2 and 3).
-///
-/// (2) `errorContextTables` describes the index space the
-/// `error-context-*` trampolines' table arguments live in
-/// (`TypeComponentLocalErrorContextTableIndex`), emitted from environ's
-/// `ComponentTypes::error_context_tables` in `PrimaryMap` order.
+/// The errorContextTables section (contracts/plan-format.md schema):
+/// describes the index space the `error-context-*` trampolines' table
+/// arguments live in (`TypeComponentLocalErrorContextTableIndex`), emitted
+/// from environ's `ComponentTypes::error_context_tables` in `PrimaryMap`
+/// order.
 #[test]
 fn error_context_tables_are_emitted() {
     let bytes = build("error-context");
@@ -698,9 +697,11 @@ fn error_context_tables_are_emitted() {
     );
 }
 
-/// (3) A `task-return` decl carries BOTH the raw wasmtime `TypeTupleIndex`
-/// (`results` — the value FACT's `prepare-call` passes as `task_return_type`
-/// at runtime) and its interning into `plan.types` (`resultType`). The two are
+/// The task-return raw `results` + interned `resultType` keys
+/// (contracts/plan-format.md schema): a `task-return` decl carries BOTH the
+/// raw wasmtime `TypeTupleIndex` (`results` — the value FACT's
+/// `prepare-call` passes as `task_return_type` at runtime) and its
+/// interning into `plan.types` (`resultType`). The two are
 /// different index spaces; conflating them is what left `canon_task_return`'s
 /// result-type check disabled for FACT tasks through v2.
 #[test]

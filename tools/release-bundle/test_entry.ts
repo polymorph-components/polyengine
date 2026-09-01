@@ -2,9 +2,9 @@
 // release asset (see ./entry.ts for that surface, and build.ts's
 // `buildBundle(out, entry)` for the override this file relies on).
 //
-// dual_copy_test.ts (A9/A22) needs to reach copy B's OWN `@polyengine/protocol`
-// instance — the class-per-copy premise the test pins — but amendment A22
-// (contracts/embedder-api.md §"The host-ABI surface and its version") makes
+// dual_copy_test.ts needs to reach copy B's OWN `@polyengine/protocol`
+// instance — the class-per-copy premise the test pins — but
+// contracts/embedder-api.md §"The host-ABI surface and its version" makes
 // the *shipped* entry stop re-exporting protocol vocabulary, on purpose: a
 // real host module never gets it from the runtime. This second entry point
 // exists solely so the in-repo cross-copy test can still observe copy B's

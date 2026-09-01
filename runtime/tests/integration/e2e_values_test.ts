@@ -1,12 +1,11 @@
-// STRETCH (M0, not gating): the `values` fixture's 17 echo exports through
+// STRETCH (not gating): the `values` fixture's 17 echo exports through
 // the same shim -> plan -> executor path as hello. Exercises the descriptor
 // IR + cabi interpreter across every WIT type shape in the fixture corpus.
 //
 // Host value shapes are the cabi v1 interpreter's (definitions.py shapes:
 // single-key variant/option/result objects, despecialized tuple records,
 // label->bool flags) — NOT the ergonomic mapping table of descriptor-ir.md
-// §"Host value mapping", which the interpreter does not implement yet. That
-// divergence is recorded in the M0 contract friction report.
+// §"Host value mapping", which the interpreter does not implement yet.
 
 import { assertEq } from "../support/asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";

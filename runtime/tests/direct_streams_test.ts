@@ -1,7 +1,7 @@
 // Direct-access byte edges at the RAW seam (contracts/embedder-api.md
-// §"Streams and futures", amendment A21, 2026-08-22, polyengine#128).
+// §"Streams and futures", §"Streams and futures", 2026-08-22, polyengine#128).
 //
-// WHAT A21 IS
+// WHAT direct-access byte edge IS
 // ===========
 //
 // For `stream<u8>` only, a host end may park a *direct session* instead of a
@@ -75,7 +75,7 @@ function caughtSync(fn: () => unknown): unknown {
 // Structurally what exec/boundary.ts `LiveMemory` is: `bytes`/`view` are
 // GETTERS that re-derive from `memory.buffer`, so a `memory.grow` (which
 // detaches the old ArrayBuffer) is invisible to holders of the MemInst. That
-// is exactly the property A21's "views are re-derived per `remaining()` call"
+// is exactly the property direct-access byte edge's "views are re-derived per `remaining()` call"
 // rule depends on.
 
 function mkMemory(initial = 1) {
@@ -147,7 +147,7 @@ function fill(memory: WebAssembly.Memory, ptr: number, vs: number[]) {
 // 1. The two arrival orders, both directions
 // ===========================================================================
 
-Deno.test("A21 writeDirect: parked session, guest read arrives", async () => {
+Deno.test("direct-access byte edge writeDirect: parked session, guest read arrives", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -178,7 +178,7 @@ Deno.test("A21 writeDirect: parked session, guest read arrives", async () => {
   assertEq(g.buf.progress, 3, "the guest read completes with progress 3");
 });
 
-Deno.test("A21 writeDirect: guest read parked, session arrives", async () => {
+Deno.test("direct-access byte edge writeDirect: guest read parked, session arrives", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -198,7 +198,7 @@ Deno.test("A21 writeDirect: guest read parked, session arrives", async () => {
   assertEq(g.events, [{ result: CopyResult.COMPLETED, progress: 4 }]);
 });
 
-Deno.test("A21 readDirect: parked session, guest write arrives", async () => {
+Deno.test("direct-access byte edge readDirect: parked session, guest write arrives", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -222,7 +222,7 @@ Deno.test("A21 readDirect: parked session, guest write arrives", async () => {
   assertEq(g.events, [{ result: CopyResult.COMPLETED, progress: 3 }]);
 });
 
-Deno.test("A21 readDirect: guest write parked, session arrives (partial take)", async () => {
+Deno.test("direct-access byte edge readDirect: guest write parked, session arrives (partial take)", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -251,7 +251,7 @@ Deno.test("A21 readDirect: guest write parked, session arrives (partial take)", 
 // 2. Multi-rendezvous sessions
 // ===========================================================================
 
-Deno.test('A21: a "more" session drains across several guest reads', async () => {
+Deno.test('direct-access byte edge: a "more" session drains across several guest reads', async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -284,7 +284,7 @@ Deno.test('A21: a "more" session drains across several guest reads', async () =>
   assertEq(g3.events, [{ result: CopyResult.COMPLETED, progress: 1 }]);
 });
 
-Deno.test('A21: a "more" readDirect session drains across several guest writes', async () => {
+Deno.test('direct-access byte edge: a "more" readDirect session drains across several guest writes', async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -311,7 +311,7 @@ Deno.test('A21: a "more" readDirect session drains across several guest writes',
 // 3. Retraction — "done" with zero marked
 // ===========================================================================
 
-Deno.test("A21 retraction: the arriving reader stays parked, with no event", async () => {
+Deno.test("direct-access byte edge retraction: the arriving reader stays parked, with no event", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -333,7 +333,7 @@ Deno.test("A21 retraction: the arriving reader stays parked, with no event", asy
   assertEq(memBytes(memory, 600, 4), [5, 6, 0, 0]);
 });
 
-Deno.test("A21 retraction: the parked guest reader is untouched when the session arrives second", async () => {
+Deno.test("direct-access byte edge retraction: the parked guest reader is untouched when the session arrives second", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -347,7 +347,7 @@ Deno.test("A21 retraction: the parked guest reader is untouched when the session
   assertEq(memBytes(memory, 700, 2), [9, 0]);
 });
 
-Deno.test("A21 retraction: readDirect leaves a parked guest writer parked", async () => {
+Deno.test("direct-access byte edge retraction: readDirect leaves a parked guest writer parked", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -366,7 +366,7 @@ Deno.test("A21 retraction: readDirect leaves a parked guest writer parked", asyn
 // 4. Misuse — the session fails, the peer survives, the stream lives
 // ===========================================================================
 
-Deno.test('A21 misuse: "more" with zero marked rejects TypeError', async () => {
+Deno.test('direct-access byte edge misuse: "more" with zero marked rejects TypeError', async () => {
   const { view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -387,7 +387,7 @@ Deno.test('A21 misuse: "more" with zero marked rejects TypeError', async () => {
   assertEq(g.events, [{ result: CopyResult.COMPLETED, progress: 2 }]);
 });
 
-Deno.test("A21 misuse: a throwing callback rejects and discards its marks", async () => {
+Deno.test("direct-access byte edge misuse: a throwing callback rejects and discards its marks", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -414,7 +414,7 @@ Deno.test("A21 misuse: a throwing callback rejects and discards its marks", asyn
   assertEq(memBytes(memory, 1000, 2), [1, 2], "peer sees only its own copy");
 });
 
-Deno.test("A21 misuse: the same failures leave a PARKED guest reader parked", async () => {
+Deno.test("direct-access byte edge misuse: the same failures leave a PARKED guest reader parked", async () => {
   const { view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -428,7 +428,7 @@ Deno.test("A21 misuse: the same failures leave a PARKED guest reader parked", as
   assertEq(g.events, [{ result: CopyResult.COMPLETED, progress: 2 }]);
 });
 
-Deno.test("A21 misuse: over-marking throws inside the callback", async () => {
+Deno.test("direct-access byte edge misuse: over-marking throws inside the callback", async () => {
   const { view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -465,7 +465,7 @@ Deno.test("A21 misuse: over-marking throws inside the callback", async () => {
   assert(bad.every((e) => e instanceof TypeError), `both refused: ${bad}`);
 });
 
-Deno.test("A21 scoping: the view is dead once the callback returns", async () => {
+Deno.test("direct-access byte edge scoping: the view is dead once the callback returns", async () => {
   const { view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -496,7 +496,7 @@ Deno.test("A21 scoping: the view is dead once the callback returns", async () =>
   }
 });
 
-Deno.test("A21: non-u8 and zero-width element types are refused", () => {
+Deno.test("direct-access byte edge: non-u8 and zero-width element types are refused", () => {
   for (const [label, t] of [["u32", U32], ["zero-width", null]] as const) {
     const hs = hostStream<number>(t);
     const w = caughtSync(() => hs.writable.writeDirect(() => "done"));
@@ -505,13 +505,13 @@ Deno.test("A21: non-u8 and zero-width element types are refused", () => {
       assert(e instanceof TypeError, `${label} ${who}: TypeError, got ${e}`);
       assert(
         String(e.message).includes("stream<u8> only"),
-        `${label} ${who} names A21's scope: ${e}`,
+        `${label} ${who} names direct-access byte edge's scope: ${e}`,
       );
     }
   }
 });
 
-Deno.test("A21: the one-in-flight-per-end rule covers the direct forms", async () => {
+Deno.test("direct-access byte edge: the one-in-flight-per-end rule covers the direct forms", async () => {
   const hs = hostStream<number>(U8);
 
   // A parked chunk write blocks writeDirect, and vice versa.
@@ -553,7 +553,7 @@ Deno.test("A21: the one-in-flight-per-end rule covers the direct forms", async (
 // 5. Zero-length probes (Concurrency.md "Stream Readiness")
 // ===========================================================================
 
-Deno.test("A21: a zero-length probe completes without invoking the callback", async () => {
+Deno.test("direct-access byte edge: a zero-length probe completes without invoking the callback", async () => {
   const { view } = mkMemory();
   const cx = mkCx(view);
 
@@ -597,7 +597,7 @@ Deno.test("A21: a zero-length probe completes without invoking the callback", as
 // 6. Teardown: drop and cancel
 // ===========================================================================
 
-Deno.test("A21: a peer drop mid-session resolves with the running total", async () => {
+Deno.test("direct-access byte edge: a peer drop mid-session resolves with the running total", async () => {
   const { view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -614,7 +614,7 @@ Deno.test("A21: a peer drop mid-session resolves with the running total", async 
   assertEq(await session, 4, "resolves with everything acknowledged so far");
 });
 
-Deno.test("A21: cancelWrite/cancelRead retract a parked session", async () => {
+Deno.test("direct-access byte edge: cancelWrite/cancelRead retract a parked session", async () => {
   const { view } = mkMemory();
   const cx = mkCx(view);
 
@@ -638,7 +638,7 @@ Deno.test("A21: cancelWrite/cancelRead retract a parked session", async () => {
 // 7. External byte movers: a SharedArrayBuffer-backed source
 // ===========================================================================
 
-Deno.test("A21: a SAB-backed producer copies straight into the guest view", async () => {
+Deno.test("direct-access byte edge: a SAB-backed producer copies straight into the guest view", async () => {
   const { memory, view } = mkMemory();
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -663,7 +663,7 @@ Deno.test("A21: a SAB-backed producer copies straight into the guest view", asyn
 // 8. memory.grow between two rendezvous of one parked session
 // ===========================================================================
 
-Deno.test("A21: views are re-derived, so memory.grow between rendezvous is safe", async () => {
+Deno.test("direct-access byte edge: views are re-derived, so memory.grow between rendezvous is safe", async () => {
   const { memory, view } = mkMemory(1);
   const cx = mkCx(view);
   const hs = hostStream<number>(U8);
@@ -705,7 +705,7 @@ Deno.test("A21: views are re-derived, so memory.grow between rendezvous is safe"
 // 9. Host <-> host (contract: "at the same floor")
 // ===========================================================================
 
-Deno.test("A21 host<->host: writeDirect against a chunk read(max)", async () => {
+Deno.test("direct-access byte edge host<->host: writeDirect against a chunk read(max)", async () => {
   // Both arrival orders; the marked prefix of the scratch becomes the
   // delivered chunk, handed through `taken()` unsliced.
   for (const order of ["read-first", "direct-first"] as const) {
@@ -733,7 +733,7 @@ Deno.test("A21 host<->host: writeDirect against a chunk read(max)", async () => 
   }
 });
 
-Deno.test("A21 host<->host: readDirect against a chunk write borrows the offered chunk", async () => {
+Deno.test("direct-access byte edge host<->host: readDirect against a chunk write borrows the offered chunk", async () => {
   for (const order of ["write-first", "direct-first"] as const) {
     const hs = hostStream<number>(U8);
     const offered = Uint8Array.from([4, 5, 6, 7]);
@@ -741,7 +741,7 @@ Deno.test("A21 host<->host: readDirect against a chunk write borrows the offered
     const got: number[] = [];
     const consume = (s: DirectSource) => {
       const win = s.remaining();
-      // ZERO extra copy: the window IS the offered chunk (the A5 borrow,
+      // ZERO extra copy: the window IS the offered chunk (the stream/future round-trip borrow,
       // scoped to the callback).
       aliased = win.buffer === offered.buffer;
       got.push(...win);
@@ -763,7 +763,7 @@ Deno.test("A21 host<->host: readDirect against a chunk write borrows the offered
   }
 });
 
-Deno.test("A21 host<->host: two direct sessions cannot rendezvous", async () => {
+Deno.test("direct-access byte edge host<->host: two direct sessions cannot rendezvous", async () => {
   const hs = hostStream<number>(U8);
   let produced = 0;
   const w = hs.writable.writeDirect((d) => {
@@ -793,7 +793,7 @@ Deno.test("A21 host<->host: two direct sessions cannot rendezvous", async () => 
 // 10. Parity: the seam collapses to the reference copy when nobody is direct
 // ===========================================================================
 
-Deno.test("A21 parity: guest<->guest and chunk paths are unchanged", async () => {
+Deno.test("direct-access byte edge parity: guest<->guest and chunk paths are unchanged", async () => {
   const { memory, view } = mkMemory();
   const cxA = mkCx(view);
   const shared = new SharedStreamImpl(U8);

@@ -171,7 +171,7 @@ export class GuestBuffer {
     this.progress += vs.length;
   }
 
-  // --- A21 direct-access byte edges (embedder-api amendment A21, #128) ---
+  // --- direct-access byte edges (embedder-api.md §"Streams and futures" (polyengine#128)) ---
   //
   // `ByteWindow`, implemented for the `stream<u8>` case only. The two methods
   // together are the copy `read`/`write` would have done, split so that the
@@ -211,10 +211,10 @@ export class GuestBuffer {
 }
 
 // ---------------------------------------------------------------------------
-// The direct-access seam (embedder-api amendment A21, 2026-08-22, #128)
+// The direct-access seam (embedder-api.md §"Streams and futures" ("Direct-access byte edges") (polyengine#128))
 // ---------------------------------------------------------------------------
 //
-// A21 lets ONE side of a rendezvous be a *direct session*: instead of handing
+// direct-access byte edge lets ONE side of a rendezvous be a *direct session*: instead of handing
 // the rendezvous a buffer to copy out of / into, the host parks a callback
 // that runs synchronously inside the rendezvous and performs the canonical
 // copy itself, against a scoped view of the peer's memory.
@@ -240,7 +240,7 @@ export interface RendezvousBuffer {
 }
 
 /**
- * A21: the peer half of a direct rendezvous — a buffer that can expose its
+ * direct-access byte edge: the peer half of a direct rendezvous — a buffer that can expose its
  * remaining range as bytes and be advanced without a copy.
  *
  * Implemented by `GuestBuffer` (a view into guest linear memory: the
@@ -263,7 +263,7 @@ export interface ByteWindow {
 }
 
 /**
- * A21: the parked direct session, as the rendezvous sees it. It presents the
+ * direct-access byte edge: the parked direct session, as the rendezvous sees it. It presents the
  * ordinary buffer surface (so `remain()`/`isZeroLength()` keep the reference
  * control flow working) but its `read`/`write` are never called — the seam
  * routes it through `runDirect` instead.
@@ -311,7 +311,7 @@ function isDirectBuffer(b: RendezvousBuffer): b is DirectBuffer {
  * Collapses to definitions.py's `dst_buffer.write(src_buffer.read(n))`
  * whenever neither side is a direct session — which is every guest↔guest,
  * guest↔host-chunk and host-chunk↔host-chunk rendezvous, i.e. everything
- * that existed before A21.
+ * that existed before direct-access byte edge.
  */
 function rendezvousCopy(
   src: RendezvousBuffer,
@@ -330,13 +330,13 @@ function rendezvousCopy(
     : (dst as DirectBuffer).runDirect(src as unknown as ByteWindow, n);
 }
 
-/** The A21 rejection for a rendezvous of two direct sessions. */
+/** The rejection for a rendezvous of two direct-access sessions. */
 function bothDirectError(): TypeError {
   return new TypeError(
     "at least one side of a host-to-host rendezvous must use the chunk " +
       "forms: two direct-access sessions cannot rendezvous with each other " +
       "because neither side owns the memory the other would write into " +
-      "(embedder-api amendment A21, polyengine#128)",
+      `(embedder-api.md §"Streams and futures" ("Direct-access byte edges"), polyengine#128)`,
   );
 }
 
@@ -388,7 +388,7 @@ export class SharedStreamImpl implements SharedBase {
    * OUT of a guest table. The receiver — the host, or the destination of a
    * guest-to-guest hop, in which case the immediately following lower fires
    * `onLowered` — may now act on the transferred end. Host wrappers use it to
-   * re-arm their activity (#162, embedder-api amendment A15). Guest-owned
+   * re-arm their activity (#162, contracts/embedder-api.md §"Streams and futures"). Guest-owned
    * objects leave it unset.
    */
   onLifted: ((inst: { store: unknown }) => void) | null = null;
@@ -408,9 +408,9 @@ export class SharedStreamImpl implements SharedBase {
 
   /**
    * Observers fired once, when this stream becomes dropped — by EITHER
-   * side, including the A7 teardown walk (`dropSharedForTeardown`). The
+   * side, including the loud component fault teardown walk (`dropSharedForTeardown`). The
    * embedder's producer pump uses this to cancel a producer parked on an
-   * external event (amendment A13's cancellation companion: an
+   * external event (§"Streams and futures"'s cancellation companion: an
    * accept-shaped producer holds a live platform resource while parked,
    * and the reader dropping is its only stop signal). `null` = already
    * fired.
@@ -495,7 +495,7 @@ export class SharedStreamImpl implements SharedBase {
       if (this.pendingBuffer.remain() > 0) {
         if (dstBuffer.remain() > 0) {
           const n = Math.min(dstBuffer.remain(), this.pendingBuffer.remain());
-          // A21 seam (#128). `"chunk"` is the reference line verbatim.
+          // direct-access byte edge seam (#128). `"chunk"` is the reference line verbatim.
           const pendingIsDirect = isDirectBuffer(this.pendingBuffer);
           const out = rendezvousCopy(this.pendingBuffer, dstBuffer, n);
           if (out === "both-direct") {
@@ -545,7 +545,7 @@ export class SharedStreamImpl implements SharedBase {
       if (this.pendingBuffer.remain() > 0) {
         if (srcBuffer.remain() > 0) {
           const n = Math.min(srcBuffer.remain(), this.pendingBuffer.remain());
-          // A21 seam (#128). `"chunk"` is the reference line verbatim.
+          // direct-access byte edge seam (#128). `"chunk"` is the reference line verbatim.
           const pendingIsDirect = isDirectBuffer(this.pendingBuffer);
           const out = rendezvousCopy(srcBuffer, this.pendingBuffer, n);
           if (out === "both-direct") {
@@ -585,7 +585,7 @@ export class SharedStreamImpl implements SharedBase {
   }
 
   /**
-   * A21 (#128): route a rendezvous whose direct session did NOT copy.
+   * direct-access byte edge (#128): route a rendezvous whose direct session did NOT copy.
    *
    * Two outcomes land here, and both share one invariant: the peer's parked
    * operation survives, no event is delivered, and the stream is not dropped
@@ -664,7 +664,7 @@ export class SharedFutureImpl implements SharedBase {
    * OUT of a guest table. The receiver — the host, or the destination of a
    * guest-to-guest hop, in which case the immediately following lower fires
    * `onLowered` — may now act on the transferred end. Host wrappers use it to
-   * re-arm their activity (#162, embedder-api amendment A15). Guest-owned
+   * re-arm their activity (#162, contracts/embedder-api.md §"Streams and futures"). Guest-owned
    * objects leave it unset.
    */
   onLifted: ((inst: { store: unknown }) => void) | null = null;
@@ -706,9 +706,9 @@ export class SharedFutureImpl implements SharedBase {
 
   /**
    * Observers fired once, when this future becomes dropped — by EITHER side,
-   * including the A7 teardown walk (`dropSharedForTeardown`). Streams grew
-   * this for A13 producer cancellation; futures need it as the release hook
-   * for a host wrapper's activity arm (#162, amendment A15): a guest dropping
+   * including the loud component fault teardown walk (`dropSharedForTeardown`). Streams grew
+   * this for resource stream producer cancellation; futures need it as the release hook
+   * for a host wrapper's activity arm (#162, §"Streams and futures"): a guest dropping
    * its end with no host operation parked, and the `readResult()`
    * already-dropped fast path, both bypass every other close site. `null` =
    * already fired.
@@ -925,8 +925,8 @@ export class WritableFutureEnd extends CopyEnd {
 /**
  * Failures recorded against shared stream/future objects whose peer end died
  * inside a trap-poisoned instance's handle table. The embedder layer consults
- * this to reject host operations loudly (contracts/embedder-api.md amendment
- * A7) instead of letting them hang forever or fake a clean end-of-stream.
+ * this to reject host operations loudly (contracts/embedder-api.md
+ * §"Streams and futures") instead of letting them hang forever or fake a clean end-of-stream.
  */
 const poisonFailures = new WeakMap<object, Error>();
 
@@ -1050,8 +1050,8 @@ export function dropSharedForTeardown(
   }
   // The drop observers also fire on the teardown path: a stream producer
   // parked behind a trap-poisoned reader must be cancelled the same as behind
-  // a cleanly-dropped one (A13), and a host wrapper's activity arm must be
-  // released the same way (#162, amendment A15). Both classes carry the
+  // a cleanly-dropped one, and a host wrapper's activity arm must be
+  // released the same way (#162, §"Streams and futures"). Both classes carry the
   // observer machinery, so this is unconditional.
   shared.notifyDropped();
 }
@@ -1164,7 +1164,7 @@ setOnInstancePoisoned(retireInstanceAsyncEnds);
 export class ErrorContext {
   constructor(readonly debugMessage: string) {}
 }
-// A9 brand (contracts/embedder-api.md §"Module identity"): error-contexts are
+// module identity brand (contracts/embedder-api.md §"Module identity"): error-contexts are
 // STATEFUL — they live in a component instance's handle table — so the brand
 // exists to make a foreign one diagnosable at the lowering sites, never
 // usable. Both this internal class and the embedder-facing wrapper

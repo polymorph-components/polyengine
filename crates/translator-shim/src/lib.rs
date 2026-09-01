@@ -2,7 +2,7 @@
 //! linking resolution, FACT fused-adapter synthesis) behind a stable output
 //! format — the **plan v0** of `contracts/plan-format.md`.
 //!
-//! Promoted from the S0 spike (`crates/translator-spike`). The spike's debug
+//! Promoted from translator-spike (`crates/translator-spike`). The spike's debug
 //! `Summary` is replaced by the contract artifact set:
 //!
 //! - `plan.json` — the plan (schema: `src/plan.rs`)

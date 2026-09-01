@@ -1,5 +1,5 @@
 // Stream / future conventions (contracts/embedder-api.md §"Streams and
-// futures"; C2 checklist item 4).
+// futures").
 //
 // The low-level seam is `exec/host_streams.ts` — `HostStream`/`HostFuture`
 // over the shared rendezvous object. This file is the *handle* layer named by
@@ -48,7 +48,7 @@ import {
 import { describeCrossCopy } from "./copy.ts";
 import { DroppedError, PeerTrappedError } from "./errors.ts";
 
-// `Chunk<T>` moved to `@polyengine/protocol` (amendment A22, §"The host-ABI
+// `Chunk<T>` moved to `@polyengine/protocol` (§"The host-ABI surface and its version", §"The host-ABI
 // surface and its version"); re-exported here so this module's existing
 // export surface (and therefore embedder/mod.ts's, unchanged in this track)
 // keeps working.
@@ -65,7 +65,7 @@ export interface ElemCodec<T> {
   /** conventions value -> internal component value */
   fromHost(v: T): ComponentValue;
   /**
-   * Destroy a LOWERED element the reader will never take (amendment A13);
+   * Destroy a LOWERED element the reader will never take (§"Streams and futures");
    * present only for element types that hold resources (`own<R>`), where
    * abandonment without destruction is a leak.
    */
@@ -75,7 +75,7 @@ export interface ElemCodec<T> {
 }
 
 // `StreamProducerError`'s canonical definition moved to `@polyengine/protocol`
-// with amendment A9 (it is an embedder-contract value: recognition must
+// with §"Module identity and @polyengine/protocol" (it is an embedder-contract value: recognition must
 // survive multiple runtime copies, issue #83). Re-exported here so every
 // existing import path is unchanged.
 export { StreamProducerError } from "@polyengine/protocol";
@@ -112,7 +112,7 @@ function reportProducerFailure(
   where: string,
   cause: unknown,
 ): boolean {
-  // Brand, not class (A9): a producer failure raised by another runtime copy
+  // Brand, not class: a producer failure raised by another runtime copy
   // must not be re-wrapped into a second layer of the same error.
   const err = isStreamProducerError(cause)
     ? cause
@@ -137,8 +137,8 @@ function throwIfFailed(value: unknown, where = "stream"): void {
 }
 
 /**
- * @internal — raise the recorded poisoning failure, if any (#66, amendment
- * A7). Pre-op: an operation started after the peer's instance trapped must
+ * @internal — raise the recorded poisoning failure, if any (#66,
+ * contracts/embedder-api.md §"Streams and futures"). Pre-op: an operation started after the peer's instance trapped must
  * reject rather than park forever. Post-await (with the op's outcome in
  * hand): an operation the retirement walk settled DROPPED-shaped must reject
  * rather than fake a clean end — but an op that genuinely COMPLETED before
@@ -159,22 +159,22 @@ export function isU8Element(element: ValType | null): boolean {
   return element !== null && despecialize(element).kind === "u8";
 }
 
-// Re-exported so embedders reach the A21 callback shapes from this layer too
-// (contracts/embedder-api.md §"Streams and futures", amendment A21, #128).
-// Canonical definitions moved to `@polyengine/protocol` with amendment A22
+// Re-exported so embedders reach the direct-access byte edge callback shapes from this layer too
+// (contracts/embedder-api.md §"Streams and futures").
+// Canonical definitions moved to `@polyengine/protocol` with §"The host-ABI surface and its version"
 // (§"The host-ABI surface and its version"); `exec/host_streams.ts` keeps its
 // own structurally-identical copies for the low-level seam, so both layers
 // agree without either importing the other.
 export type { DirectDestination, DirectSource, DirectVerdict } from "@polyengine/protocol";
 
 /**
- * A21 (#128): the direct-access byte edges are `stream<u8>` only. A
+ * direct-access byte edge (#128): the direct-access byte edges are `stream<u8>` only. A
  * zero-width element type (`t === null`) is not u8 either.
  */
 function requireU8Direct<T>(codec: ElemCodec<T> | null, who: string): void {
   if (codec === null || !isU8Element(codec.element)) {
     throw new TypeError(
-      `${who} is available on stream<u8> only (embedder-api amendment A21, ` +
+      `${who} is available on stream<u8> only (embedder-api.md §"Streams and futures" ("Direct-access byte edges"), ` +
         `polyengine#128); use write()/read() for other element types`,
     );
   }
@@ -198,7 +198,7 @@ export class Stream<T> implements ProtocolStream<T> {
   private constructor(host: HostStream<T> | null, codec: ElemCodec<T> | null) {
     this.#host = host;
     this.#codec = codec;
-    // A20 (contracts/embedder-api.md §"Realm boundaries and
+    // realm boundary (contracts/embedder-api.md §"Realm boundaries and
     // structured-clone-safe forms"; issue #131): the realm-local pill —
     // stateful handles must fail loud (DataCloneError) at a raw
     // structuredClone/postMessage instead of husking silently.
@@ -282,14 +282,14 @@ export class Stream<T> implements ProtocolStream<T> {
           "or use the writer, which parks until then",
       );
     }
-    // Post-transfer refusal (#162, embedder-api amendment A15). Lifting
+    // Post-transfer refusal (#162, contracts/embedder-api.md §"Streams and futures"). Lifting
     // removes the handle from the source table and lowering installs it in
     // the destination's (definitions.py `lift_async_value` line 1530,
     // `lower_stream` line 1828): once this handle's shared object has been
     // passed to a guest, the guest owns the readable end and a host read here
     // would operate a phantom duplicate of it. Refuse loudly instead.
     // `StreamWriter` is deliberately unaffected — the host retains the
-    // writable end, and writing after the pass is the normal A5 pattern —
+    // writable end, and writing after the pass is the normal stream/future round-trip pattern —
     // and `drop()`/`cancelRead()` stay permissive.
     if (this.#consumed) {
       throw new TypeError(
@@ -311,7 +311,7 @@ export class Stream<T> implements ProtocolStream<T> {
       | Uint8Array;
     // An empty chunk normally means clean end-of-stream; when the peer's
     // instance trapped it means the retirement walk settled us — reject
-    // instead of faking EOS (amendment A7). A non-empty chunk was really
+    // instead of faking EOS (§"Streams and futures"). A non-empty chunk was really
     // copied before the trap and is delivered; the next read rejects.
     if (raw.length === 0) throwIfPeerTrapped(host.value, where);
     return this.#chunk(raw);
@@ -319,7 +319,7 @@ export class Stream<T> implements ProtocolStream<T> {
 
   /**
    * Consume the writer's bytes in place, without an intermediate chunk
-   * (`stream<u8>` only — contracts/embedder-api.md amendment A21,
+   * (`stream<u8>` only — contracts/embedder-api.md §"Streams and futures" ("Direct-access byte edges"),
    * polyengine#128).
    *
    * At every rendezvous with a writer of nonzero capacity, `consume` runs
@@ -336,7 +336,7 @@ export class Stream<T> implements ProtocolStream<T> {
    * writer's parked operation survives and the stream stays alive.
    *
    * Refusals mirror `read`: an unbound `Stream.create()` handle and a handle
-   * already passed to a guest (the A15 transfer guard) both throw, as does a
+   * already passed to a guest (the deadlock-verdict suppression transfer guard) both throw, as does a
    * non-`u8` element type.
    */
   async readDirect(
@@ -348,7 +348,7 @@ export class Stream<T> implements ProtocolStream<T> {
     requireU8Direct(this.#codec, "readDirect");
     const info: DirectSessionInfo = { endedByVerdict: false };
     const n = await host.readable.readDirect(consume, info);
-    // A7 precision, `read`'s rule adapted: a session the CONSUMER itself
+    // loud component fault precision, `read`'s rule adapted: a session the CONSUMER itself
     // ended with `"done"` genuinely completed and keeps its resolution. Any
     // other way out (the writer dropped, the session was cancelled, the
     // retirement walk settled us) is a settle-path this consumer did not
@@ -406,7 +406,7 @@ export class Stream<T> implements ProtocolStream<T> {
    * DROPPED event into the trapping instance's waitables, and a later
    * driving loop asserted on the corpse).
    *
-   * The arm is released on this path too (#162, amendment A15): the wrapper's
+   * The arm is released on this path too (#162, §"Streams and futures"): the wrapper's
    * `HostActivity` now closes through the shared object's drop observers,
    * which `dropSharedForTeardown` fires unconditionally — so a teardown with
    * nothing parked no longer leaves the arm outliving the stream. (This
@@ -461,7 +461,7 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
 
   constructor(stream: Stream<T>) {
     this.#stream = stream;
-    // A20 realm-local pill (see Stream's constructor above for rationale).
+    // realm boundary realm-local pill (see Stream's constructor above for rationale).
     defineRealmLocal(this);
   }
 
@@ -485,7 +485,7 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
     );
     // A short take normally means "re-offer later" / "reader done"; when the
     // reader's instance trapped it means the retirement walk settled us —
-    // reject, carrying the delivered count (amendment A7). A full take
+    // reject, carrying the delivered count (§"Streams and futures"). A full take
     // genuinely completed before the trap and stays a success.
     if (n < values.length) throwIfPeerTrapped(host.value, where, n);
     return n;
@@ -493,7 +493,7 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
 
   /**
    * Fill the reader's landing zone in place, without an intermediate chunk
-   * (`stream<u8>` only — contracts/embedder-api.md amendment A21,
+   * (`stream<u8>` only — contracts/embedder-api.md §"Streams and futures" ("Direct-access byte edges"),
    * polyengine#128).
    *
    * At every rendezvous with a reader of nonzero capacity, `produce` runs
@@ -523,7 +523,7 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
     requireU8Direct(this.#stream.codec, "writeDirect");
     const info: DirectSessionInfo = { endedByVerdict: false };
     const n = await host.writable.writeDirect(produce, info);
-    // A7 precision, `write`'s short-take rule adapted: a session the PRODUCER
+    // loud component fault precision, `write`'s short-take rule adapted: a session the PRODUCER
     // itself ended with `"done"` keeps its resolution; every other way out is
     // a settle-path the producer did not cause, so a trapped peer rejects
     // here carrying the delivered count.
@@ -598,7 +598,7 @@ export class Future<T> implements ProtocolFuture<T> {
     this.#host = host;
     this.#hostP = hostP;
     this.#codec = codec;
-    // A20 realm-local pill (see Stream's constructor above for rationale).
+    // realm boundary realm-local pill (see Stream's constructor above for rationale).
     defineRealmLocal(this);
   }
 
@@ -628,7 +628,6 @@ export class Future<T> implements ProtocolFuture<T> {
    * is itself PromiseLike, so `await` still works and still yields `T`), which
    * keeps `drop()`/`cancel()` reachable for a caller that does not await. The
    * alternative — resolving a Promise *to* the handle — is not expressible.
-   * Flagged in the C2 report.
    */
   static deferred<T>(
     pending: Promise<ComponentValue>,
@@ -674,7 +673,7 @@ export class Future<T> implements ProtocolFuture<T> {
   }
 
   #read(): Promise<T> {
-    // Post-transfer refusal (#162, amendment A15), the `Stream.read` mirror:
+    // Post-transfer refusal (#162, §"Streams and futures"), the `Stream.read` mirror:
     // once this handle was passed to a guest, the guest owns the readable end
     // and a host read would operate a phantom duplicate. A read MEMOIZED
     // before the transfer keeps resolving — it genuinely happened while the
@@ -694,7 +693,7 @@ export class Future<T> implements ProtocolFuture<T> {
       const { value, result } = await host.readResult();
       if (result !== CopyResult.COMPLETED) {
         // A drop caused by the writer's instance trapping is a fault, not a
-        // "no value" outcome — brand it (#66, amendment A7).
+        // "no value" outcome — brand it (#66, §"Streams and futures").
         throwIfPeerTrapped(host.value, this.#codec.where ?? "future read");
         throw new DroppedError(
           result === CopyResult.CANCELLED
@@ -776,7 +775,7 @@ export class ErrorContext implements ProtocolErrorContext {
   constructor(internal: InternalErrorContext) {
     this.internal = internal;
     this.message = internal.debugMessage;
-    // A20 realm-local pill (see Stream's constructor above for rationale).
+    // realm boundary realm-local pill (see Stream's constructor above for rationale).
     // Note: envelope-encodable brands take precedence over the pill at
     // toCloneable time (ErrorContext carries both ERROR_CONTEXT and the
     // pill; it encodes) — the pill here is only the backstop for raw
@@ -785,11 +784,11 @@ export class ErrorContext implements ProtocolErrorContext {
   }
 }
 
-// A9 brands (contracts/embedder-api.md §"Module identity"): the STATEFUL
+// module identity brands (contracts/embedder-api.md §"Module identity"): the STATEFUL
 // embedder-facing handle classes. Their machinery lives in the copy that
 // minted them, so the brand never makes a foreign handle usable — it makes
 // it DIAGNOSABLE, at the lowering sites below. `StreamWriter` gains its
-// brand with amendment A22 (§"The host-ABI surface and its version"):
+// brand with §"The host-ABI surface and its version" (§"The host-ABI surface and its version"):
 // writers carried none before because nothing needed to recognize one, and
 // `isStreamWriter` now does.
 defineBrand(Stream.prototype, STREAM);
@@ -819,13 +818,13 @@ export function lowerStreamSource<T>(
   src: StreamSource<T>,
   codec: ElemCodec<T>,
 ): ComponentValue {
-  // Order matters (amendment A9). Same-copy handle: the fast path, unchanged.
+  // Order matters (§"Module identity and @polyengine/protocol"). Same-copy handle: the fast path, unchanged.
   if (src instanceof Stream) {
     return src.takeValue(codec);
   }
   // Branded but not ours: a `Stream` minted by ANOTHER runtime copy. Without
   // this check it would fall through to producer adaptation below and be
-  // pumped by its async iterator — a silent downgrade that quietly voids A5's
+  // pumped by its async iterator — a silent downgrade that quietly voids stream/future round-trip's
   // identity guarantees. Refused, loudly, naming both copies (issue #83).
   if (hasBrand(src, STREAM)) {
     throw new TypeError(describeCrossCopy(
@@ -877,11 +876,11 @@ async function pump<T>(
   const where = codec.where ?? "stream producer";
   let failure: unknown;
   let produced = 0;
-  // A13 cancellation companion: the pump learns of the reader dropping
+  // resource stream cancellation companion: the pump learns of the reader dropping
   // through short writes, but a producer PARKED on an external event (an
   // accept-shaped source holding a live platform resource) offers no write
   // to shorten — this notification is its only stop signal. It also fires
-  // on the A7 teardown walk and on our own end-of-pump drop (harmless: the
+  // on the loud component fault teardown walk and on our own end-of-pump drop (harmless: the
   // loop has exited by then).
   const gone = new Promise<typeof READER_GONE>((resolve) =>
     host.writable.onDropped(() => resolve(READER_GONE))
@@ -895,7 +894,7 @@ async function pump<T>(
       try {
         n = await host.writable.writeAll(lowered);
       } catch (e) {
-        // A13: elements past the fault's progress point were lowered but
+        // resource stream: elements past the fault's progress point were lowered but
         // will never be taken — destroy them (an `own` element may hold a
         // live platform resource). `PeerTrappedError.progress` reports
         // delivered-before-the-fault; anything else delivered nothing.
@@ -909,7 +908,7 @@ async function pump<T>(
       produced += n;
       if (n < lowered.length) {
         // The reader went away: a clean end — but the un-taken tail of this
-        // chunk was already lowered and must be destroyed, not leaked (A13).
+        // chunk was already lowered and must be destroyed, not leaked.
         releaseUntaken(lowered as unknown as ComponentValue[], n, codec);
         break;
       }
@@ -935,7 +934,7 @@ async function pump<T>(
   host.writable.drop();
 }
 
-/** A13: destroy `lowered[taken..]` when a codec's elements hold resources. */
+/** resource stream: destroy `lowered[taken..]` when a codec's elements hold resources. */
 function releaseUntaken<T>(
   lowered: ComponentValue[] | Uint8Array,
   taken: number,
@@ -948,13 +947,13 @@ function releaseUntaken<T>(
 
 /**
  * Normalize every accepted producer shape to an async iterator of batches,
- * racing each pull against `gone` (A13 cancellation): when the stream dies
+ * racing each pull against `gone` (resource stream cancellation): when the stream dies
  * with the producer parked, a `ReadableStream` source is `cancel()`ed
  * through its reader, and an (async-)iterable source gets its optional
  * `cancel()` method invoked — the documented producer-cancellation hook —
  * then its pending pull is drained so a straggler element the producer
  * already minted still reaches the caller's release path. A source with no
- * cancel hook keeps the pre-A13 behavior: the pump stays parked until the
+ * cancel hook keeps the pre-resource stream behavior: the pump stays parked until the
  * producer's next element (or forever — the documented embedder-negligence
  * hang class).
  */
@@ -1028,10 +1027,10 @@ export function lowerFutureSource<T>(
   codec: ElemCodec<T>,
 ): ComponentValue {
   if (src instanceof Future) return src.takeValue();
-  // Branded but not ours (amendment A9). This one is the sharpest edge in the
+  // Branded but not ours (§"Module identity and @polyengine/protocol"). This one is the sharpest edge in the
   // family: `Future` is a `PromiseLike`, so a foreign future would otherwise
   // be adopted as a plain thenable and appear to work — exactly the silent
-  // path A9 bans, since the awaited value would ride the OTHER copy's
+  // path module identity bans, since the awaited value would ride the OTHER copy's
   // machinery with no handle transfer at all.
   if (hasBrand(src, FUTURE)) {
     throw new TypeError(describeCrossCopy(

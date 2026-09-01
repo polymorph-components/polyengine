@@ -1,5 +1,5 @@
 // Version-canonical import resolution (contracts/embedder-api.md
-// §"Version canonicalization"; C2 checklist item 1).
+// §"Version canonicalization").
 //
 // Authorities, read before writing this:
 //   * Explainer.md §"canonical interface names" (`canonversion`) — the spec's
@@ -188,9 +188,9 @@ export class ImportResolver {
       );
     }
     if (p.version === null) {
-      // Unversioned: matched exactly and never folded onto a track (C0 D-1's
-      // actual defect was version-agnostic keys merging distinct semver
-      // tracks). Recorded so resolution can *say so* instead of reporting a
+      // Unversioned: matched exactly and never folded onto a track (the banned
+      // defect is version-agnostic keys merging distinct semver tracks).
+      // Recorded so resolution can *say so* instead of reporting a
       // bare "not provided".
       if (p.base.includes("/") || p.base.includes(":")) {
         this.#unversioned.set(p.base, key);
@@ -255,9 +255,9 @@ export class ImportResolver {
           return { key: claim.key, value: this.#exact.get(claim.key) };
         }
       }
-      // CONTRACT: contracts/embedder-api.md bans "unversioned folding" (C0
-      // D-1) and the C2 dispatch summarises that as "unversioned keys ->
-      // error". Read conservatively: an unversioned key is still a legal
+      // CONTRACT: contracts/embedder-api.md §"Version canonicalization" bans
+      // "unversioned folding": "unversioned keys -> error". Read
+      // conservatively: an unversioned key is still a legal
       // *exact* match for an unversioned import (the ban is about folding
       // distinct semver tracks together, and unversioned WIT interfaces
       // exist), but it may never serve a *versioned* import. That attempt is
@@ -267,7 +267,7 @@ export class ImportResolver {
         throw new ImportResolutionError(
           `import '${id}' is versioned but the only registration for ` +
             `'${p.base}' is the unversioned key '${un}'. Version-agnostic ` +
-            `folding is banned (contracts/embedder-api.md, C0 finding D-1): ` +
+            `folding is banned (contracts/embedder-api.md §"Version canonicalization"): ` +
             `register '${p.base}@${p.version}' or the compatibility-track ` +
             `key '${trackKeyOf(p.base, p.semver) ?? p.base + "@" + p.version}'.`,
         );
@@ -284,7 +284,7 @@ export class ImportResolver {
         throw new ImportResolutionError(
           `import '${id}' is unversioned but the registrations for it are ` +
             `versioned (${near.join(", ")}). Version-agnostic folding is ` +
-            `banned (contracts/embedder-api.md, C0 finding D-1).`,
+            `banned (contracts/embedder-api.md §"Version canonicalization").`,
         );
       }
     }

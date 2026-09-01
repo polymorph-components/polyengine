@@ -6,7 +6,7 @@ package polyengine:future-import;
 /// `u32` payloads. The load-bearing property: these are SYNC WIT functions
 /// whose returned future settles LATER — possibly only after further guest
 /// action — so the host's import must return the future immediately, not
-/// park the call on it (contracts/embedder-api.md amendment A12).
+/// park the call on it (contracts/embedder-api.md §"Streams and futures").
 world future-import {
   /// The bare shape: a sync import returning a future the host resolves on
   /// its own schedule.

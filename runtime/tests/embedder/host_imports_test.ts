@@ -95,7 +95,7 @@ Deno.test({
     const c = await instantiateFixture(testdata("imported-resource"), {
       "host:api/res": {
         // The resource CLASS sits at the resource's position — no
-        // `hostResourceType` token, no rep bookkeeping (C0 findings 1-3).
+        // `hostResourceType` token, no rep bookkeeping.
         R: Cell,
         make: (v: number) => {
           const cell = new Cell(v);
@@ -329,7 +329,7 @@ Deno.test({
   name: "host resources: a borrow-allocated rep is released when the call returns",
   ignore: !borrowReady,
   fn: async () => {
-    // contracts/embedder-api.md 2x4 table, bottom-right (C2 amendment): "a
+    // contracts/embedder-api.md 2x4 table, bottom-right: "a
     // never-registered instance gets a rep allocated **for the call's
     // duration**". The rep->instance map is STRONG and a guest dropping a
     // borrow handle runs no destructor, so without a call-scoped release this

@@ -7,7 +7,7 @@
 //   deno run --allow-read driver.ts [--wasm <path>] [component.wasm ...]
 //
 // With no component args, runs the four testdata components and asserts the
-// S0 go/no-go expectations (trivial: no adapters; linked/async-linked: FACT
+// go/no-go expectations (trivial: no adapters; linked/async-linked: FACT
 // adapters present) against the plan schema.
 
 type CoreDef =

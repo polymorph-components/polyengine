@@ -1,5 +1,5 @@
 // The per-declaration suspendability marker (contracts/embedder-api.md
-// §"Functions and async", amendment A1; docs/architecture.md §5).
+// §"Functions and async"; docs/architecture.md §5).
 //
 // Returning a Promise from a sync-typed host import blocks the calling wasm
 // FRAME — a capability with per-call cost (jspi pin (j): a Suspending
@@ -13,12 +13,12 @@
 // as `WebAssembly.Suspending`, everything else keeps the plain calling
 // convention and its zero-cost pin.
 //
-// Canonical since amendment A9: this module used to be
+// This module used to be
 // `runtime/src/jspi/suspending.ts` (which now re-exports it). The brand moved
 // from a module-local `Symbol(...)` to the process-global registry symbol
 // `polyengine.suspending/1` — the old "local symbol by repo convention (bundle
-// and source runtimes are never mixed in one process)" rule is REPEALED by
-// A9, because consumer graphs demonstrably do mix copies (issue #83) and a
+// and source runtimes are never mixed in one process)" rule is REPEALED,
+// because consumer graphs demonstrably do mix copies (issue #83) and a
 // module-local symbol made a copy-B `suspending()` mark invisible to copy A's
 // `anySuspendingImport` — a silent downgrade to the non-parking calling
 // convention, surfacing far away as `NeedsJspi`.
@@ -44,7 +44,7 @@ interface Suspendable {
  * typed imports never need this: a Promise from an async import rides the
  * task core with no JSPI involved.
  *
- * Two forms, one brand (amendment A2):
+ * Two forms, one brand:
  *
  *   * **direct call** — `poll: suspending((list) => …)` — the canonical
  *     form, and the only one available inside record literals;
@@ -60,7 +60,7 @@ interface Suspendable {
  * convention throws with a pointer here — under that convention the
  * decorator receives the PROTOTYPE, not the method, and marking it would
  * both brand the wrong object and corrupt the property descriptor.
- * Constructors are never markable (synchronous by the C2 amendment; the
+ * Constructors are never markable (synchronous per §"Resources"; the
  * language reserves no constructor-decorator position anyway).
  *
  * The value is marked in place (functions are objects); the return is the
@@ -102,7 +102,7 @@ export function suspending<F extends CallableFunction>(
       `suspending: expected a function, got ${typeof fn}`,
     );
   }
-  // Non-enumerable (A9 `defineBrand`): the mark must not show up in value
+  // Non-enumerable (`defineBrand`): the mark must not show up in value
   // walks of an imports record, and re-marking the same function is a no-op.
   defineBrand(fn as unknown as object, SUSPENDING);
   return fn;

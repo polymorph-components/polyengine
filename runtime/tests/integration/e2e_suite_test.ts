@@ -1,6 +1,6 @@
 // Official Component Model suite, end to end: translate -> plan -> instantiate
 // -> invoke, against binaries produced by `cargo run -p testgen` from
-// third_party/component-model/test/ (docs/architecture.md §11, milestone M1).
+// third_party/component-model/test/ (docs/architecture.md §11).
 //
 // Scope of this file is the *sync* shapes of `linking/` and `resources/` plus
 // the rejection verdicts of `binary/` and `validation/`. It is deliberately
@@ -316,9 +316,9 @@ Deno.test({
  * It is not: the shim maps all four. The component also declares an
  * *async-lifted* export (`mix-ret`, `canon lift ... async`) whose
  * `task.return` trampoline is wired into a core instantiation argument, so
- * the whole component legitimately fails to instantiate until the M2 task
+ * the whole component legitimately fails to instantiate until the task
  * core exists (contracts/intrinsics.md §B). This test pins both halves: the
- * plan carries every export, and the refusal is loud and milestone-aware.
+ * plan carries every export, and the refusal is loud and capability-aware.
  */
 Deno.test({
   name: "suite values/variants.1: async-lifted exports instantiate and run",
@@ -336,7 +336,7 @@ Deno.test({
 
     // variants.wast:83 mixes an async-lifted export with sync ones, reached
     // through FACT adapters. Instantiation used to be refused here — first on
-    // `task-return` (before the M2 task core), then on `async-start-call`
+    // `task-return` (before the task core), then on `async-start-call`
     // (before the FACT call intrinsics). Both have landed, so the component
     // now comes up and its exports are callable.
     const c = await instantiateComponent({
@@ -543,7 +543,8 @@ Deno.test({
 });
 
 // test/binary/binary.wast:1433 — a component exporting one of its own
-// embedded core modules (plan-format.md v4 amendment 2, polyengine#13). The
+// embedded core modules (the `module` export kind, contracts/plan-format.md
+// schema notes; polyengine#13). The
 // export surfaces as the already-compiled `WebAssembly.Module`, and it is
 // the *embedded* module: instantiating it works and its export list matches
 // the wast source (an empty module). Artifact index shifted 115->116 by the

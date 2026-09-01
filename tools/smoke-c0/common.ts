@@ -1,4 +1,4 @@
-// C0 consumer smoke test — shared helpers (docs/milestones.md row C0 / docs/consumers.md).
+// Consumer smoke test — shared helpers (docs/consumers.md).
 //
 // Run legs from this directory:
 //   deno run --allow-read leg1_tdz.ts
@@ -80,7 +80,7 @@ export interface TranslateAttempt {
  * One `translateRaw` + `loadEnvelope` pass.
  *
  * Rejections are captured, not thrown: contracts/plan-format.md gives the
- * shim three phases (validation | unsupported | internal) and C0's job is to
+ * shim three phases (validation | unsupported | internal) and this suite's job is to
  * triage them, so every phase is data here.
  */
 export function translateOnce(
@@ -133,7 +133,7 @@ export function importSurface(plan: WirePlan): Map<string, string[]> {
   const out = new Map<string, string[]>();
   for (const imp of plan.imports) {
     // `name` is the component's top-level import string; `path` walks into
-    // instance imports (contracts/plan-format.md v0.1 amendment #4).
+    // instance imports (`imports[].path`, contracts/plan-format.md schema).
     const iface = imp.name;
     const leaf = imp.path.length > 0 ? imp.path.join("/") : "<direct>";
     const list = out.get(iface) ?? [];

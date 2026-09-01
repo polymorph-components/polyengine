@@ -181,7 +181,7 @@ Deno.test("io() provider fragment exposes error/poll/streams under @0.2 keys", (
   assertTrue("wasi:io/streams@0.2" in imports);
 });
 
-// Guards the D-2-adjacent claim for streams specifically: no async parking
+// Guards the version-canonicalization claim for streams specifically: no async parking
 // anywhere in the tier-(b) synchronous fast path (ComponentException branded, never a
 // bare throw) — this doubles as the "no unbranded throw" smoke check the
 // error-model contract requires of every host import in this package.
@@ -203,11 +203,11 @@ Deno.test("io: a closed-stream failure never leaks an unbranded throw type", asy
   // — the facade, not this package, is the trap boundary.
 });
 
-// A20 (contracts/embedder-api.md §"Realm boundaries and structured-clone-safe
-// forms"; issue #131): Pollable is a stateful, realm-local handle — the
+// contracts/embedder-api.md §"Realm boundaries and structured-clone-safe
+// forms" (issue #131): Pollable is a stateful, realm-local handle — the
 // engine-enforced backstop pill fires at a raw structuredClone/postMessage,
 // throwing DataCloneError in the sender realm instead of delivering a husk.
-Deno.test("A20: a raw structuredClone of a Pollable throws DataCloneError", () => {
+Deno.test("a raw structuredClone of a Pollable throws DataCloneError", () => {
   const p = new Pollable();
   let threw: unknown;
   try {

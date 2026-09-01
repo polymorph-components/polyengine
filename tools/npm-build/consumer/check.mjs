@@ -36,8 +36,9 @@ assert.equal(
 );
 assert.equal(protocol.PROTOCOL_GENERATION, 1, "unexpected brand generation");
 
-// `ComponentException` is host-ABI vocabulary (amendment A22): it lives on
-// `@polyengine/protocol`, not the runtime's embedder module, since A22.
+// `ComponentException` is host-ABI vocabulary (contracts/embedder-api.md
+// §"The host-ABI surface and its version"): it lives on
+// `@polyengine/protocol`, not the runtime's embedder module.
 const thrown = new protocol.ComponentException({ kind: "smoke" });
 assert.ok(
   protocol.isComponentException(thrown),

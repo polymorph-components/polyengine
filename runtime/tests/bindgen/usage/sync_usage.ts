@@ -1,6 +1,6 @@
 // Hand-written usage sample for `@polyengine/runtime/embedder`'s `Sync<F>`
 // type and `sync()` adapter (contracts/embedder-api.md §"Functions and
-// async", amendment A25) — pins how the sync VIEW type maps generated
+// async", §"Functions and async") — pins how the sync VIEW type maps generated
 // facade shapes: plain export functions, an exports-record interface,
 // and a resource class. Runtime behavior of `sync()` is already covered
 // by runtime/tests/embedder/sync_adapter_test.ts; this file is
@@ -22,7 +22,7 @@ export function useSync(instance: EmbedderInstance) {
   const exports: ValuesExports = bind(instance);
 
   // sync(fn) on a plain Promise-returning export: strips the Promise,
-  // keeps the parameter list (A25 `sync(fn)` bullet).
+  // keeps the parameter list (sync() `sync(fn)` bullet).
   const syncEchoBool = sync(exports.echoBool);
   type _SyncEchoBoolIsPlain = Expect<
     Equal<typeof syncEchoBool, (v: boolean) => boolean>
@@ -79,7 +79,7 @@ export function useSyncFutureUser(instance: EmbedderInstance) {
   const exports: FutureUserExports = bindFutureUser(instance);
 
   // A Future<T>-returning export is already an eager handle (not
-  // Promise<Future<T>>, per future_user_usage.ts) — CORRECT per A25 that
+  // Promise<Future<T>>, per future_user_usage.ts) — CORRECT per sync() that
   // Sync<F> passes it through unchanged: the sync form of a handle-valued
   // result IS the eager handle, there is nothing further to strip.
   type _SyncedMakeFutureUnchanged = Expect<

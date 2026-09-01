@@ -200,12 +200,12 @@ export const XFAIL: XfailEntry[] = [
   // --- values/post-return.json: post-return.wast:4 ($Tester) declares
   // every async built-in (task.return, thread.yield/INDEX, waitable-set.*,
   // subtask.*, stream.*, future.*) to assert they trap from a post-return
-  // function. The M2 task core shipped; the SURVIVING refusal is
+  // function. The task core shipped; the SURVIVING refusal is
   // 'thread-index' — the 🧵 shared-everything-threads class, deferred by
   // https://github.com/polymorph-components/polyengine/issues/12 — so the component still declines at instantiation and all 28
   // assert_traps cascade off 'no current instance'. (Reason strings
-  // rewritten post-M2-exit-review: they previously named the shipped task
-  // core, which would misdirect triage.)
+  // rewritten after the task core shipped: they previously named it as
+  // missing, which would misdirect triage.)
   {
     file: "values/post-return.json",
     line: 202,
@@ -351,8 +351,9 @@ export const XFAIL: XfailEntry[] = [
     reason: "same 🧵 thread-index (deferred threads, https://github.com/polymorph-components/polyengine/issues/12) dependency as line 202",
   },
   // post-return.wast:260 uses `context.get`/`context.set`, which wasmtime
-  // lowers to `CoreDef::UnsafeIntrinsic` — a shape plan v0 has no wire form
-  // for (plan-format.md v0.1 amendments; the known M2 blocker).
+  // lowers to `CoreDef::UnsafeIntrinsic` — the CoreDef `unsafe-intrinsic`
+  // encoding (contracts/plan-format.md schema) has no wire form for this yet
+  // — a known task-scheduler blocker.
   // post-return.wast:334 calls `backpressure.inc`/`backpressure.dec` from a
   // post-return function. NOTE the observed symptom is a *wrong value*
   // ("expected u32 11, got 5"), not an error: the module command fails as a
@@ -361,12 +362,12 @@ export const XFAIL: XfailEntry[] = [
   // artifact of that, not a canonical-ABI bug.
   // --- values/variants.json: GREEN. variants.wast:83's component mixes an
   // async-lifted export (`mix-ret`) with sync ones, reached through FACT
-  // adapters; M2 phase 2b (prepare-call / {sync,async}-start-call) made it
+  // adapters; prepare-call / {sync,async}-start-call made it
   // instantiate and run — pinned by runtime/tests/integration/
   // e2e_suite_test.ts ("async-lifted exports instantiate and run"). ---
 
   // =====================================================================
-  // async/ — triage as of M2 phase 2c (streams/futures/error-context).
+  // async/ — triage as of streams/futures/error-context support.
   //
   // Streams, futures and error-context are IMPLEMENTED; the entries below no
   // longer describe a missing value type. The dominant remaining class is
@@ -375,7 +376,7 @@ export const XFAIL: XfailEntry[] = [
   // wasm frame, which a stackless runtime cannot do. See
   // runtime/src/intrinsics/stream_builtins.ts `finishCopy`.
   //
-  // Historic note (M2 phase 1 triage) follows.
+  // Historic note (early triage) follows.
   //
   // What now works and is NOT listed here: `trap-on-reenter`,
   // `validate-no-async-abi-for-sync-type` and `validate-no-stream-char` are
@@ -386,7 +387,7 @@ export const XFAIL: XfailEntry[] = [
   //     `sync-start-call`) — 49 commands. This phase implements the async ABI
   //     at the *host* boundary; the suite almost always drives async through a
   //     second component, which goes via FACT's adapter intrinsics instead.
-  //   * streams / futures — 41 commands (M2 phase 2, out of this track).
+  //   * streams / futures — 41 commands (out of this track).
   //   * 166 further commands are *cascades*: once a component instance is
   //     declined at instantiation, every later command against it fails with
   //     "no current instance". They carry the root cause's reason.
@@ -394,10 +395,10 @@ export const XFAIL: XfailEntry[] = [
   //     fidelity, instance poisoning, instantiation-time task context, and one
   //     shim decoder gap).
   // =====================================================================
-  // --- async/async-calls-sync.json: GREEN under jspi auto-detection (M2
-  // flip); entries pruned. ---
+  // --- async/async-calls-sync.json: GREEN under jspi auto-detection
+  // (the jspi flip); entries pruned. ---
   // --- async/big-interleaving-test.json: GREEN under jspi auto-detection
-  // (M2 flip); entry pruned. ---
+  // (the jspi flip); entry pruned. ---
   // --- async/builtin-trap-poisons-instance.json: root cause: STREAMS ---
   // --- async/cancel-and-exclusive-lock.json: CM#707 "always deliver
   // cancellation as soon as possible" (third_party/component-model commit
@@ -424,9 +425,9 @@ export const XFAIL: XfailEntry[] = [
       "finds no ready thread; cm707-cancel, https://github.com/polymorph-components/polyengine/issues/250",
   },
   // --- async/cancel-stream.json: root cause: STREAMS ---
-  // --- async/cancel-subtask.json: GREEN under jspi auto-detection (M2
-  // flip); entry pruned. ---
-  // --- async/cancellable.json: GREEN under jspi auto-detection (M2 flip:
+  // --- async/cancel-subtask.json: GREEN under jspi auto-detection
+  // (the jspi flip); entry pruned. ---
+  // --- async/cancellable.json: GREEN under jspi auto-detection (the jspi flip:
   // request_cancellation now finds cancellable SuspensionPoints, and the
   // async subtask.cancel waits for callee determinacy); entry pruned. Still
   // GREEN after the CM#705 pin advance (polyengine#173): the dispatch
@@ -436,11 +437,11 @@ export const XFAIL: XfailEntry[] = [
   // --- async/closed-stream.json: root cause: STREAMS ---
   // --- async/cross-abi-calls.json: root cause: FACT-ASYNC ---
   // --- async/cross-task-future.json: root cause: STREAMS ---
-  // --- async/deadlock.json: GREEN under jspi auto-detection (M2 flip: the
+  // --- async/deadlock.json: GREEN under jspi auto-detection (the jspi flip: the
   // driver's deadlock verdict now fires with wasmtime's trap text); entry
   // pruned. ---
-  // --- async/dont-block-start.json: GREEN under jspi auto-detection (M2
-  // flip: a start-function SuspendError maps to "cannot block a synchronous
+  // --- async/dont-block-start.json: GREEN under jspi auto-detection (the
+  // jspi flip: a start-function SuspendError maps to "cannot block a synchronous
   // task before returning"); entry pruned. ---
   // --- async/drop-cross-task-borrow.json: root cause: FACT-ASYNC ---
   // lines 305/307 GREEN after the #18 tls-smoke fixes (FACT [async-start]
@@ -450,7 +451,7 @@ export const XFAIL: XfailEntry[] = [
   // --- async/drop-stream.json: root cause: STREAMS ---
   // line 158 GREEN after the #13 wording fix (busy readable-end drop words
   // as a removal, matching wasmtime); entry pruned.
-  // --- async/drop-subtask.json: GREEN under jspi auto-detection (M2 flip);
+  // --- async/drop-subtask.json: GREEN under jspi auto-detection (the jspi flip);
   // entry pruned. ---
   // --- async/drop-waitable-set.json: root cause: FACT-ASYNC ---
   // --- async/during-sync-call-*.json + during-sync-scheduling-candidates.json:
@@ -815,11 +816,11 @@ export const XFAIL: XfailEntry[] = [
     line: 215,
     reason: "same line-162 cascade as line 214",
   },
-  // --- async/empty-wait.json: GREEN under jspi auto-detection (M2 flip);
+  // --- async/empty-wait.json: GREEN under jspi auto-detection (the jspi flip);
   // entry pruned. ---
   // --- async/futures-must-write.json: root cause: STREAMS ---
   // --- async/partial-stream-copies.json: GREEN under jspi auto-detection
-  // (M2 flip); entry pruned. ---
+  // (the jspi flip); entry pruned. ---
   // --- async/passing-resources.json: lines 175/176 GREEN after the #18
   // tls-smoke fixes (cycle-safe structural ValType equality + token
   // unification); entries pruned. ---
@@ -1040,8 +1041,8 @@ export const XFAIL: XfailEntry[] = [
       "trap by firing first on the reentrant call; fact-reentrance-47, " +
       "https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmtime-environ bump)",
   },
-  // --- async/sync-barges-in.json: GREEN under jspi auto-detection (M2
-  // flip); entry pruned. ---
+  // --- async/sync-barges-in.json: GREEN under jspi auto-detection
+  // (the jspi flip); entry pruned. ---
   // --- async/sync-streams.json: mostly GREEN (see the #43 note below for
   // the entry-gate/drain-policy history), but CM#705 (polyengine#173) FLIPPED
   // three expected values in test/async/sync-streams.wast (STARTING vs
@@ -1061,7 +1062,7 @@ export const XFAIL: XfailEntry[] = [
   // overfitting wasmtime's deferred-entry policy (pristine definitions.py
   // answers STARTING) — and polyengine's drain policy satisfies it as
   // written under any seed. The former release-at-BLOCK divergence is gone.
-  // (Before the M2 jspi flip this file was xfailed outright.) ---
+  // (Before the jspi flip this file was xfailed outright.) ---
   {
     file: "async/sync-streams.json",
     line: 208,
@@ -1528,7 +1529,7 @@ export const XFAIL: XfailEntry[] = [
   },
   // --- async/trap-if-transfer-in-waitable-set.json: root cause: STREAMS ---
   // --- async/wait-during-callback.json: root cause: STREAMS ---
-  // --- async/zero-length.json: GREEN under jspi auto-detection (M2 flip);
+  // --- async/zero-length.json: GREEN under jspi auto-detection (the jspi flip);
   // entry pruned. ---
 ];
 

@@ -1,5 +1,5 @@
 // The process-global brand vocabulary (contracts/embedder-api.md
-// §"Module identity and @polyengine/protocol", amendment A9; issue #83).
+// §"Module identity and @polyengine/protocol"; issue #83).
 //
 // Every brand is a `Symbol.for` REGISTRY symbol, so N copies of this package
 // (or of the runtime) agree on every brand by construction — no module
@@ -11,11 +11,12 @@
 // Keys are generation-suffixed (`/1`). Bumping a generation is a BREAKING
 // vocabulary change — an ecosystem migration event, the moral equivalent of a
 // semver major — which is why protocol/tests/brands_test.ts pins every key
-// string literally. The A18 rename (`deltic.*/1` -> `polyengine.*/1`) did NOT
+// string literally. The `deltic.*/1` -> `polyengine.*/1` rename
+// (docs/consumers.md §"Pins and the scope rename") did NOT
 // bump the generation: a spelling change already yields a disjoint symbol
 // set, so there is no key under which an old and a new copy could meet and
-// disagree about shape. A19 (the `witError` -> `componentException` leaf
-// rename, 2026-08-22) held to the same rule.
+// disagree about shape. The `witError` -> `componentException` leaf
+// rename (2026-08-22) held to the same rule.
 //
 // Brands are contract markers, NOT a security boundary: a hand-rolled object
 // carrying the right symbol is a legal value (this is what makes zero-import
@@ -24,13 +25,14 @@
 /**
  * `ComponentException` — a WIT `result<T, E>` err value.
  *
- * The key's LEAF read `witError` (the pre-A10 class name) through 0.3.x;
- * amendment A19 renamed it to match the class, retiring the A10/A18
- * opaque-constant freeze for brand keys — they are read and hand-rolled,
- * so their spelling is surface, not wire trivia. Like A18, A19 is a hard
- * break with no compatibility spelling: pre-A19 copies and hand-rolled
- * `polyengine.witError/1` brands do NOT interoperate with these, by
- * design and without a diagnostic (see A18/A19).
+ * The key's LEAF read `witError` (the class name before the `componentException`
+ * rename) through 0.3.x; it was later renamed to match the class, retiring
+ * the earlier opaque-constant freeze for brand keys — they are read and
+ * hand-rolled, so their spelling is surface, not wire trivia. Like the
+ * `deltic.` to `polyengine.` key rename, this was a hard break with no
+ * compatibility spelling: copies and hand-rolled `polyengine.witError/1`
+ * brands do NOT interoperate with these, by design and without a
+ * diagnostic (see docs/consumers.md §"Pins and the scope rename").
  */
 export const COMPONENT_EXCEPTION: unique symbol = Symbol.for(
   "polyengine.componentException/1",
@@ -39,7 +41,7 @@ export const COMPONENT_EXCEPTION: unique symbol = Symbol.for(
 export const TRAP: unique symbol = Symbol.for("polyengine.trap/1");
 /** `DroppedError` — a dropped-future rejection. */
 export const DROPPED: unique symbol = Symbol.for("polyengine.dropped/1");
-/** `PeerTrappedError` — a peer-fault rejection (amendment A7). */
+/** `PeerTrappedError` — a peer-fault rejection (§"Streams and futures"). */
 export const PEER_TRAPPED: unique symbol = Symbol.for(
   "polyengine.peerTrapped/1",
 );
@@ -51,12 +53,12 @@ export const INVALID_HANDLE: unique symbol = Symbol.for(
 export const STREAM_PRODUCER: unique symbol = Symbol.for(
   "polyengine.streamProducer/1",
 );
-/** The per-declaration suspendability mark (amendments A1/A2). */
+/** The per-declaration suspendability mark. */
 export const SUSPENDING: unique symbol = Symbol.for(
   "polyengine.suspending/1",
 );
 /**
- * The per-declaration cancel-discard opt-out (amendment A23).
+ * The per-declaration cancel-discard opt-out.
  *
  * Unmarked host imports answer a guest `subtask.cancel` with the reference's
  * prompt-cancel shape — `on_cancel = () => on_resolve(None)` — and DISCARD the
@@ -69,13 +71,13 @@ export const DEFER_CANCEL: unique symbol = Symbol.for(
   "polyengine.deferCancel/1",
 );
 /**
- * The per-declaration abort-on-discard mark (amendment A24).
+ * The per-declaration abort-on-discard mark.
  *
  * A marked host import receives a fresh `AbortSignal` appended after its
  * WIT-declared parameters on EVERY call (the mark controls the signature
  * unconditionally), and the runtime aborts that signal — one microtask after
  * the guest's cancel built-in returns — when a guest cancellation discards the
- * call under A23. Like `polyengine.deferCancel/1` and unlike
+ * call under a `deferCancel()` mark. Like `polyengine.deferCancel/1` and unlike
  * `polyengine.suspending/1` this brand is NOT mode evidence: it changes no
  * calling convention the runtime must plan for, only what the host is told
  * when its result is thrown away.
@@ -89,20 +91,20 @@ export const STREAM: unique symbol = Symbol.for("polyengine.stream/1");
 export const FUTURE: unique symbol = Symbol.for("polyengine.future/1");
 /**
  * `StreamWriter.prototype` — embedder stream writer handles (stateful:
- * foreign = refused). Additive amendment A22: writers carried no brand
- * before because nothing needed to recognize one, and `isStreamWriter` now
- * does.
+ * foreign = refused). Writers carried no brand before because nothing
+ * needed to recognize one, and `isStreamWriter` now does.
  */
 export const STREAM_WRITER: unique symbol = Symbol.for(
   "polyengine.streamWriter/1",
 );
-/** Lifted error-contexts (message-valued at lowering since A20). */
+/** Lifted error-contexts (message-valued at lowering; §"Realm boundaries and
+ * structured-clone-safe forms"). */
 export const ERROR_CONTEXT: unique symbol = Symbol.for(
   "polyengine.errorContext/1",
 );
 /**
  * Guest-resource wrappers: the KEY for the wrapper's internal state. Only the
- * key is contract; the state SHAPE stays runtime-internal (A9 table note), so
+ * key is contract; the state SHAPE stays runtime-internal, so
  * a foreign copy can *recognize* a wrapper but never read its state.
  */
 export const RESOURCE_STATE: unique symbol = Symbol.for(
@@ -134,7 +136,7 @@ export const PROTOCOL_GENERATION = 1;
 
 /**
  * The realm-local pill key (contracts/embedder-api.md §"Realm boundaries and
- * structured-clone-safe forms", amendment A20; issue #131).
+ * structured-clone-safe forms"; issue #131).
  *
  * A STRING key, deliberately — the one brand-like marker in the vocabulary
  * that is not a `Symbol.for` symbol, because its job is to be seen by the
@@ -164,7 +166,7 @@ function polyengineRealmLocalValue(): void {
 }
 
 /**
- * Mark an object realm-local (amendment A20): own, enumerable (the
+ * Mark an object realm-local: own, enumerable (the
  * serializer skips non-enumerables), string-keyed (it skips symbol keys),
  * function-valued (it refuses functions). Installed per INSTANCE at
  * construction — the serializer never visits prototypes, so this cannot
@@ -181,7 +183,7 @@ export function defineRealmLocal(target: object): void {
 }
 
 /**
- * Realm-local check (amendment A20). Structural, like `hasBrand`: any own
+ * Realm-local check. Structural, like `hasBrand`: any own
  * `polyengine.realmLocal/1` property marks the value, whoever minted it —
  * the marker is shared vocabulary across runtime copies exactly as the
  * symbol brands are.
@@ -196,8 +198,8 @@ export function isRealmLocal(value: unknown): boolean {
  * suspending mark rides functions) carrying `brand` set to exactly `true`.
  *
  * Deliberately structural: it accepts hand-rolled brands and values minted by
- * any copy. It never consults `instanceof` — that is the failure mode A9
- * exists to remove.
+ * any copy. It never consults `instanceof` — that is the failure mode brand
+ * detection exists to remove.
  */
 export function hasBrand(value: unknown, brand: symbol): boolean {
   if (value === null) return false;

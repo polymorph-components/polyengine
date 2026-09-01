@@ -1,12 +1,12 @@
 // Per-declaration suspendable host imports — contracts/embedder-api.md
-// §"Functions and async", amendment A1 (the `suspending()` marker), through
+// §"Functions and async" (the `suspending()` marker), through
 // the conventions facade.
 //
-// Before A1 the boundary REJECTED a Promise from a sync-typed lower in every
-// mode (`NeedsJspi`, boundary.ts) — the M2 jspi flip lit the CM-async
+// Before the suspending() mark, the boundary REJECTED a Promise from a sync-typed lower in every
+// mode (`NeedsJspi`, boundary.ts) — auto-detection lit the CM-async
 // builtins' suspension sites but never the host-lower site, because no
 // consumer and no suite command drives one (callback-ABI consumers use
-// async-typed imports). A1 makes the park real: a `suspending()`-marked
+// async-typed imports). The suspending() mark makes the park real: a `suspending()`-marked
 // import may return a Promise, the calling wasm FRAME suspends on the
 // engine's JSPI, and the settled value is lowered at resume time under the
 // suspension point's ambient claim (the issue-#24 attribution discipline).
@@ -65,7 +65,7 @@ Deno.test({
   ignore: !ready,
   fn: async () => {
     // greet: string -> string. Lowering the settled result re-enters the
-    // guest through realloc — the CABI work A1 defers to `produce` so it
+    // guest through realloc — the CABI work suspending mark defers to `produce` so it
     // runs under the suspension point's claim, not in a bare promise
     // continuation (issue #24's mis-attribution class).
     const c = await instantiateFixture(testdata("imports"), {
@@ -103,7 +103,7 @@ Deno.test({
   fn: async () => {
     // Fail-on-pre-fix shape, upgraded message: without the marker there is
     // no Suspending wrap, so the frame physically cannot park — the refusal
-    // must tell the embedder about the A1 marker rather than dead-end on
+    // must tell the embedder about the suspending mark marker rather than dead-end on
     // "needs JSPI" alone.
     const c = await instantiateFixture(testdata("imports"), {
       log: () => {},
@@ -254,16 +254,16 @@ Deno.test("suspending(): marker mechanics (brand, identity, record scan)", () =>
 });
 
 // ---------------------------------------------------------------------------
-// A2: decorator form, resource methods/statics, receiver binding
+// suspending mark: decorator form, resource methods/statics, receiver binding
 // ---------------------------------------------------------------------------
 
 Deno.test({
-  name: "A2: @suspending on a provider-class method parks, with `this` bound to the provider",
+  name: "suspending mark: @suspending on a provider-class method parks, with `this` bound to the provider",
   ignore: !ready,
   fn: async () => {
     // Two pins in one: the stage-3 decorator marks the prototype method the
-    // plain arm reads off the instance, and the A2 receiver rule makes the
-    // extracted method see its instance state (pre-A2 the plain arm called
+    // plain arm reads off the instance, and the suspending mark receiver rule makes the
+    // extracted method see its instance state (pre-suspending mark the plain arm called
     // extracted functions unbound — a stateful class provider broke with
     // `this === undefined`).
     class MathProvider {
@@ -288,7 +288,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "A2: receiver binding alone — an unmarked stateful class provider works synchronously",
+  name: "suspending mark: receiver binding alone — an unmarked stateful class provider works synchronously",
   ignore: !ready,
   fn: async () => {
     // The receiver fix is independent of parking: no marks, no Promises,
@@ -315,14 +315,14 @@ const methodReady =
     null && isSupported();
 
 Deno.test({
-  name: "A2: @suspending on a host-resource METHOD parks the frame (the pollable.block shape)",
+  name: "suspending mark: @suspending on a host-resource METHOD parks the frame (the pollable.block shape)",
   ignore: !methodReady,
   fn: async () => {
     // The load-bearing scope extension: `[method]gauge.read` is the same
     // WIT shape as `[method]pollable.block`, the site the tier-(c) WASI
     // blocking profile hangs off. The brand authority is the class
     // prototype, read at wrap time; the guest-driven CONSTRUCTOR stays
-    // synchronous (C2) while the method parks.
+    // synchronous while the method parks.
     class Gauge {
       #v: number;
       constructor(v: number) {
@@ -346,7 +346,7 @@ Deno.test({
   },
 });
 
-Deno.test("A2: the decorator refuses non-method positions at class-definition time", () => {
+Deno.test("suspending mark: the decorator refuses non-method positions at class-definition time", () => {
   let raised: unknown;
   try {
     // deno-lint-ignore no-unused-vars
@@ -367,7 +367,7 @@ Deno.test("A2: the decorator refuses non-method positions at class-definition ti
   );
 });
 
-Deno.test("A2: the legacy experimentalDecorators convention is refused with guidance", () => {
+Deno.test("suspending mark: the legacy experimentalDecorators convention is refused with guidance", () => {
   // Simulate what `experimentalDecorators: true` would pass: (prototype,
   // key, descriptor). Marking the prototype would brand the wrong object
   // and corrupt the descriptor, so it must throw instead.

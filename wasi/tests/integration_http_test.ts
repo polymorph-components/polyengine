@@ -5,7 +5,8 @@
 // `Deno.serve` through the `@0.3` track keys. The composed path:
 //
 //   guest wit-bindgen calls -> plan dispatch -> conventions adapter
-//   (host resource constructors, A12 future results in tuples, guest-
+//   (host resource constructors, future results in tuples per
+//   embedder-api.md §"Streams and futures", guest-
 //   created trailers/res futures crossing INTO the host) -> fetch ->
 //   loopback HTTP -> streamed response body back into the guest
 //

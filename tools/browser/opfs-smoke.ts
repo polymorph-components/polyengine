@@ -19,8 +19,9 @@
 // JSPI pref), calls the in-page `__opfsSmoke(realm)`, and asserts every
 // check passed. Two halves (see opfs_entry.ts): the direct descriptor
 // battery (no wasm) and the composed fs-probe guest (std::fs through
-// wasi-libc, parking through the A14 marks — JSPI required, so this is
-// also the browser exercise of the suspending kernel over real async
+// wasi-libc, parking through the marks contracts/embedder-api.md §"The WASI
+// parking kernel" describes — JSPI required, so this is also the browser
+// exercise of the suspending kernel over real async
 // storage). `--realm page` (default) runs both halves on the page; `--realm
 // worker` / `--realm shared-worker` run the SAME battery inside a spawned
 // dedicated/shared worker (opfs_worker_entry.ts) — the OPFS × JSPI-parking

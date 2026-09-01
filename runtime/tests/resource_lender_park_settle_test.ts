@@ -1,8 +1,8 @@
 // FACT start-call JSPI park: lender scopes must not leak on the settle paths
 // that never run `produce` (issue #102).
 //
-// Authority: contracts/intrinsics.md v0.2 amendment 2 (scope-clarified
-// 2026-08-10) — lender release on every non-poisoning exit. #91 covered the
+// Authority: contracts/intrinsics.md §A's trap-unwind/lender-release
+// obligation — lender release on every non-poisoning exit. #91 covered the
 // non-park exits of the start-call bodies (trap rethrow, capability bail,
 // async-start resume-trap), see `resource_lender_unwind_test.ts`. One layer
 // down, `createSyncStartCall`'s `blockCurrentActivation` park released its
@@ -177,7 +177,7 @@ Deno.test("#102: sync-start-call park releases lenders when abandoned (no produc
 
   assertEq(h.handle.numLends, 0);
   // The caller is NOT poisoned by an abandoned park, so the handle must stay
-  // usable — this is the trap amendment 2 exists to prevent.
+  // usable — this is the trap the lender-release obligation exists to prevent.
   canonResourceDrop(h.caller, h.rt, h.handleIndex);
   assertEq(await settled, "rejected: store teardown");
   assertEq(h.store.waiting.includes(point), false);

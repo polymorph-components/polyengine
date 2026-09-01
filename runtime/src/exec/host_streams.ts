@@ -42,7 +42,7 @@
 //     the event loop".
 //
 // Retention, stated as the rule the arm implements (#162, embedder-api
-// amendment A15): the arm is live iff the host holds a retained end, a parked
+// §"Streams and futures"): the arm is live iff the host holds a retained end, a parked
 // host operation, or an unfinished producer pump. Which ends the host holds
 // follows from where the wrapper came from — a host-CREATED stream keeps its
 // writable end across every lower (only readable ends transfer,
@@ -56,12 +56,12 @@
 // a guest and then never writes to it or drops it will *hang* rather than
 // trap. That is the honest outcome — the component is not deadlocked, the
 // embedder simply has not done its half — and it matches how any other
-// unresolved Promise behaves in JS. That policy is unchanged by A15; what
+// unresolved Promise behaves in JS. That policy is unchanged by deadlock-verdict suppression; what
 // changed is that the claim now EXPIRES with retention, so a store that once
 // round-tripped a stream through the host no longer misreports every later
 // genuine deadlock as this hang.
 //
-// The inverse case is NOT a hang (#66, embedder-api amendment A7): when the
+// The inverse case is NOT a hang (#66, contracts/embedder-api.md §"Streams and futures"): when the
 // GUEST side dies — a trap poisons the instance holding the peer end — the
 // poisoned table's ends are retired (task/streams.ts
 // `retireInstanceAsyncEnds`), so a parked host operation settles DROPPED-
@@ -214,14 +214,14 @@ export class HostBuffer {
     return out;
   }
 
-  // --- A21 `ByteWindow` (embedder-api amendment A21, polyengine#128) ---
+  // --- `ByteWindow` (embedder-api.md §"Streams and futures" ("Direct-access byte edges"), polyengine#128) ---
   //
   // A host buffer can be the PEER of a direct session on the other end of a
   // host↔host rendezvous. Which of the two shapes it takes follows from the
   // direction it was built for, exactly as `read`/`write` above do:
   //
   //   * SOURCE (`values !== null`, a parked `write`): the window is a view of
-  //     the offered chunk itself — the A5 borrow, scoped to the callback. No
+  //     the offered chunk itself — the stream/future round-trip borrow, scoped to the callback. No
   //     extra copy at all.
   //   * DESTINATION (`values === null`, a parked/arriving `read(max)`): there
   //     is no landing zone to view, so the window is a fresh scratch; the
@@ -297,14 +297,14 @@ export class HostBuffer {
  * driving loop treats "waiting for the embedder" as progress-is-possible
  * rather than deadlock. Re-arms after every notification.
  *
- * RETENTION IS THE LIVENESS RULE (#162, embedder-api amendment A15). The arm
+ * RETENTION IS THE LIVENESS RULE (#162, contracts/embedder-api.md §"Streams and futures"). The arm
  * is live iff the host retains a way to act on this shared object: a retained
  * end, a parked host operation, or an unfinished producer pump. The claim it
  * makes to the deadlock verdicts — "the embedder may still act" — therefore
  * *expires*. Three state transitions implement it:
  *
  *   * `close()` — terminal: DROPPED, an explicit drop, or the shared object's
- *     drop observers (either end, the A7 teardown walk). Nothing can revive
+ *     drop observers (either end, the loud component fault teardown walk). Nothing can revive
  *     the wrapper.
  *   * `disarm()` — NON-terminal: the host handed its last end back to a guest
  *     (a lifted stream/future lowered back in — the identity round trip). The
@@ -362,9 +362,9 @@ class HostActivity {
    * outstanding — by handing the store to the *same* loop an export call
    * would have used, `driveStoreAsync`. Without the asynchronous half a guest
    * parked in a background forwarding task would never be resumed to consume
-   * what we just offered, and the host read would await forever (C0 finding
-   * R-1: the previous local drain only serviced `store.awaiting` and never
-   * awaited `store.pendingHostCalls`, so a writer parked on a
+   * what we just offered, and the host read would await forever (host-pump
+   * starvation: the previous local drain only serviced `store.awaiting` and
+   * never awaited `store.pendingHostCalls`, so a writer parked on a
    * Promise-returning host import stalled the reader).
    *
    * Traps from the synchronous half propagate to the caller of the host
@@ -479,7 +479,7 @@ class HostActivity {
 
   /**
    * The host retains no way to act: its lifted end was lowered back into a
-   * guest, which now owns it (#162, amendment A15). NON-terminal — a re-lift
+   * guest, which now owns it (#162, §"Streams and futures"). NON-terminal — a re-lift
    * of the same shared object restores retention via `rearm()`.
    *
    * Resolving the stale arm is required, not tidiness: a `driveAsync` parked
@@ -500,7 +500,7 @@ class HostActivity {
   }
 
   /**
-   * A lift handed the host the readable end again — the A5 cache-hit wrapper
+   * A lift handed the host the readable end again — the stream/future round-trip cache-hit wrapper
    * for a shared object that round-tripped back out of the guest (#162).
    * A no-op for a closed activity (the object is gone for good) and for one
    * that was never disarmed.
@@ -513,7 +513,7 @@ class HostActivity {
 }
 
 // ---------------------------------------------------------------------------
-// Direct-access byte edges (embedder-api amendment A21, 2026-08-22, #128)
+// Direct-access byte edges (embedder-api.md §"Streams and futures" ("Direct-access byte edges") (polyengine#128))
 // ---------------------------------------------------------------------------
 //
 // wasmtime `DirectSource`/`DirectDestination`-shaped (`component::concurrent`,
@@ -528,7 +528,7 @@ class HostActivity {
 // path). This half owns the session: the callback scope, mark accounting,
 // the verdict cadence, and the promise.
 
-/** The scoped landing zone handed to a `writeDirect` producer (A21, #128). */
+/** The scoped landing zone handed to a `writeDirect` producer (direct-access byte edge, #128). */
 export interface DirectDestination {
   /**
    * The reader's still-unfilled bytes. Re-derived on every call (a
@@ -544,7 +544,7 @@ export interface DirectDestination {
   markWritten(n: number): void;
 }
 
-/** The scoped view handed to a `readDirect` consumer (A21, #128). */
+/** The scoped view handed to a `readDirect` consumer (direct-access byte edge, #128). */
 export interface DirectSource {
   /**
    * The writer's unread bytes; read-only by contract. Same scoping and
@@ -555,7 +555,7 @@ export interface DirectSource {
   markRead(n: number): void;
 }
 
-/** The callback's poll cadence, spelled event-style (A21). */
+/** The callback's poll cadence, spelled event-style. */
 export type DirectVerdict = "more" | "done";
 
 /**
@@ -563,7 +563,7 @@ export type DirectVerdict = "more" | "done";
  * because the callback itself returned `"done"`, rather than because the peer
  * dropped / the operation was cancelled / the peer's instance trapped.
  *
- * The conventions layer needs the distinction for A7 precision — a session
+ * The conventions layer needs the distinction for loud component fault precision — a session
  * the producer already completed keeps its resolution even if the peer then
  * trapped — and `Promise<number>` is the contract's return shape, so it rides
  * here rather than in the resolved value.
@@ -614,7 +614,7 @@ class DirectScope implements DirectDestination, DirectSource {
       throw new TypeError(
         `${who}(${n}) would take the invocation's cumulative mark to ` +
           `${this.marked + n}, past the ${this.capacity} byte(s) the view ` +
-          `held on entry (embedder-api amendment A21)`,
+          `held on entry (embedder-api.md §"Streams and futures" ("Direct-access byte edges"))`,
       );
     }
     this.marked += n;
@@ -625,8 +625,8 @@ class DirectScope implements DirectDestination, DirectSource {
       throw new TypeError(
         "this direct-access view is dead: a DirectDestination/DirectSource " +
           "is scoped to the synchronous callback invocation it was passed " +
-          "to, and retaining one past its return is misuse (embedder-api " +
-          "amendment A21, polyengine#128)",
+          "to, and retaining one past its return is misuse (embedder-api.md " +
+          `§"Streams and futures" ("Direct-access byte edges"), polyengine#128)`,
       );
     }
   }
@@ -658,7 +658,7 @@ class DirectSession implements DirectBuffer {
   total = 0;
   /** The callback said `"done"`, or the session failed / was settled. */
   ended = false;
-  /** `ended` because the callback said so (A7 precision; see `DirectSessionInfo`). */
+  /** `ended` because the callback said so (loud component fault precision; see `DirectSessionInfo`). */
   endedByVerdict = false;
   /** Installed in the shared object's pending slot right now. */
   pending = false;
@@ -687,11 +687,11 @@ class DirectSession implements DirectBuffer {
   }
 
   read(_n: number): PayloadChunk {
-    throw new Error("internal: a direct session must go through the A21 seam");
+    throw new Error("internal: a direct session must go through the direct-access byte edge seam");
   }
 
   write(_vs: PayloadChunk): void {
-    throw new Error("internal: a direct session must go through the A21 seam");
+    throw new Error("internal: a direct session must go through the direct-access byte edge seam");
   }
 
   // --- the direct protocol ---
@@ -724,7 +724,7 @@ class DirectSession implements DirectBuffer {
       this.#fail(
         new TypeError(
           `a direct-access callback must return "more" or "done", got ` +
-            `${JSON.stringify(verdict)} (embedder-api amendment A21)`,
+            `${JSON.stringify(verdict)} (embedder-api.md §"Streams and futures" ("Direct-access byte edges"))`,
         ),
       );
       return "failed";
@@ -742,7 +742,7 @@ class DirectSession implements DirectBuffer {
         new TypeError(
           'a direct-access callback returned "more" without marking any ' +
             "bytes; a session that has nothing to offer retracts by " +
-            'returning "done" (embedder-api amendment A21, polyengine#128)',
+            'returning "done" (embedder-api.md §"Streams and futures" ("Direct-access byte edges") (polyengine#128))',
         ),
       );
       return "failed";
@@ -806,13 +806,13 @@ class DirectSession implements DirectBuffer {
   }
 }
 
-/** A21 is `stream<u8>` only; `null` (zero-width) is not u8 either. */
+/** direct-access byte edge is `stream<u8>` only; `null` (zero-width) is not u8 either. */
 function requireU8Element(t: ValType | null, who: string): void {
   if (t === null || despecialize(t).kind !== "u8") {
     throw new TypeError(
       `${who} is available on stream<u8> only; this stream's element type ` +
         `is ${t === null ? "the zero-width payload" : despecialize(t).kind} ` +
-        `(embedder-api amendment A21, polyengine#128)`,
+        `(embedder-api.md §"Streams and futures" ("Direct-access byte edges") (polyengine#128))`,
     );
   }
 }
@@ -846,7 +846,7 @@ export interface HostWritableEnd<T> {
   writeAll(values: T[]): Promise<number>;
   /**
    * Park a **direct session** on this end (`stream<u8>` only — embedder-api
-   * amendment A21, polyengine#128).
+   * §"Streams and futures" ("Direct-access byte edges") (polyengine#128)).
    *
    * At every rendezvous with a reader of nonzero capacity, `produce` runs
    * exactly once, synchronously, inside the rendezvous, with a
@@ -877,9 +877,9 @@ export interface HostWritableEnd<T> {
   drop(): void;
   /**
    * Fire `fn` once the stream becomes dropped — by either end, including
-   * the A7 teardown walk (immediately, if it already is). The embedder's
+   * the loud component fault teardown walk (immediately, if it already is). The embedder's
    * producer pump uses it to cancel a producer parked on an external
-   * event (amendment A13's cancellation companion).
+   * event (§"Streams and futures"'s cancellation companion).
    */
   onDropped(fn: () => void): void;
 }
@@ -895,7 +895,7 @@ export interface HostReadableEnd<T> {
   read(max: number): Promise<T[]>;
   /**
    * Park a **direct session** on this end (`stream<u8>` only — embedder-api
-   * amendment A21, polyengine#128). The mirror of
+   * §"Streams and futures" ("Direct-access byte edges") (polyengine#128)). The mirror of
    * `HostWritableEnd.writeDirect`: `consume` receives a `DirectSource` over
    * the writer's unread bytes (a view of guest memory, or of the offered
    * host chunk itself) and may take a prefix — a partial take is normal, and
@@ -925,7 +925,7 @@ export interface HostStream<T> {
 /**
  * Attach host-activity bookkeeping to a shared object at the CABI seam.
  *
- * `kind` is the retention model (#162, amendment A15) — WHICH ends the host
+ * `kind` is the retention model (#162, §"Streams and futures") — WHICH ends the host
  * holds, which is decided entirely by where the wrapper came from:
  *
  *   * `"created"` — `hostStream()`/`hostFuture()`. Only READABLE ends
@@ -960,7 +960,7 @@ function bindOnLower(
   // activity binding for future lowers (review advisory, host-streams
   // round). The public entry points cannot get here with a wrapped object —
   // `hostStreamFor`/`hostFutureFor` return the cached wrapper instead
-  // (amendment A5) — so a trip here is a bug in this module. The class field
+  // (§"Streams and futures") — so a trip here is a bug in this module. The class field
   // initializes to null; == null covers both sentinels.
   assert_(
     holder.onLowered == null,
@@ -1034,13 +1034,13 @@ function mkStreamEnds<T>(
     if (result === CopyResult.DROPPED) activity.close();
     else activity.notify();
   };
-  /** The live direct session on each end, if any (A21, polyengine#128). */
+  /** The live direct session on each end, if any (direct-access byte edge, polyengine#128). */
   const direct: { read: DirectSession | null; write: DirectSession | null } = {
     read: null,
     write: null,
   };
   /**
-   * Drive one direct session from park to end (A21).
+   * Drive one direct session from park to end.
    *
    * Two shapes reach us, and the difference is *which side arrived second*:
    *
@@ -1104,8 +1104,8 @@ function mkStreamEnds<T>(
   };
   /** Shared tail of `cancelWrite`/`cancelRead` for a parked direct session. */
   const cancelDirect = (session: DirectSession): void => {
-    // A21: cancelling RETRACTS the session — it resolves with its running
-    // total (A8's indistinguishability caveats unchanged). `shared.cancel()`
+    // direct-access byte edge: cancelling RETRACTS the session — it resolves with its running
+    // total (future abandonment's indistinguishability caveats unchanged). `shared.cancel()`
     // only when the session actually holds the pending slot: a session caught
     // between two issuances holds nothing, and `SharedBase.cancel` asserts
     // that something is pending.
@@ -1191,7 +1191,7 @@ function mkStreamEnds<T>(
         info?: DirectSessionInfo,
       ): Promise<number> {
         // Same one-in-flight-per-end rule, same wording shape as `write`:
-        // `writeDirect` participates in it exactly as `write` does (A21).
+        // `writeDirect` participates in it exactly as `write` does.
         if (parked.write) {
           throw new TypeError(
             "a write is already in flight on this stream's writable end; " +
@@ -1306,8 +1306,8 @@ function mkStreamEnds<T>(
 }
 
 /**
- * One host wrapper per shared object, by identity (embedder-api amendment
- * A5). A stream/future value that round-trips host → guest → host lifts back
+ * One host wrapper per shared object, by identity (contracts/embedder-api.md
+ * §"Streams and futures"). A stream/future value that round-trips host → guest → host lifts back
  * as the SAME wrapper the host already holds, so wrapping is idempotent —
  * there is never a second `HostActivity` competing to pump one shared object
  * (the hazard the old double-wrap assert guarded against), and the readable

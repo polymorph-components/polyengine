@@ -1,7 +1,8 @@
 // Recognition is by brand, not class (contracts/embedder-api.md §"Error
-// model", amendment A9; issue #83).
+// model", §"Module identity and @polyengine/protocol"; issue #83).
 //
-// Two properties are under test, and they are the two halves of the amendment:
+// Two properties are under test, and they are the two halves of that
+// contract:
 // a value minted by ANY copy is recognized (simulated here by hand-rolling
 // the brand, which is exactly what a foreign copy's prototype provides), and
 // an unbranded look-alike is NOT.
@@ -22,7 +23,7 @@ import {
   ComponentException,
 } from "../src/mod.ts";
 
-Deno.test("A9: canonical classes are recognized by their own predicate", () => {
+Deno.test("canonical classes are recognized by their own predicate", () => {
   assert(isComponentException(new ComponentException({ kind: "nope" })));
   assert(isTrap(new Trap("x")));
   assert(isDroppedError(new DroppedError()));
@@ -31,14 +32,14 @@ Deno.test("A9: canonical classes are recognized by their own predicate", () => {
   assert(isStreamProducerError(new StreamProducerError("w", new Error("e"))));
 });
 
-Deno.test("A9: the brands do not cross-talk", () => {
+Deno.test("the brands do not cross-talk", () => {
   assertFalse(isTrap(new ComponentException(1)));
   assertFalse(isComponentException(new Trap()));
   assertFalse(isDroppedError(new PeerTrappedError("w", "c")));
   assertFalse(isPeerTrappedError(new DroppedError()));
 });
 
-Deno.test("A9: a hand-rolled brand IS the value (zero-import host module)", () => {
+Deno.test("a hand-rolled brand IS the value (zero-import host module)", () => {
   // Precisely the shape contracts/embedder-api.md blesses: "an Error with
   // [Symbol.for('polyengine.componentException/1')]: true and a payload property IS a
   // ComponentException to every copy".
@@ -56,7 +57,7 @@ Deno.test("A9: a hand-rolled brand IS the value (zero-import host module)", () =
   ));
 });
 
-Deno.test("A9: unbranded look-alikes are refused", () => {
+Deno.test("unbranded look-alikes are refused", () => {
   class NotAComponentException extends Error {
     payload = 1;
   }
@@ -71,7 +72,7 @@ Deno.test("A9: unbranded look-alikes are refused", () => {
   assertFalse(isComponentException({ [Symbol.for("polyengine.componentException/1")]: 1 }));
 });
 
-Deno.test("A9: predicates are NOT instanceof — a foreign prototype passes", () => {
+Deno.test("predicates are NOT instanceof — a foreign prototype passes", () => {
   // A different copy's class: same brand key (registry symbol), different
   // constructor identity. This is the #83 failure mode, made to pass.
   class ForeignComponentException extends Error {
@@ -91,10 +92,10 @@ Deno.test("A9: predicates are NOT instanceof — a foreign prototype passes", ()
   assert(isComponentException(e), "brand identity holds");
 });
 
-Deno.test("A9: Symbol.hasInstance is deliberately NOT overridden", () => {
+Deno.test("Symbol.hasInstance is deliberately NOT overridden", () => {
   // Overriding it would be inherited by consumer subclasses, so
   // `x instanceof MySubclass` would match ANY branded value — a worse footgun
-  // than the one A9 removes. instanceof keeps its plain nominal meaning.
+  // than brand-based recognition would create. instanceof keeps its plain nominal meaning.
   class Sub extends ComponentException<number> {}
   assertFalse(new ComponentException(1) instanceof Sub);
   assert(new Sub(1) instanceof ComponentException);

@@ -12,8 +12,8 @@
 //    `Suspending` import, wraps the export with `WebAssembly.promising`, and
 //    gets the suspended value back: `{suspending: true, promising: true,
 //    roundTrip: true}`. docs/architecture.md §12 (Risks) lists "Firefox: flagged" as an accepted
-//    risk and §13 M3 budgets a pref flip; the flip is sufficient — no
-//    SpiderMonkey JSPI bug is visible from this corpus. Nothing in the M2
+//    risk that a pref flip resolves; the flip is sufficient — no
+//    SpiderMonkey JSPI bug is visible from this corpus. Nothing in the
 //    empirical pins (a)-(j) misfires here: with the runtime's ambient made
 //    explicit (M3A-1, below), Firefox reproduces the Deno lane command for
 //    command.

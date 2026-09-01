@@ -1,5 +1,5 @@
 // wasi:random@0.2 — shapes and lengths (contracts/embedder-api.md
-// §"WASI examination"; C2 gate: "random shapes").
+// §"WASI examination": "random shapes").
 
 import { assertEq, assertTrue } from "./asserts.ts";
 import { random } from "../src/random.ts";

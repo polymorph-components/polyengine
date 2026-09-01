@@ -35,7 +35,7 @@ import {
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
 import { BLOCKED, createSubtaskCancel } from "../src/intrinsics/async_builtins.ts";
-// A23: the cancel-discard opt-out, read off the host function exactly as
+// cancellation discard: the cancel-discard opt-out, read off the host function exactly as
 // `executor.ts buildLoweredImport` reads it from the embedder's imports record.
 import { deferCancel, isDeferCancel } from "../src/jspi/suspending.ts";
 import { Trap } from "../src/cabi/mod.ts";
@@ -242,7 +242,7 @@ Deno.test("sync lower of a Promise-returning host import needs JSPI", () => {
     stats: newStats(),
     deferCancel: false,
     abortable: false,
-    // Plain mode: the A1 park arm is jspi-only, so this stays the guard pin
+    // Plain mode: the suspending mark park arm is jspi-only, so this stays the guard pin
     // for the no-JSPI path. The marked+jspi park itself is pinned by
     // tests/embedder/suspending_imports_test.ts.
     mode: "plain",
@@ -277,14 +277,14 @@ Deno.test("sync lower of a Promise-returning host import needs JSPI", () => {
   );
 });
 
-Deno.test("A23: deferCancel() opts a host import out of discard — subtask.cancel returns BLOCKED", async () => {
+Deno.test("cancellation discard: deferCancel() opts a host import out of discard — subtask.cancel returns BLOCKED", async () => {
   // definitions.py `canon_subtask_cancel` (line 2469): the request is passed
   // to the callee's `on_cancel`; if the callee does not resolve promptly, the
   // async form returns BLOCKED and the subtask stays live.
   //
   // That is what a `deferCancel()`-branded import does — accept and ignore
-  // (contracts/embedder-api.md amendment A23; polyengine#241). It was the
-  // behavior of EVERY host import before A23; it is now the opt-in for imports
+  // (contracts/embedder-api.md §"Functions and async"; polyengine#241). It was the
+  // behavior of EVERY host import before cancellation discard; it is now the opt-in for imports
   // with a commit point, where reporting CANCELLED_BEFORE_RETURNED would lie
   // about a write that lands anyway. The default is discard, pinned in
   // tests/host_import_cancel_test.ts.
@@ -327,7 +327,7 @@ Deno.test("async lower: a second subtask.cancel traps (deferCancel: already canc
   // definitions.py line 2475: `trap_if(subtask.cancellation_requested)`.
   //
   // Reaching that trap needs a subtask that is still UNRESOLVED after its
-  // first cancel — under A23 only a `deferCancel()` import leaves one, since
+  // first cancel — under cancellation discard only a `deferCancel()` import leaves one, since
   // the default discard resolves and delivers on the first cancel (the
   // resolveDelivered trap, pinned in the test below). Keeping this arm on the
   // brand keeps the reference-parity property pinned rather than retiring it.
@@ -349,7 +349,7 @@ Deno.test("async lower: a second subtask.cancel traps (deferCancel: already canc
   );
 });
 
-Deno.test("A23: a second subtask.cancel after a DISCARD traps on the delivered resolution", () => {
+Deno.test("cancellation discard: a second subtask.cancel after a DISCARD traps on the delivered resolution", () => {
   // definitions.py line 2473: `trap_if(subtask.resolve_delivered())`, checked
   // BEFORE the cancellation_requested trap. The default (unbranded) import
   // discards on the first cancel — resolving CANCELLED_BEFORE_RETURNED and

@@ -4,7 +4,8 @@
 // Why a separate package: the translator is a versioned peer of the
 // runtime (plan-format coupling), so it ships inside the same release —
 // but embedders that translate at BUILD time (tools/translate,
-// embedder-api A4) deploy no translator at all, and keeping the ~1.85 MB
+// contracts/embedder-api.md §"Module wiring and instantiation") deploy no
+// translator at all, and keeping the ~1.85 MB
 // asset out of @polyengine/runtime keeps their production graphs clean.
 //
 // The asset (`translator_shim.wasm`, sibling to this module) is copied
@@ -35,7 +36,8 @@ let singleton: Promise<Translator> | undefined;
  *     asset).
  *
  * Pass the result to `instantiate({ componentBytes, translator })`
- * (embedder-api A3), or call `.translate()` directly.
+ * (contracts/embedder-api.md §"Module wiring and instantiation"), or call
+ * `.translate()` directly.
  */
 export function defaultTranslator(): Promise<Translator> {
   return singleton ??= load();

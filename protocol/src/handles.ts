@@ -1,14 +1,14 @@
 // The stream/future handle vocabulary (contracts/embedder-api.md §"Streams
-// and futures"; amendment A22, §"The host-ABI surface and its version").
+// and futures"; §"The host-ABI surface and its version").
 //
-// A22 moves the paper interfaces of §"Streams and futures" here as
+// This module gives the paper interfaces of §"Streams and futures" as
 // EXECUTABLE TypeScript: `Stream<T>`, `StreamWriter<T>`, `Future<T>`,
 // `ErrorContext`, plus the aux types `Chunk<T>`, `DirectSource`,
 // `DirectDestination`, `DirectVerdict`, `StreamSource<T>`, `FutureSource<T>`.
 // The runtime's concrete classes (`runtime/src/embedder/streams.ts`)
 // `implements` these — conformance is a compile-time assertion — and this
 // package's brand predicates (below) recognize the STATEFUL values by brand,
-// never by `instanceof` against those concrete classes (A9).
+// never by `instanceof` against those concrete classes.
 //
 // This module stays dependency-free, like the rest of `@polyengine/protocol`
 // (§"Module identity"): the interfaces are structural, referencing only
@@ -21,8 +21,9 @@ import { ERROR_CONTEXT, FUTURE, hasBrand, STREAM, STREAM_WRITER } from "./brands
 export type Chunk<T> = T extends number ? Uint8Array | T[] : T[];
 
 /**
- * The scoped landing zone handed to a `writeDirect` producer (amendment A21,
- * polyengine#128). DEAD once the callback returns; every later method call
+ * The scoped landing zone handed to a `writeDirect` producer
+ * (contracts/embedder-api.md §"Streams and futures"; polyengine#128). DEAD
+ * once the callback returns; every later method call
  * throws.
  */
 export interface DirectDestination {
@@ -41,8 +42,9 @@ export interface DirectDestination {
 }
 
 /**
- * The scoped view handed to a `readDirect` consumer (amendment A21,
- * polyengine#128). DEAD once the callback returns; every later method call
+ * The scoped view handed to a `readDirect` consumer
+ * (contracts/embedder-api.md §"Streams and futures"; polyengine#128). DEAD
+ * once the callback returns; every later method call
  * throws.
  */
 export interface DirectSource {
@@ -55,14 +57,14 @@ export interface DirectSource {
   markRead(n: number): void;
 }
 
-/** The direct-session callback's poll cadence, spelled event-style (A21). */
+/** The direct-session callback's poll cadence, spelled event-style. */
 export type DirectVerdict = "more" | "done";
 
 /**
  * A stream handle (contracts/embedder-api.md §"Streams and futures").
  *
  * `read` returning an empty chunk is end-of-stream; `readable()` and the
- * async iterator are built on it. `readDirect` is the A21 direct-access byte
+ * async iterator are built on it. `readDirect` is the direct-access byte
  * edge, `stream<u8>` only.
  */
 export interface Stream<T> {
@@ -71,7 +73,7 @@ export interface Stream<T> {
   [Symbol.asyncIterator](): AsyncIterator<Chunk<T>>;
   /** Low-level read: up to `max` elements; an empty chunk means end-of-stream. */
   read(max: number): Promise<Chunk<T>>;
-  /** `stream<u8>` only — amendment A21, polyengine#128. */
+  /** `stream<u8>` only — polyengine#128. */
   readDirect(consume: (src: DirectSource) => DirectVerdict): Promise<number>;
   /** Cancel an in-flight `read`. */
   cancelRead(): void;
@@ -80,11 +82,11 @@ export interface Stream<T> {
   [Symbol.dispose](): void;
 }
 
-/** Writer half of `Stream.create()` (amendment A22 brand: `streamWriter/1`). */
+/** Writer half of `Stream.create()` (brand: `streamWriter/1`). */
 export interface StreamWriter<T> {
   /** Offer values; resolves with how many the reader took. */
   write(values: Chunk<T>): Promise<number>;
-  /** `stream<u8>` only — amendment A21, polyengine#128. */
+  /** `stream<u8>` only — polyengine#128. */
   writeDirect(
     produce: (dest: DirectDestination) => DirectVerdict,
   ): Promise<number>;
@@ -109,7 +111,8 @@ export interface Future<T> extends PromiseLike<T> {
 
 /**
  * `error-context` as the contract spells it: message-valued at lowering
- * since amendment A20.
+ * (contracts/embedder-api.md §"Realm boundaries and structured-clone-safe
+ * forms").
  */
 export interface ErrorContext {
   readonly message: string;
@@ -125,27 +128,27 @@ export type StreamSource<T> =
 /** Anything the layer accepts where a guest expects `future<T>`. */
 export type FutureSource<T> = Future<T> | PromiseLike<T> | T;
 
-/** Brand check: an embedder stream handle (A9; any copy, or hand-rolled). */
+/** Brand check: an embedder stream handle (any copy, or hand-rolled). */
 export function isStream(v: unknown): v is Stream<unknown> {
   return hasBrand(v, STREAM);
 }
 
 /**
- * Brand check: an embedder stream writer handle (amendment A22:
- * `polyengine.streamWriter/1`; any copy, or hand-rolled).
+ * Brand check: an embedder stream writer handle
+ * (`polyengine.streamWriter/1`; any copy, or hand-rolled).
  */
 export function isStreamWriter(v: unknown): v is StreamWriter<unknown> {
   return hasBrand(v, STREAM_WRITER);
 }
 
-/** Brand check: an embedder future handle (A9; any copy, or hand-rolled). */
+/** Brand check: an embedder future handle (any copy, or hand-rolled). */
 export function isFuture(v: unknown): v is Future<unknown> {
   return hasBrand(v, FUTURE);
 }
 
 /**
- * Brand check: an error-context. Message-valued at lowering since amendment
- * A20 — accepts any branded carrier of a string `message`, not only the
+ * Brand check: an error-context. Message-valued at lowering — accepts any
+ * branded carrier of a string `message`, not only the
  * canonical class, matching the acceptance rule §"Realm boundaries and
  * structured-clone-safe forms" documents for lowering a foreign one.
  */

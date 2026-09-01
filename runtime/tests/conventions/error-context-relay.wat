@@ -1,6 +1,6 @@
 ;; ROW (g) fixture — an `error-context` crossing the host boundary in BOTH
 ;; directions (contracts/embedder-api.md §"Realm boundaries and
-;; structured-clone-safe forms", amendment A20: "Error-context is
+;; structured-clone-safe forms", §"Realm boundaries and structured-clone-safe forms": "Error-context is
 ;; message-valued").
 ;;
 ;; Nothing in the corpus puts an `error-context` in a function signature: the
@@ -13,7 +13,7 @@
 ;; `probe` mints a context whose debug message is "guest-ctx", passes it to the
 ;; host (the LIFT: the host must receive something `isErrorContext` recognizes,
 ;; carrying that message), and reads the debug message of whatever comes back
-;; (the LOWER: A20 accepts any branded string-`message` carrier by minting a
+;; (the LOWER: realm boundary accepts any branded string-`message` carrier by minting a
 ;; FRESH local context). It returns that message's byte length, so one u32
 ;; reports that the host's message survived the crossing.
 ;;

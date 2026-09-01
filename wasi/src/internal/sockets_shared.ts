@@ -38,7 +38,7 @@ export interface Ipv6SocketAddress {
   scopeId: number;
 }
 
-/** The `ip-socket-address` variant, in `{ kind, value }` form (A10). */
+/** The `ip-socket-address` variant, in `{ kind, value }` form (embedder-api.md §"Naming and casing"). */
 export type IpSocketAddress =
   | { kind: "ipv4"; value: Ipv4SocketAddress }
   | { kind: "ipv6"; value: Ipv6SocketAddress };
@@ -432,7 +432,8 @@ export type TcpByteStream = AsyncIterable<Uint8Array> | Iterable<Uint8Array>;
 
 /**
  * What tcp `listen` returns: the perpetual accept stream. `cancel` is the
- * A13 producer-cancellation hook the runtime's pump invokes when the
+ * producer-cancellation hook (embedder-api.md §"Streams and futures")
+ * the runtime's pump invokes when the
  * guest drops the stream while the loop is parked in accept(); direct
  * (non-runtime) consumers may call it themselves to stop accepting.
  */
@@ -442,13 +443,13 @@ export type TcpAcceptStream = AsyncIterable<TcpSocket> & { cancel(): void };
  * The host-implemented `tcp-socket` resource surface (client + listener
  * halves — module header). `send` is a WIT sync func returning
  * `future<result>`: the async method's promise is lowered as the future
- * source (amendment A12), so the guest's call returns immediately and the
- * future settles when transmission completes. `receive`'s tuple carries
- * the byte stream and the future that reports FIN (`ok`) vs abnormal
- * close (`err`). `listen` returns the perpetual accept stream — an
- * async iterable of connected `TcpSocket` resources, lowered as
- * `stream<own<tcp-socket>>` (amendment A13: elements the guest never
- * takes are destroyed, closing their connections). Dropping the guest
+ * source (embedder-api.md §"Streams and futures"), so the guest's call
+ * returns immediately and the future settles when transmission completes.
+ * `receive`'s tuple carries the byte stream and the future that reports
+ * FIN (`ok`) vs abnormal close (`err`). `listen` returns the perpetual
+ * accept stream — an async iterable of connected `TcpSocket` resources,
+ * lowered as `stream<own<tcp-socket>>` (§"Streams and futures": elements
+ * the guest never takes are destroyed, closing their connections). Dropping the guest
  * handle does NOT close a socket with live pumps or a live accept stream
  * (the WIT's shared-ownership note); the OS socket closes when the
  * handle and every derived stream are all retired.

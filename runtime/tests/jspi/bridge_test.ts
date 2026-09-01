@@ -161,7 +161,7 @@ Deno.test("bridge: mode is plain unless BOTH requested and supported", () => {
 });
 
 Deno.test("bridge: JSPI-less degradation — plain mode wraps nothing", () => {
-  // The M3 browser-matrix path (docs/milestones.md). On an engine without JSPI every
+  // The browser-matrix degradation path. On an engine without JSPI every
   // blocking site keeps raising its precise NeedsJspi, which requires that
   // plain mode leave both wrapping sites untouched — a `Suspending` import
   // reached from a non-promising activation traps unconditionally (fact (c)).
@@ -206,7 +206,7 @@ Deno.test("bridge: the invariant is checked, not hoped for", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Plain mode must stay exactly the M1 synchronous API
+// Plain mode must stay exactly the original synchronous API
 // ---------------------------------------------------------------------------
 
 Deno.test("bridge: planNeedsSuspension recognises both sources of blocking", () => {
@@ -305,7 +305,7 @@ Deno.test("bridge: planNeedsSuspension recognises both sources of blocking", () 
 });
 
 Deno.test("plain mode: lifted exports still return values, not Promises", async () => {
-  // The stop-the-line property, RESTATED FOR AUTO-DETECTION (M2 flip): a
+  // The stop-the-line property, RESTATED FOR AUTO-DETECTION: a
   // sync-only component must never be wrapped. Instantiation below passes no
   // `jspi` flag at all, so it exercises exactly the auto-detection path the
   // executor now runs; the value-not-Promise assertion holds only if

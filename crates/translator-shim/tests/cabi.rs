@@ -89,8 +89,9 @@ fn cabi_error_envelope() {
 /// an invalid one: phase `unsupported`, never `validation`.
 #[test]
 fn cabi_unsupported_phase_is_distinct() {
-    // Re-exporting an *imported* module is rejected (`Export::ModuleImport`,
-    // plan-format.md v4 amendment 3). The former specimen — exporting an own
+    // Re-exporting an *imported* module is rejected (the Export::ModuleImport
+    // rejection, contracts/plan-format.md schema notes). The former
+    // specimen — exporting an own
     // embedded module (`Export::ModuleStatic`) — translates since plan v4;
     // see `cabi_module_export_translates`.
     let comp = wat::parse_str(
@@ -103,7 +104,8 @@ fn cabi_unsupported_phase_is_distinct() {
 }
 
 /// A component exporting one of its own embedded core modules translates
-/// (plan-format.md v4 amendment 2, polyengine#13) and the plan carries the
+/// (the `module` export kind, contracts/plan-format.md schema notes;
+/// polyengine#13) and the plan carries the
 /// `module`-kind export pointing into the static module space.
 #[test]
 fn cabi_module_export_translates() {

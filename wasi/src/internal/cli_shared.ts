@@ -7,10 +7,9 @@
 import { defineBrand, WASI_EXIT } from "@polyengine/protocol";
 import type { Stream } from "@polyengine/protocol";
 
-/** `wasi:cli/types@0.3`'s `error-code` ENUM: bare kebab-case strings (the
- * A10 value table — enums are data strings, not `{kind}` variants; this
- * type carried a `{kind}` wrapper until 2026-08-14, a latent bug no err
- * path had exercised). */
+/** `wasi:cli/types@0.3`'s `error-code` ENUM: bare kebab-case strings
+ * (embedder-api.md §"Naming and casing" — enums are data strings, not
+ * `{kind}` variants). */
 export type CliErrorCode = "io" | "illegal-byte-sequence" | "pipe";
 
 /** `result<_, error-code>` AS A VALUE (the 0.3 stdio futures). */
@@ -31,9 +30,9 @@ export class ExitError extends Error {
     this.name = "ExitError";
   }
 }
-// A9 brand: an exit unwind propagates out through the embedder and any host
+// Brand: an exit unwind propagates out through the embedder and any host
 // frames in between, so it must be recognizable across runtime copies
-// (contracts/embedder-api.md §"Module identity", issue #83).
+// (contracts/embedder-api.md §"Module identity and @polyengine/protocol", issue #83).
 defineBrand(ExitError.prototype, WASI_EXIT);
 
 /** `terminal-input`/`terminal-output` are opaque resources; never produced (no terminal). */

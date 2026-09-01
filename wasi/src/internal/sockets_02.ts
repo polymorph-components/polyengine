@@ -10,16 +10,16 @@
 // `accept` returning `would-block` until `subscribe`'s pollable is ready,
 // datagram streams with `receive(max)`/`check-send`+`send` batches — and
 // wasi-libc emulates POSIX blocking by `pollable.block()` (the io.ts
-// parking kernel, A14). Socket byte I/O rides `wasi:io/streams@0.2`:
+// parking kernel, embedder-api.md §"The WASI parking kernel"). Socket byte I/O rides `wasi:io/streams@0.2`:
 // wasi-libc links the NON-blocking `input-stream.read` + `subscribe`
 // (never `blocking-read`) and `check-write`/`write`/`blocking-flush` —
 // exactly the surfaces of io.ts's async-backed `FedInputStream` /
 // `SinkOutputStream`, which this module mints over connections. The
 // PARKING therefore happens in `Pollable.block`/`poll` and
-// `blocking-flush`, all already A14-marked: 0.2 socket guests need JSPI
+// `blocking-flush`, all already park-capable-marked: 0.2 socket guests need JSPI
 // on V8 engines, like the 0.3 track's `listen`.
 //
-// 0.2's `error-code` is an ENUM (bare strings — the A10 rule), with a
+// 0.2's `error-code` is an ENUM (bare strings — embedder-api.md §"Naming and casing"), with a
 // different vocabulary than 0.3's variant: it grew `unknown`,
 // `would-block`, `not-in-progress`, `concurrency-conflict`,
 // `new-socket-limit` and the name-lookup codes, and it lacks

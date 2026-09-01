@@ -1,9 +1,9 @@
 // `wasi:clocks@0.2` + `wasi:clocks@0.3` (contracts/embedder-api.md
-// §"WASI examination"; the D-1 union clock — tools/smoke-c0/REPORT.md
-// finding D-1: `monotonic-clock@0.3.0` exposes different function sets
-// across the consumer corpus (`wait-for` vs `now`+`wait-until`) at the SAME
-// version string — same track, divergent drafts, served by one union
-// provider per contracts/embedder-api.md §"Version canonicalization").
+// §"WASI examination"; the union clock: `monotonic-clock@0.3.0` exposes
+// different function sets across the consumer corpus (`wait-for` vs
+// `now`+`wait-until`) at the SAME version string — same track, divergent
+// drafts, served by one union provider per contracts/embedder-api.md
+// §"Version canonicalization").
 // The @0.3 track also carries system-clock (0.3's wall-clock reshape) and
 // the type-only types interface, per the WASI 0.3.1 release WIT.
 
@@ -51,8 +51,7 @@ export function clocks(options: ClocksOptions = {}): { imports: Record<string, u
     }),
   };
 
-  // The D-1 union provider (C0-proven shape, tools/smoke-c0/leg2_exec_model.ts):
-  // both drafts' functions live on the one `@0.3` track provider; per-leaf
+  // The union provider: both drafts' functions live on the one `@0.3` track provider; per-leaf
   // structural resolution (contracts/embedder-api.md §"Version
   // canonicalization") lets each consumer link only the subset it imports.
   const monotonic03 = {

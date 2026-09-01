@@ -3,7 +3,8 @@
 //! family, rather than whatever `wasm-tools` CLI happens to be installed.
 //!
 //! `testdata/gen.sh` prefers the CLI for the older fixtures (byte-stable
-//! since M0); fixtures using syntax newer than the installed CLI understands
+//! since the earliest fixtures were committed); fixtures using syntax newer
+//! than the installed CLI understands
 //! are generated here instead:
 //!
 //!   cargo run -p translator-shim --example emit-testdata -- relend-borrow

@@ -1,5 +1,6 @@
 // Cross-language digest equality — the design validation for the canonical
-// world digest (contracts/plan-format.md v0.1 amendment #7; full spec in
+// world digest (the legacy shim `worldDigest`, contracts/plan-format.md
+// schema; the normative digest is contracts/digest.md; full spec in
 // crates/bindgen/src/digest.rs's module doc comment, mirrored in
 // runtime/src/digest/digest.ts's).
 //
@@ -8,8 +9,8 @@
 // crates/translator-shim's README) for each of the three sync guest
 // fixtures, checked in as static data. Regenerated (2026-08-08, REVISION
 // ROUND) against a current, building `crates/translator-shim` (Track A's
-// `importedResources` field — plan-format.md v0.1 amendment #2 / v0.2
-// proposal — is now present in every envelope, as an empty array for all
+// `importedResources` field (contracts/plan-format.md schema) — is now
+// present in every envelope, as an empty array for all
 // three fixtures; verified digest-neutral: `computeWorldDigest` on the
 // regenerated envelopes matches the same `EXPECTED` values below, byte-for-
 // byte identical canonical JSON, since none of these fixtures have

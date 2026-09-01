@@ -1,7 +1,7 @@
-;; (v3) error-context tables: a component whose canonical built-ins allocate a
+;; error-context tables: a component whose canonical built-ins allocate a
 ;; `TypeComponentLocalErrorContextTableIndex` — the index space the plan's
-;; `errorContextTables` section describes (contracts/plan-format.md v3
-;; amendment 2). The memory lives in its own core module so
+;; `errorContextTables` section describes (contracts/plan-format.md
+;; schema). The memory lives in its own core module so
 ;; `error-context.new` can name it without a cycle.
 (component
   (core module $Mem (memory (export "mem") 1))
