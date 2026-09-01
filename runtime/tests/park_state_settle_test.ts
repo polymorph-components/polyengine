@@ -1,8 +1,8 @@
 // Park-scoped state must be discharged on EVERY settle path (issue #106) —
 // the cleanup-only-in-produce siblings enumerated by the #102 track.
 //
-// Authority: contracts/intrinsics.md v0.2 amendment 2 (#91 scope
-// clarification) for the lender sites; `SuspensionPoint.onSettled`
+// Authority: contracts/intrinsics.md §A's trap-unwind/lender-release
+// obligation for the lender sites; `SuspensionPoint.onSettled`
 // (jspi/bridge.ts, #102) is the mechanism. The settle-path enumeration these
 // tests walk is the one pinned in resource_lender_park_settle_test.ts:
 // produce-success / produce-throw / abandon (a cancelled resume of a
@@ -353,8 +353,8 @@ Deno.test("#106 host-import park: rejection (produce-throw) — poisoning trap, 
   await Promise.resolve();
   point.resume(false); // produce throws `done.error` — the trap path
 
-  // This settle poisons the caller (amendment 2 owes no release here — the
-  // analysis lives at the site); the hook unwinds anyway as harmless
+  // This settle poisons the caller (the trap-unwind/lender-release obligation
+  // owes no release here — the analysis lives at the site); the hook unwinds anyway as harmless
   // bookkeeping, which this pins so a future refactor keeps it deliberate.
   assertEq(t.handle.numLends, 0);
   assertEq(await settled, "rejected: host bug");
@@ -375,7 +375,7 @@ Deno.test("#106 needsJspi bail: a capability signal after onStart must not stran
     threw = e;
   }
   assert(threw instanceof NeedsJspi, "the sync lower bailed NeedsJspi");
-  // NeedsJspi is expressly non-poisoning (amendment 2): the caller keeps
+  // NeedsJspi is expressly non-poisoning (the trap-unwind/lender-release obligation): the caller keeps
   // running, so the lend must have been discharged...
   assertEq(t.handle.numLends, 0);
   // ...and the handle must remain fully usable.

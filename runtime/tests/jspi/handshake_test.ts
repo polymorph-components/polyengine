@@ -1,6 +1,6 @@
 // The `SuspensionPoint` <-> `Store.tick` <-> `driveAsync` handshake.
 //
-// M2 phase 3l. Site 1 (`sync-start-call` parking the caller's wasm activation)
+// Site 1 (`sync-start-call` parking the caller's wasm activation)
 // is the first *lit* suspension site, so this handshake had never executed
 // before it existed. It stalled: `driveAsync` serviced ONE parked thread by
 // awaiting its promise, but a thread parked on a promising-wrapped nested
@@ -12,7 +12,7 @@
 //
 // This pins the fix by running the component that exposed it. It drives
 // jspi mode EXPLICITLY (`jspi: true`) so the pin holds even for embedders
-// that force the mode; auto-detection (on since the M2 flip) reaches the
+// that force the mode; auto-detection reaches the
 // same mode for this component by itself.
 import { assertEquals } from "./asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";

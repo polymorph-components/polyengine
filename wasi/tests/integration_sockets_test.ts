@@ -5,7 +5,8 @@
 // path the unit suites approximate from either side:
 //
 //   guest wit-bindgen calls -> plan dispatch -> conventions adapter
-//   (A12 future results, A13 resource-element streams) -> provider ->
+//   (future results, resource-element streams — embedder-api.md §"Streams
+//   and futures") -> provider ->
 //   Deno sockets -> real TCP -> back
 //
 // Two legs:
@@ -14,9 +15,9 @@
 //     server, with the onCall log read back as the wire's exact sequence;
 //   * server — listen/accept with `stream<tcp-socket>` elements arriving
 //     in the guest as live resources, served while NO export call is in
-//     flight (the A11 settlement pump drives the detached task), and the
+//     flight (the settlement pump drives the detached task), and the
 //     guest dropping its accept stream must close the provider's OS
-//     listener through the A13 producer-cancellation hook — asserted by
+//     listener through the producer-cancellation hook — asserted by
 //     the port refusing a fresh dial afterwards.
 //
 // Skip-if-absent: needs the translator shim (`just shim`) and the guest
@@ -129,7 +130,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "integration: guest tcp server — accepts arrive as live resources; dropping the accept stream closes the listener (A13)",
+    "integration: guest tcp server — accepts arrive as live resources; dropping the accept stream closes the listener",
   ignore: !ready,
   async fn() {
     const c = await instantiateFixture();
@@ -140,7 +141,7 @@ Deno.test({
     assertTrue(port !== 0, "the guest reports its ephemeral port");
 
     // Two dials, served by the guest's DETACHED task — no export call is
-    // in flight while these echo (A11 settlement pump + stream activity).
+    // in flight while these echo (settlement pump + stream activity).
     const payloads = [[1, 2, 3], [4, 5, 6, 7]];
     for (const p of payloads) {
       const conn = await Deno.connect({ transport: "tcp", hostname: "127.0.0.1", port });
@@ -154,7 +155,7 @@ Deno.test({
     // AFTER dropping the accept stream and the listener socket.
     assertEq(await done, 7);
 
-    // The A13 chain, observed from the OS: guest dropped its accept
+    // The producer-cancellation chain, observed from the OS: guest dropped its accept
     // stream -> pump cancel -> provider closed the listener -> the port
     // refuses a fresh dial.
     let refused = false;

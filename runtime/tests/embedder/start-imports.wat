@@ -5,7 +5,7 @@
 ;; `wasi:clocks/monotonic-clock.now()` from the Go runtime's `schedinit`, which
 ;; runs in `start`. The conventions layer must therefore have working import
 ;; wrappers from the moment instantiation begins — it cannot wait to learn its
-;; own function types from the returned handle (the C2-C defect).
+;; own function types from the returned handle.
 ;;
 ;; Two imports, deliberately different:
 ;;   * `tick: func() -> u64`     — flat, needs no memory;

@@ -1,5 +1,4 @@
-// ROW (f) — `suspending()` (contracts/embedder-api.md §"Functions and async",
-// amendments A1/A2).
+// ROW (f) — `suspending()` (contracts/embedder-api.md §"Functions and async").
 //
 // A sync-typed WIT import is typed to return `T` synchronously. Returning a
 // Promise from one parks the calling WASM FRAME, and that is a DECLARED
@@ -56,7 +55,7 @@ Deno.test({
       });
       await t.attempt("run/marked-but-sync", () => sync.exports.run(2, 40));
 
-      // A9: the mark is a brand, so a hand-rolled one (zero protocol imports)
+      // module identity: the mark is a brand, so a hand-rolled one (zero protocol imports)
       // is the same declaration.
       const hand = await instantiateFixture(testdata("imports"), {
         log: () => {},
@@ -112,13 +111,13 @@ const GAUGE = "runtime/tests/embedder/suspending-method.wasm";
 const gaugeReady = (await haveFixture(GAUGE)) && jspiSupported();
 
 Deno.test({
-  name: "conventions/f: A2 — a mark on the class PROTOTYPE relays to instances",
+  name: "conventions/f: suspending mark — a mark on the class PROTOTYPE relays to instances",
   ignore: !gaugeReady,
   fn: async () => {
     await transcript("f-suspending-prototype-relay", async (t) => {
       SuspendingGauge.reset();
       // The prototype is the per-declaration brand authority, read at wrap
-      // time. The guest-driven CONSTRUCTOR stays synchronous (C2) while the
+      // time. The guest-driven CONSTRUCTOR stays synchronous while the
       // METHOD parks — the `[method]pollable.block` shape.
       const c = await instantiateFixture(GAUGE, {
         "host:api/dev": { Gauge: SuspendingGauge },

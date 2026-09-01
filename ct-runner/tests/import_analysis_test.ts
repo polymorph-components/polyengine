@@ -48,7 +48,7 @@ Deno.test({
 
 // ---------------------------------------------------------------------------
 // Gate 3: prebuilt polymorph-websocket conformance suite, translate-only.
-// Its SUT imports need the C3 websocket port; DO NOT execute it. Just verify
+// Its SUT imports need the websocket host port; DO NOT execute it. Just verify
 // the runner's import-analysis correctly names what's missing.
 // ---------------------------------------------------------------------------
 
@@ -81,7 +81,7 @@ Deno.test({
     const { plan } = translator.translate(bytes);
 
     const analysis = analyzeImports(plan, {});
-    // The suite's SUT surface (polymorph:websocket) needs the C3 port, which
+    // The suite's SUT surface (polymorph:websocket) needs a host port, which
     // this dispatch explicitly does not build; requiredImports() must name
     // it (and anything else unresolved) rather than silently accepting or
     // crashing.

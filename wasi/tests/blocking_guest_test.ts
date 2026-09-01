@@ -1,7 +1,7 @@
 // The parking kernel through a REAL guest frame (testdata/blocking-guest.wat):
 // a sync export parks its own wasm stack on a timer pollable — via
-// `pollable.block` (an A2-marked host-resource method) and via `poll` (an
-// A1-marked plain import whose list result exercises guest realloc at
+// `pollable.block` (a suspending-marked host-resource method) and via `poll` (a
+// suspending-marked plain import whose list result exercises guest realloc at
 // resume time).
 //
 // FAIL-ON-PRE-FIX: under the retired always-ready stubs this guest

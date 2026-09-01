@@ -1,6 +1,6 @@
 // The lift/lower CONVENTIONS suite — the executable definition of the host ABI
 // (contracts/embedder-api.md §"The host-ABI surface and its version",
-// amendment A22).
+// §"The host-ABI surface and its version").
 //
 // WHAT THIS SUITE IS. Every other suite under runtime/tests/ asserts a
 // property. This one RECORDS what the engine does at the host boundary, as a
@@ -31,7 +31,7 @@
 // host module: `@polyengine/protocol` for vocabulary (predicates, brands,
 // `suspending()`, `ComponentException`) and NOTHING from the runtime. One case
 // family goes further and hand-rolls its brands with zero protocol imports
-// (A9: "a hand-rolled object carrying the right brand is a legal value").
+// (module identity: "a hand-rolled object carrying the right brand is a legal value").
 // The HARNESS side below is the APPLICATION — instantiation, artifact
 // resolution — so it legitimately uses `@polyengine/runtime/embedder`.
 //
@@ -46,7 +46,7 @@
 //     SORTED; array order is program order);
 //   - values are normalized STRUCTURALLY — a handle is recognized by the
 //     protocol brand predicate, never by a constructor name, which would pin
-//     a class identity A9 removed from the contract in the first place.
+//     a class identity module identity removed from the contract in the first place.
 //
 // One deliberate exception to "record the message": a trap authored by the
 // ENGINE (a raw `unreachable`) carries the JS engine's own wording, which
@@ -105,7 +105,7 @@ function normError(e: object, seen: Set<object>): Norm {
   if (isComponentException(e)) {
     body.tag = "componentException";
     body.message = msg;
-    // A10: `payload` is the WIT err value; a payloadless err's payload is
+    // err-value variant: `payload` is the WIT err value; a payloadless err's payload is
     // `undefined` (the empty-side spelling of §"Error model").
     if ("payload" in err) body.payload = normalize(err.payload, seen);
   } else if (isPeerTrappedError(e)) {
@@ -129,7 +129,7 @@ function normError(e: object, seen: Set<object>): Norm {
   } else {
     // An UNBRANDED error: the class of value the contract says never crosses
     // as an err (§"Error model"). Name and message only — no stack. Its
-    // `cause` IS walked: A20's canonical chain is an unbranded poisoning
+    // `cause` IS walked: realm boundary's canonical chain is an unbranded poisoning
     // failure whose own cause is the underlying `Trap`, and the trap at the
     // bottom must stay recognizable.
     body.tag = "error";
@@ -174,7 +174,7 @@ export function normalize(v: unknown, seen: Set<object> = new Set()): Norm {
   seen.add(o);
   try {
     // Stateful handles: brand first, ALWAYS — never `instanceof`, never
-    // `constructor.name` (A9 removed class identity from the contract).
+    // `constructor.name` (module identity removed class identity from the contract).
     if (isStream(o)) return "@stream";
     if (isStreamWriter(o)) return "@streamWriter";
     if (isFuture(o)) return "@future";
@@ -312,7 +312,7 @@ export async function checkGolden(t: Transcript): Promise<void> {
   throw new Error(
     `conventions: transcript "${t.name}" diverged from its golden.\n` +
       `A divergence is a HOST-ABI BEHAVIOR CHANGE unless the suite itself was ` +
-      `wrong (contracts/embedder-api.md A22).\n--- golden ---\n${want}` +
+      `wrong (contracts/embedder-api.md host-ABI version).\n--- golden ---\n${want}` +
       `--- recorded ---\n${got}`,
   );
 }

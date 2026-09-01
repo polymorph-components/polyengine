@@ -1,6 +1,6 @@
 // Stream pass-through: host -> guest -> host with the guest never reading
-// (the #54 investigation's second finding, fixed as embedder-api amendment
-// A5). A stream value is an identity, not a buffer: the readable end must
+// (the #54 investigation's second finding, fixed per contracts/embedder-api.md
+// §"Streams and futures"). A stream value is an identity, not a buffer: the readable end must
 // survive any number of boundary hops, and once both endpoints are host-side
 // the payload must flow host<->host — no guest memory, no wrap failures, no
 // same-instance trap for non-numeric elements.
@@ -232,7 +232,7 @@ Deno.test({
 });
 
 // ---------------------------------------------------------------------------
-// Post-transfer read refusal (#162, embedder-api amendment A15)
+// Post-transfer read refusal (#162, contracts/embedder-api.md §"Streams and futures")
 // ---------------------------------------------------------------------------
 
 /** Assert `p` rejects with a TypeError whose message names the transfer. */
@@ -257,7 +257,7 @@ async function assertTransferRefusal(
 }
 
 Deno.test({
-  name: "A15: reading a Stream handle already passed to a guest is refused",
+  name: "deadlock-verdict suppression: reading a Stream handle already passed to a guest is refused",
   ignore: !ready,
   fn: async () => {
     // The guest owns the readable end after the transfer (definitions.py
@@ -283,7 +283,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "A15: a lifted handle passed back in is refused; the next hop still flows",
+    "deadlock-verdict suppression: a lifted handle passed back in is refused; the next hop still flows",
   ignore: !ready,
   fn: async () => {
     // The identity round trip of issue #162, end to end: `out` is lifted out
@@ -310,7 +310,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "A15: awaiting a Future handle already passed to a guest is refused",
+  name: "deadlock-verdict suppression: awaiting a Future handle already passed to a guest is refused",
   ignore: false,
   fn: async () => {
     // The `Stream` mirror, at the handle layer (no fixture needed): once
@@ -331,7 +331,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "A15: a Future read memoized BEFORE the transfer still resolves",
+  name: "deadlock-verdict suppression: a Future read memoized BEFORE the transfer still resolves",
   ignore: false,
   fn: async () => {
     // The read genuinely happened while the host owned the end; only reads

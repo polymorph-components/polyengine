@@ -44,7 +44,7 @@ boundary crossings.
 | --- | --- |
 | `stream-sink: async func(s: stream<u8>) -> u64` (guest drains, returns count) | host→guest payload via rendezvous |
 | `stream-source: async func(n: u32) -> stream<u8>` (guest pumps n bytes) | guest→host payload |
-| `stream-pass: async func(s: stream<u8>) -> stream<u8>` (guest returns its input unchanged, never reads) | host↔host rendezvous after identity transfer (amendment A5) |
+| `stream-pass: async func(s: stream<u8>) -> stream<u8>` (guest returns its input unchanged, never reads) | host↔host rendezvous after identity transfer (contracts/embedder-api.md §"Streams and futures") |
 
 Unlike the calls-per-second shapes above, none of these involve a host
 import: the host drives the stream endpoint directly via the embedder's
@@ -121,7 +121,8 @@ What the baseline says:
   immediate-settled paths, ~2–4× behind on deferred (microtask) paths —
   the suspend/resume cost, recorded for #8.
 - **#68 stream shapes**: `stream-pass` (host↔host rendezvous, no guest
-  memory touched — amendment A5) consistently beats `stream-sink` and
+  memory touched — contracts/embedder-api.md §"Streams and futures")
+  consistently beats `stream-sink` and
   `stream-source` (host↔guest, which pay a real memory copy through the
   guest's linear memory) at every chunk size, confirming the identity
   transfer is doing what it claims. All three scale up sharply with

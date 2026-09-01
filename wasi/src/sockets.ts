@@ -101,11 +101,11 @@
 // once from `unbound` (a failed attempt closes the socket); `listen` once
 // from `unbound` (implicit wildcard-ephemeral bind) or `bound`;
 // `send`/`receive` once each, only when `connected`, and their failures
-// NEVER throw — `send`'s error channel is its returned future (amendment
-// A12: the async method's promise IS the future source) and `receive`'s
-// is the future half of its tuple, resolved as result values. `listen`
-// returns the perpetual accept stream, whose elements are connected
-// `tcp-socket` resources (amendment A13: un-taken elements are destroyed
+// NEVER throw — `send`'s error channel is its returned future (embedder-api.md
+// §"Streams and futures": the async method's promise IS the future source)
+// and `receive`'s is the future half of its tuple, resolved as result values.
+// `listen` returns the perpetual accept stream, whose elements are connected
+// `tcp-socket` resources (§"Streams and futures": un-taken elements are destroyed
 // at teardown, closing their connections); per-connection accept failures
 // are skipped, listener-fatal ones end the stream. Stream teardown
 // follows the WIT's shared-ownership note: the OS socket closes only when
@@ -117,8 +117,8 @@
 // failures while consuming `send`'s stream (a peer trap) are NOT socket
 // errors: they propagate as producer failures on the host-failure channel.
 //
-// `listen` is SUSPENDING (embedder-api A1/A2 — the wasi:io `block`
-// kernel): node defers the OS bind one event-loop turn, so `listen` parks
+// `listen` is SUSPENDING (embedder-api.md §"The WASI parking kernel" —
+// the wasi:io `block` kernel): node defers the OS bind one event-loop turn, so `listen` parks
 // the calling guest frame for that tick and returns fully settled — real
 // ephemeral addresses from `get-local-address`, real error codes
 // (`address-in-use`) from a failed bind. Guests that link `listen`

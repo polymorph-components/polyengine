@@ -1,27 +1,24 @@
 // `wasi:io@0.2` — error, poll, streams (contracts/embedder-api.md
 // §"WASI examination").
 //
-// THE PARKING KERNEL. `pollable.block()`, `poll()` and `blocking-*` are
-// sync WIT functions that must genuinely wait — the one p2 idiom that
-// fights a JS host. This package used to ship always-ready stubs (the
-// retired "three-tier strategy", grounded in C0 finding #6: no consumer
-// leg ever called a pollable method) with real parking documented as
-// "never (c) in this package". Both halves of that ruling expired:
+// THE PARKING KERNEL (embedder-api.md §"The WASI parking kernel").
+// `pollable.block()`, `poll()` and `blocking-*` are sync WIT functions
+// that must genuinely wait — the one p2 idiom that fights a JS host.
 //
 //   * the polymorph-iroh upstream-iroh consumer class (unmodified
 //     iroh/tokio) parks its reactor in `poll()` with timer + socket
-//     pollables — the always-ready stubs don't degrade for such a guest,
-//     they LIVELOCK it (block() no-ops, reads return empty, the frame
+//     pollables — an always-ready stub wouldn't degrade for such a guest,
+//     it would LIVELOCK it (block() no-ops, reads return empty, the frame
 //     never suspends, so the event loop never turns and no host pump can
 //     ever make progress);
-//   * the runtime's suspending-import machinery (embedder-api.md A1/A2)
-//     made real parking a per-declaration capability with graceful
-//     degradation, so the kernel is ALWAYS ON rather than an opt-in
-//     profile: on engines without JSPI, `chooseMode` falls back to plain
-//     and everything behaves like the old stubs until a guest genuinely
-//     parks — which then raises a clean `NeedsJspi` at the park site
-//     instead of livelocking. Embedders wanting guaranteed-plain
-//     instantiation pass `jspi: false`.
+//   * the runtime's suspending-import machinery (embedder-api.md
+//     §"Functions and async") makes real parking a per-declaration
+//     capability with graceful degradation, so the kernel is ALWAYS ON
+//     rather than an opt-in profile: on engines without JSPI, `chooseMode`
+//     falls back to plain and everything behaves like an always-ready stub
+//     until a guest genuinely parks — which then raises a clean
+//     `NeedsJspi` at the park site instead of livelocking. Embedders
+//     wanting guaranteed-plain instantiation pass `jspi: false`.
 //
 // Costs, deliberately confined: only the park-capable declarations are
 // marked (`block`, `poll`) — hot-path `read`/`check-write` stay plain —
@@ -36,15 +33,17 @@
 // wake pattern is polymorph-iroh's shim (promise-swap edge triggering).
 //
 // Streams: `read`/`check-write` stay plain (sync, never park), but the
-// `blocking-*` declarations are MARKED park-capable (amendment A14): the
+// `blocking-*` declarations are MARKED park-capable (embedder-api.md
+// §"The WASI parking kernel"): the
 // buffer-backed base impls below always take the sync fast path, while
 // the genuinely-async impls — `FedInputStream`/`SinkOutputStream` below,
 // serving cli-stdio's host stdin/stdout and filesystem-web's OPFS files,
 // where "blocking" cannot be served from a buffer — return a Promise and
 // park the frame. Marking follows the WIT declaration on the REGISTERED
-// class's prototype (A2: instance-level overrides change behavior, not
-// suspendability), which is what lets the duck-typed async streams park
-// through the resource types registered here.
+// class's prototype (embedder-api.md §"Functions and async" —
+// "prototype declares, instances behave": instance-level overrides
+// change behavior, not suspendability), which is what lets the
+// duck-typed async streams park through the resource types registered here.
 
 import { defineBrand, defineRealmLocal, POLLABLE } from "@polyengine/protocol";
 import { suspending, ComponentException } from "@polyengine/protocol";
@@ -89,8 +88,9 @@ export class IoError {
  * A pollable over host-supplied readiness.
  *
  * WIT-facing surface: `ready()` and `block()` (the latter parks the
- * calling wasm frame when unready — @suspending, embedder-api.md A2:
- * the class prototype is the brand authority).
+ * calling wasm frame when unready — @suspending, embedder-api.md
+ * §"Functions and async": the class prototype is the brand authority
+ * ("prototype declares, instances behave").
  *
  * Host-facing surface: the constructor and `waitPromise()`. `ready` must
  * be cheap and side-effect-free; `wait` returns a promise that settles
@@ -111,7 +111,7 @@ export class Pollable {
   ) {
     this.#ready = ready;
     this.#wait = wait;
-    // A20 realm-local pill (contracts/embedder-api.md §"Realm boundaries
+    // realm-local pill (contracts/embedder-api.md §"Realm boundaries
     // and structured-clone-safe forms"; issue #131): stateful handles fail
     // loud at a raw structuredClone/postMessage instead of husking.
     defineRealmLocal(this);
@@ -168,7 +168,7 @@ export class Pollable {
   }
 }
 
-// A9 brand (contracts/embedder-api.md §"Module identity"): pollables cross
+// brand (contracts/embedder-api.md §"Module identity and @polyengine/protocol"): pollables cross
 // into host provider code, which may resolve a different @polyengine copy. The
 // brand makes them recognizable there; same-copy `instanceof` is unchanged
 // and stays the documented spelling (issue #83). `poll()` itself needs no
@@ -246,7 +246,7 @@ export class InputStream {
     return out;
   }
 
-  /** Park-capable (A14): the buffer-backed base never parks. */
+  /** Park-capable: the buffer-backed base never parks. */
   @suspending
   blockingRead(len: bigint): Uint8Array | Promise<Uint8Array> {
     return this.read(len);
@@ -256,7 +256,7 @@ export class InputStream {
     return BigInt(this.read(len).length);
   }
 
-  /** Park-capable (A14): the buffer-backed base never parks. */
+  /** Park-capable: the buffer-backed base never parks. */
   @suspending
   blockingSkip(len: bigint): bigint | Promise<bigint> {
     return this.skip(len);
@@ -295,7 +295,7 @@ export class OutputStream {
     this.#sink(contents);
   }
 
-  /** Park-capable (A14): the never-backpressured base never parks. */
+  /** Park-capable: the never-backpressured base never parks. */
   @suspending
   blockingWriteAndFlush(contents: Uint8Array): void | Promise<void> {
     this.write(contents);
@@ -305,7 +305,7 @@ export class OutputStream {
     if (this.#closed) throw closedError();
   }
 
-  /** Park-capable (A14): the never-backpressured base never parks. */
+  /** Park-capable: the never-backpressured base never parks. */
   @suspending
   blockingFlush(): void | Promise<void> {
     this.flush();
@@ -319,7 +319,7 @@ export class OutputStream {
     this.write(new Uint8Array(Number(len)));
   }
 
-  /** Park-capable (A14): the never-backpressured base never parks. */
+  /** Park-capable: the never-backpressured base never parks. */
   @suspending
   blockingWriteZeroesAndFlush(len: bigint): void | Promise<void> {
     this.writeZeroes(len);
@@ -331,7 +331,7 @@ export class OutputStream {
     return BigInt(chunk.length);
   }
 
-  /** Park-capable (A14): the never-backpressured base never parks. */
+  /** Park-capable: the never-backpressured base never parks. */
   @suspending
   blockingSplice(src: InputStream, len: bigint): bigint | Promise<bigint> {
     return this.splice(src, len);
@@ -358,7 +358,7 @@ export type ByteSink = (chunk: Uint8Array) => void | Promise<void>;
  * generic bridge from any `AsyncIterable<Uint8Array>` (host stdin, an
  * OPFS file read) to p2 stream semantics. `read` on an empty open stream
  * returns an empty list (p2's non-blocking contract), `blocking-read`
- * parks until bytes or EOF (A14/A2 mark relay — duck-typed against the
+ * parks until bytes or EOF (mark relay — duck-typed against the
  * registered `InputStream`, the marks relay from that prototype), and
  * EOF-with-drained-buffer is the `closed` stream-error. The feed pauses
  * past the high-water mark (no unbounded buffering).
@@ -448,7 +448,7 @@ export class FedInputStream {
     return new Uint8Array(0); // open, nothing available: p2 non-blocking read
   }
 
-  /** Parks (A14/A2 mark relay from the registered prototype). */
+  /** Parks (mark relay from the registered prototype). */
   @suspending
   blockingRead(len: bigint): Uint8Array | Promise<Uint8Array> {
     if (this.#buffered > 0 || this.#eof || this.#closed) return this.read(len);
@@ -490,7 +490,7 @@ export class FedInputStream {
  * budget: `check-write` reports the remaining permit (writing past it is
  * the guest's contract violation and traps via unbranded throw),
  * `blocking-flush`/`blocking-write-and-flush` park until the sink
- * drained everything (A14/A2 mark relay), `subscribe` wakes when budget
+ * drained everything (mark relay), `subscribe` wakes when budget
  * frees. A sink failure surfaces as the `last-operation-failed`
  * stream-error carrying an `IoError`.
  *
@@ -568,7 +568,7 @@ export class SinkOutputStream {
     this.#checkOpen();
   }
 
-  /** Parks until the sink drained everything (A14/A2 mark relay). */
+  /** Parks until the sink drained everything (mark relay). */
   @suspending
   blockingFlush(): void | Promise<void> {
     this.#checkOpen();

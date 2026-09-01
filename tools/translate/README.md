@@ -43,7 +43,8 @@ instantiation**, pinned by `translate_test.ts`.
 ## When to prefer runtime translation instead
 
 Components that arrive dynamically (plugin systems) can't pre-translate:
-use `instantiate({ componentBytes, translator }, …)` (embedder-api A3)
+use `instantiate({ componentBytes, translator }, …)` (contracts/embedder-api.md
+§"Module wiring and instantiation")
 with the translator asset, and let the runtime's artifact cache
 (`@polyengine/runtime/cache`) amortize repeat visits. The full delivery
 decision tree is in the design note on

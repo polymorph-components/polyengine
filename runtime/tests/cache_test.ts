@@ -1,4 +1,4 @@
-// Artifact cache tests (docs/architecture.md §10, M3-B dispatch).
+// Artifact cache tests (docs/architecture.md §10).
 //
 // Requires build artifacts (both produced from source in this repo), same
 // as runtime/tests/integration/e2e_hello_test.ts:

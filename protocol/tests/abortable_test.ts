@@ -1,11 +1,11 @@
 // The abort-on-discard marker (contracts/embedder-api.md §"Functions and
-// async", amendment A24; polyengine#241).
+// async"; polyengine#241).
 //
 // What is pinned HERE is the vocabulary half: the mark is a process-global
 // brand, so it is readable by any runtime copy and hand-rollable by a
 // zero-import host module, and the decorator's loud refusals hold. The
 // behavior the mark BUYS — a per-call `AbortSignal`, aborted a microtask after
-// an A23 discard — is pinned where the subtask machinery lives
+// a cancel-discard — is pinned where the subtask machinery lives
 // (runtime/tests/host_import_cancel_test.ts).
 
 import { assert, assertEquals, assertFalse, assertThrows } from "./assert.ts";
@@ -18,7 +18,7 @@ import {
   suspending,
 } from "../src/mod.ts";
 
-Deno.test("A24: abortable() marks in place and the brand reads back", () => {
+Deno.test("abortable() marks in place and the brand reads back", () => {
   const fn = (a: number) => a;
   const marked = abortable(fn);
   assert(marked === fn, "the value is marked in place");
@@ -32,7 +32,7 @@ Deno.test("A24: abortable() marks in place and the brand reads back", () => {
   assertFalse(isAbortable({ [Symbol.for("polyengine.abortable/1")]: true }));
 });
 
-Deno.test("A24: the mark is the process-global brand, not a module-local symbol", () => {
+Deno.test("the mark is the process-global brand, not a module-local symbol", () => {
   const fn = abortable(() => 1);
   assertEquals(
     (fn as unknown as Record<symbol, unknown>)[
@@ -50,7 +50,7 @@ Deno.test("A24: the mark is the process-global brand, not a module-local symbol"
   assert(isAbortable(hand));
 });
 
-Deno.test("A24: the mark is non-enumerable (invisible to imports-record walks)", () => {
+Deno.test("the mark is non-enumerable (invisible to imports-record walks)", () => {
   const fn = abortable(() => 1);
   assertEquals(Object.getOwnPropertySymbols(fn).length, 1);
   assertEquals(
@@ -62,7 +62,7 @@ Deno.test("A24: the mark is non-enumerable (invisible to imports-record walks)",
   assert(isAbortable(fn));
 });
 
-Deno.test("A24: @abortable marks instance and static methods", () => {
+Deno.test("@abortable marks instance and static methods", () => {
   class Provider {
     @abortable
     dial(): number {
@@ -79,7 +79,7 @@ Deno.test("A24: @abortable marks instance and static methods", () => {
   assert(isAbortable(Provider.connect));
 });
 
-Deno.test("A24: the decorator refuses non-method positions at class-definition time", () => {
+Deno.test("the decorator refuses non-method positions at class-definition time", () => {
   // A silent no-op would surface as a `signal` parameter that is forever
   // `undefined` — the host quietly never learning its work was renounced —
   // arbitrarily far from the mistake. Refuse at class-definition time instead.
@@ -92,7 +92,7 @@ Deno.test("A24: the decorator refuses non-method positions at class-definition t
   }
 });
 
-Deno.test("A24: the legacy experimentalDecorators convention is refused with guidance", () => {
+Deno.test("the legacy experimentalDecorators convention is refused with guidance", () => {
   // Under that convention the decorator receives the PROTOTYPE, not the
   // method: marking it would brand the wrong object AND corrupt the descriptor.
   const e = assertThrows(
@@ -111,7 +111,7 @@ Deno.test("abortable(): a non-function is refused", () => {
   );
 });
 
-Deno.test("A24: the three marks are independent — each predicate sees only its own", () => {
+Deno.test("the three marks are independent — each predicate sees only its own", () => {
   // Three different questions (calling convention / what a cancellation
   // answers / whether the host is told), so no predicate may see another's
   // mark, and marking one must not disturb the others.

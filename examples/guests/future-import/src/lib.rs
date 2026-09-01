@@ -18,7 +18,8 @@ impl Guest for Component {
 
     async fn run_send(n: u32) -> u32 {
         let (mut tx, reader) = wit_stream::new();
-        // Sync import: returns the future handle immediately (A12). The
+        // Sync import: returns the future handle immediately
+        // (contracts/embedder-api.md §"Streams and futures"). The
         // stream is written afterwards, from this same task.
         let done = send_sink(reader);
         let half = (n / 2) as usize;

@@ -18,15 +18,16 @@
 // are SYNC WIT functions. Against capture buffers they degenerate to
 // their non-blocking forms (io.ts base classes, sync fast path); against
 // a REAL stdin/stdout they must genuinely wait, which parks the calling
-// wasm frame through the suspending kernel (embedder-api A1/A2/A14 —
-// io.ts marks the blocking declarations on the REGISTERED stream
-// prototypes; these duck-typed stream impls override the behavior, and
-// per A2 the mark relays). Consequences: guests linking the blocking
-// leaves auto-select jspi mode on V8 engines, and on engines without
-// JSPI a genuine wait raises a clean `NeedsJspi` at the park site. The
-// `@0.3` track has no such dependence — its stdio is stream-shaped and
+// wasm frame through the suspending kernel (embedder-api.md §"The WASI
+// parking kernel" — io.ts marks the blocking declarations on the
+// REGISTERED stream prototypes; these duck-typed stream impls override
+// the behavior, and the mark relays). Consequences: guests linking the
+// blocking leaves auto-select jspi mode on V8 engines, and on engines
+// without JSPI a genuine wait raises a clean `NeedsJspi` at the park site.
+// The `@0.3` track has no such dependence — its stdio is stream-shaped and
 // async by construction (`read-via-stream` returns the tcp-receive
-// tuple; `write-via-stream`'s promise is the future source, A12).
+// tuple; `write-via-stream`'s promise is the future source, per
+// embedder-api.md §"Streams and futures").
 //
 // Semantics:
 //
@@ -168,7 +169,7 @@ export function cliStdio(options: CliStdioOptions = {}): CliStdio {
   const p2Stderr = new SinkOutputStream(stderrSink);
 
   // 0.3 write-via-stream: drain the guest's stream to the sink; the
-  // promise is the future source (A12).
+  // promise is the future source (embedder-api.md §"Streams and futures").
   const writeViaStream = (sink: ByteSink) => async (data: CliByteSource): Promise<CliIoResult> => {
     try {
       for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {

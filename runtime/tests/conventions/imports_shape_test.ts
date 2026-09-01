@@ -57,7 +57,7 @@ Deno.test({
       const logged: number[] = [];
       // The canonical form: a world-level bare import at the top level, an
       // interface import keyed by its verbatim WIT id. The interface provider
-      // is a CLASS INSTANCE (A2) whose `add` reads instance state, so a
+      // is a CLASS INSTANCE whose `add` reads instance state, so a
       // mis-bound receiver would show up as a wrong answer, not a pass.
       const imports = {
         log: (x: number) => void logged.push(x),
@@ -74,7 +74,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/a: A2 — an interface member's receiver is its provider",
+  name: "conventions/a: suspending mark — an interface member's receiver is its provider",
   ignore: !importsReady,
   fn: async () => {
     await transcript("a-interface-receiver", async (t) => {
@@ -107,7 +107,7 @@ Deno.test({
       const c = await instantiateFixture(testdata("imported-resource"), {
         "host:api/res": {
           // The resource CLASS sits at the resource's position — no rep
-          // token, no side table (§"Resources", C0 findings 1-3).
+          // token, no side table (§"Resources").
           R: Cell,
           make: (v: number) => new Cell(v),
           value: (r: Cell) => r.v,

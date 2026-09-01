@@ -37,8 +37,8 @@ export class Translator {
    * (docs/architecture.md §10): the wire envelope's `producer` block records
    * `{shimVersion, wasmtimeEnviron, features}`, which does NOT change when
    * the shim wasm is rebuilt from the same source versions (e.g. a local
-   * patch or a different toolchain producing different codegen) — see the
-   * M3-B dispatch. Digesting the actual bytes is the only sound cache key
+   * patch or a different toolchain producing different codegen). Digesting
+   * the actual bytes is the only sound cache key
    * component for translator identity.
    */
   readonly buildHash: string | null;

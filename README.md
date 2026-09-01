@@ -117,7 +117,7 @@ others depend on it by caret.)
 
 This project was previously named **deltic** and published under the
 `@deltic` JSR scope, which stops at `0.2.1`. The rename is a clean break,
-not an alias: `@polyengine/*` starts a fresh `0.1.0` line, the
+not an alias: `@polyengine/*` starts a fresh version line, the
 `Symbol.for("polyengine.*/1")` cross-copy brands do not match the old
 `deltic.*` ones, and the `POLYENGINE_*` environment variables replace their
 `DELTIC_*` spellings. Nothing bridges the two — port in one step.
@@ -152,8 +152,7 @@ gate for the rest of your graph, exempt the scope
 | [`examples/`](examples/) | runnable embedder examples: [hello-world](examples/hello-world/) (smallest complete embedding) and [kitchen-sink](examples/kitchen-sink/) (imports incl. suspending, resources both directions, value-shape tour) |
 | [`docs/architecture.md`](docs/architecture.md) | the system design and decisions, with rationale (§-numbered; cited from code comments) |
 | [`docs/security.md`](docs/security.md) | what the WASI filesystem/network confinement does and does not guarantee — **read before granting a guest host access** |
-| [`docs/milestones.md`](docs/milestones.md) | the verified milestone record (S0 → C3) |
-| [`docs/consumers.md`](docs/consumers.md) | the polymorph adoption track: jco blocker mapping, cutover evidence, in-repo ports |
+| [`docs/consumers.md`](docs/consumers.md) | the polymorph adoption track: standing conventions, pins, in-repo consumer artifacts |
 | [`docs/references.md`](docs/references.md) | canonical upstream links (spec, JSPI, wasmtime internals, toolchain pins) |
 | [`contracts/`](contracts/) | versioned interface contracts — [plan format](contracts/plan-format.md), [descriptor IR](contracts/descriptor-ir.md), [intrinsics](contracts/intrinsics.md), [digest](contracts/digest.md), [embedder API](contracts/embedder-api.md) |
 | [`AGENTS.md`](AGENTS.md) | development protocol and the full gate list |

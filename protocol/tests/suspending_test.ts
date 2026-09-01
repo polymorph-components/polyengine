@@ -1,17 +1,17 @@
-// The suspendability marker, moved here by amendment A9 (contracts/embedder-api.md
-// §"Functions and async", amendments A1/A2).
+// The suspendability marker (contracts/embedder-api.md
+// §"Functions and async").
 //
 // End-to-end park semantics stay pinned where the wasm lives
 // (runtime/tests/embedder/suspending_imports_test.ts, which imports through
 // the unchanged `@polyengine/runtime/embedder` re-export). What is pinned HERE is
-// the vocabulary half A9 owns: the mark is a process-global brand, so it is
+// the vocabulary half this module owns: the mark is a process-global brand, so it is
 // readable by any copy and hand-rollable, and the decorator's loud refusals
 // survived the move.
 
 import { assert, assertEquals, assertFalse, assertThrows } from "./assert.ts";
 import { anySuspendingImport, isSuspending, suspending } from "../src/mod.ts";
 
-Deno.test("A1: suspending() marks in place and the brand reads back", () => {
+Deno.test("suspending() marks in place and the brand reads back", () => {
   const fn = (a: number) => a;
   const marked = suspending(fn);
   assert(marked === fn, "the value is marked in place");
@@ -21,7 +21,7 @@ Deno.test("A1: suspending() marks in place and the brand reads back", () => {
   assertFalse(isSuspending(undefined));
 });
 
-Deno.test("A9: the mark is the process-global brand, not a module-local symbol", () => {
+Deno.test("the mark is the process-global brand, not a module-local symbol", () => {
   const fn = suspending(() => 1);
   assertEquals(
     (fn as unknown as Record<symbol, unknown>)[
@@ -37,7 +37,7 @@ Deno.test("A9: the mark is the process-global brand, not a module-local symbol",
   assert(isSuspending(hand));
 });
 
-Deno.test("A9: the mark is non-enumerable (invisible to imports-record walks)", () => {
+Deno.test("the mark is non-enumerable (invisible to imports-record walks)", () => {
   const fn = suspending(() => 1);
   assertEquals(Object.getOwnPropertySymbols(fn).length, 1);
   assertEquals(Object.propertyIsEnumerable.call(fn, Symbol.for("polyengine.suspending/1")), false);
@@ -46,7 +46,7 @@ Deno.test("A9: the mark is non-enumerable (invisible to imports-record walks)", 
   assert(isSuspending(fn));
 });
 
-Deno.test("A1: anySuspendingImport walks top level and one interface level", () => {
+Deno.test("anySuspendingImport walks top level and one interface level", () => {
   assertFalse(anySuspendingImport(undefined));
   assertFalse(anySuspendingImport({}));
   assertFalse(anySuspendingImport({ f: () => 1, i: { g: () => 1 } }));
@@ -55,7 +55,7 @@ Deno.test("A1: anySuspendingImport walks top level and one interface level", () 
   assert(anySuspendingImport({ i: null, j: { g: suspending(() => 1) } }));
 });
 
-Deno.test("A2: @suspending marks instance and static methods", () => {
+Deno.test("@suspending marks instance and static methods", () => {
   class Provider {
     @suspending
     read(): number {
@@ -72,7 +72,7 @@ Deno.test("A2: @suspending marks instance and static methods", () => {
   assert(isSuspending(Provider.probe));
 });
 
-Deno.test("A2: the decorator refuses non-method positions at class-definition time", () => {
+Deno.test("the decorator refuses non-method positions at class-definition time", () => {
   // A silent no-op would surface as a runtime `NeedsJspi` far from the mistake.
   for (const kind of ["getter", "setter", "field", "class", "accessor"]) {
     assertThrows(
@@ -83,7 +83,7 @@ Deno.test("A2: the decorator refuses non-method positions at class-definition ti
   }
 });
 
-Deno.test("A2: the legacy experimentalDecorators convention is refused with guidance", () => {
+Deno.test("the legacy experimentalDecorators convention is refused with guidance", () => {
   // Under that convention the decorator receives the PROTOTYPE, not the
   // method: marking it would brand the wrong object AND corrupt the descriptor.
   const e = assertThrows(

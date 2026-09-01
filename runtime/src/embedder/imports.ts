@@ -1,9 +1,9 @@
 // `requiredImports()` — the supported enumeration of a component's linkable
 // import leaves (contracts/embedder-api.md §"Module wiring and
-// instantiation"; C2 checklist item 2).
+// instantiation").
 //
-// C0 finding #8: `plan.imports` proved the right authority, and every embedder
-// that needed it hand-rolled the same walk (tools/smoke-c0/wasi_stub.ts).
+// `plan.imports` proved the right authority, and every embedder
+// that needed it would otherwise hand-roll the same walk.
 // Blessing it removes that. It is also this layer's own input: the facade
 // builds its import wrappers from exactly this list.
 

@@ -1,5 +1,5 @@
-// `sync()` — the A25 synchronous adapter for WIT-sync exports (contracts/
-// embedder-api.md §"Functions and async", amendment A25).
+// `sync()` — the sync() synchronous adapter for WIT-sync exports (contracts/
+// embedder-api.md §"Functions and async", §"Functions and async").
 //
 // Fixtures: `examples/guests/build/values.component.wasm` (plain sync/
 // fallible exports), `examples/guests/build/resources.component.wasm`

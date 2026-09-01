@@ -12,7 +12,7 @@
 // track gets its OWN resource class per `makeFilesystem` call — a guest
 // links one track and never mixes instances.
 //
-// ERROR SHAPES (the A10 family, and the reason this file exists twice
+// ERROR SHAPES (embedder-api.md §"Naming and casing", and the reason this file exists twice
 // over): 0.2's `error-code` is an ENUM — the err payload is the bare
 // kebab-case string ("no-entry") — while 0.3's is a VARIANT (it grew
 // `other(option<string>)`) — the payload is `{ kind: "no-entry" }`.
@@ -21,7 +21,7 @@
 // code passes through untouched; an unmapped throw would be a trap, so
 // the guards map everything.
 //
-// SYNC vs PARKING (A14). 0.2 descriptor methods are sync WIT functions.
+// SYNC vs PARKING (embedder-api.md §"The WASI parking kernel"). 0.2 descriptor methods are sync WIT functions.
 // A sync backend (node) returns plain values from every op — no parking,
 // callback-mode guests work untouched. An async backend (OPFS) returns
 // promises, so every backend-touching 0.2 method is wrapped `suspending`
@@ -299,7 +299,7 @@ export interface MetadataHashValue {
   upper: bigint;
 }
 
-/** 0.3 `result<_, error-code>` as a future/tuple VALUE (A12 shapes). */
+/** 0.3 `result<_, error-code>` as a future/tuple VALUE (embedder-api.md §"Streams and futures"). */
 export type FsResult03 =
   | { kind: "ok" }
   | { kind: "err"; value: { kind: FsErrorCode } };
@@ -460,7 +460,8 @@ export interface FilesystemFragment {
   imports: Record<string, unknown>;
 }
 
-/** 0.2 methods wrapped `suspending` for async backends (A14; module
+/** 0.2 methods wrapped `suspending` for async backends (embedder-api.md
+ * §"The WASI parking kernel"; module
  * header). Everything that touches the backend — stream CONSTRUCTION
  * stays plain (the streams themselves park via io.ts's marks). */
 const PARKED_02 = [
@@ -1062,7 +1063,7 @@ export function makeFilesystem<H>(
       return [source, done];
     }
 
-    /** The promise IS the future source (A12): drain the guest's stream. */
+    /** The promise IS the future source (embedder-api.md §"Streams and futures"): drain the guest's stream. */
     async writeViaStream(data: FsByteSource, offset: bigint): Promise<FsResult03> {
       try {
         requireWritable(err03);
@@ -1354,7 +1355,7 @@ export function makeFilesystem<H>(
   }
 
   // Async backends: mark the 0.2 track's backend-touching methods
-  // park-capable on the freshly-minted prototype (module header; A14).
+  // park-capable on the freshly-minted prototype (module header; embedder-api.md §"The WASI parking kernel").
   if (!backend.isSync) {
     const proto = Descriptor02.prototype as unknown as Record<string, (...a: never[]) => unknown>;
     for (const name of PARKED_02) {

@@ -182,11 +182,11 @@ consumed read-only — this is Track A's territory):
   multi-result array).
 - `get` (a core `global.get` wast action) has no component-level equivalent
   in this suite; declined honestly as `pending-runtime` rather than guessed.
-- capability gaps the M0 sync executor is expected to hit (async canonical
-  options, stream/future values, error-context — all M2) are recognized by
-  message substring (`CAPABILITY_MARKERS` in `runtime-executor.ts`) and
-  reported as skip(`pending-capability: ...`) — a precise subset of
-  `pending-runtime` naming the exact missing feature, for Track A hand-off,
+- capability gaps the sync executor is expected to hit (async canonical
+  options, stream/future values, error-context — the task scheduler's scope)
+  are recognized by message substring (`CAPABILITY_MARKERS` in
+  `runtime-executor.ts`) and reported as skip(`pending-capability: ...`) — a
+  precise subset of `pending-runtime` naming the exact missing feature,
   rather than a generic skip or a false failure.
 
 ### Value comparison
@@ -226,7 +226,7 @@ equivalences, not a permissive fuzzy match.
 `src/xfail.ts` is a checked-in `{file, line, reason}` list (line = the
 command's 1-based source line, stable across regen) for commands that fail
 today for a known, understood cause outside harness territory (a
-translator-shim encoding gap, an M0-vs-M2 semantic gap, etc.) — distinct
+translator-shim encoding gap, a sync-vs-task-scheduler semantic gap, etc.) — distinct
 from "unexpected regression". `tests/conformance_test.ts` treats a failure
 matched in `XFAIL` as `xfail` in the summary rather than `failed`, and it
 does not fail the surrounding `Deno.test`. It is *not* auto-verified against
@@ -237,11 +237,11 @@ flagged) — periodically diff the summary's `xfail` column against
 `test/async/` and `test/values/` are deliberately **not** triaged into
 `xfail.ts` — docs/architecture.md §7 excludes `test/values/` from parity scope entirely
 (wasmtime doesn't implement component `value` imports/exports), and
-`test/async/` is M2 scope; both are expected to show real failures against
-the M0 (sync-only) executor and are left as visible `failed` counts rather
-than suppressed, so the summary keeps signaling exactly how much of the
-suite the *current* milestone should be judged against (binary, linking,
-resources, validation).
+`test/async/` is task-scheduler scope; both are expected to show real
+failures against the sync-only executor and are left as visible `failed`
+counts rather than suppressed, so the summary keeps signaling exactly how
+much of the suite the current implementation should be judged against
+(binary, linking, resources, validation).
 
 ### Wire-up
 

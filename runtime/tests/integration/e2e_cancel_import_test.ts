@@ -51,7 +51,7 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Scoped per instantiation (per test), per the dispatch: A24's `abortable()`
+// Scoped per instantiation (per test), per the dispatch: abortable()'s `abortable()`
 // import must observe the abort exactly once per discard and never on a
 // natural-completion path, and giving each instance its own counter keeps
 // concurrently-run tests from bleeding into one another.
@@ -62,12 +62,12 @@ async function instantiate() {
     // JSPI involved.
     sleep: (ms: bigint) => delay(Number(ms)),
     // Sync-typed import wrapped in `suspending()` (contracts/embedder-api.md
-    // §"Functions and async" amendment A1): calling it parks the guest's
-    // wasm frame mid-activation until the Promise settles — the #239 A1
+    // §"Functions and async" §"Functions and async"): calling it parks the guest's
+    // wasm frame mid-activation until the Promise settles — the #239 suspending mark
     // park shape.
     block: suspending((ms: bigint) => delay(Number(ms))),
-    // A23 opt-out (contracts/embedder-api.md amendment A23): branding an
-    // async-typed import `deferCancel` keeps the pre-A23 run-to-completion
+    // cancellation discard opt-out (contracts/embedder-api.md §"Functions and async"): branding an
+    // async-typed import `deferCancel` keeps the pre-cancellation discard run-to-completion
     // behavior on cancel, per-declaration.
     "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
     // Interface-scoped sibling, exercising the raw executor's brand read at
@@ -75,7 +75,7 @@ async function instantiate() {
     timers: {
       "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
     },
-    // A24 (contracts/embedder-api.md amendment A24): branding an async-typed
+    // abortable() (contracts/embedder-api.md §"Functions and async"): branding an async-typed
     // import `abortable()` hands the host a per-call `AbortSignal` appended
     // after the WIT-declared `ms` param, aborted one microtask after a guest
     // cancellation discards the call. The listener clears the timer, so a
@@ -211,8 +211,8 @@ Deno.test(
     //   t=0:         sleep(hold) starts (S1), polled once so it is genuinely
     //                in flight.
     //   t=dropAfter: the task wakes and DROPS S1's future -> `subtask.cancel`.
-    //                `sleep` is undecorated, so this gets the A23 default
-    //                (contracts/embedder-api.md amendment A23): discard.
+    //                `sleep` is undecorated, so this gets the cancellation discard default
+    //                (contracts/embedder-api.md §"Functions and async"): discard.
     //                The subtask resolves CANCELLED_BEFORE_RETURNED at once
     //                and the cancel returns PROMPTLY, at t=dropAfter — it no
     //                longer waits for S1 to resolve naturally.
@@ -236,8 +236,8 @@ Deno.test(
       await assertPing(e, `poll ${i} after start-poll-drop's cancel point`);
     }
 
-    // Remaining guest time under A23: dropAfter + hold - 500 = 1100 - 500 =
-    // 600ms. The old pre-A23 wait (1650ms) still comfortably covers that —
+    // Remaining guest time under cancellation discard: dropAfter + hold - 500 = 1100 - 500 =
+    // 600ms. The old pre-cancellation discard wait (1650ms) still comfortably covers that —
     // over-waiting is fine, kept as-is rather than trimmed.
     await delay(1650);
   },
@@ -256,7 +256,7 @@ Deno.test(
     //   t=fast:  the fast sleep wins the select; the still-in-flight slow
     //            future (the loser) is dropped at the end of its scope ->
     //            `subtask.cancel`. `sleep` is undecorated, so this gets the
-    //            A23 default: discard, resolving CANCELLED_BEFORE_RETURNED
+    //            cancellation discard default: discard, resolving CANCELLED_BEFORE_RETURNED
     //            at once — the cancel returns PROMPTLY at t=fast, no longer
     //            waiting for the loser to resolve naturally.
     //   t=fast:  the task then runs its tail `sleep(slow)`.
@@ -270,15 +270,15 @@ Deno.test(
       await assertPing(e, `poll ${i} while start-race-drop is racing/dropping`);
     }
 
-    // 5 polls * 50ms = 250ms elapsed. Remaining guest time under A23:
-    // fast + slow - 250 = 1100 - 250 = 850ms. The old pre-A23 wait (1900ms)
+    // 5 polls * 50ms = 250ms elapsed. Remaining guest time under cancellation discard:
+    // fast + slow - 250 = 1100 - 250 = 850ms. The old pre-cancellation discard wait (1900ms)
     // still comfortably covers that — kept as-is rather than trimmed.
     await delay(1900);
   },
 );
 
 // ---------------------------------------------------------------------------
-// A23 (contracts/embedder-api.md amendment A23; polyengine#241): the
+// cancellation discard (contracts/embedder-api.md §"Functions and async"; polyengine#241): the
 // per-declaration cancel-discard opt-out, proved at the raw exec layer.
 // `cancel-inflight`/`cancel-defer`/`cancel-defer-ifc` are a straight-line
 // export (no detached task, no ping-polling): poll `sleep`/`sleep-defer`
@@ -291,7 +291,7 @@ Deno.test(
 const A23_SLOW = 1200;
 
 Deno.test(
-  "cancel-import A23: discard-by-default returns promptly, not after natural resolution",
+  "cancel-import cancellation discard: discard-by-default returns promptly, not after natural resolution",
   async () => {
     const { component } = await instantiate();
     const e = component.exports as Exports;
@@ -302,10 +302,10 @@ Deno.test(
 
     assertTrue(
       elapsed < 400,
-      `A23 regression: cancel-inflight(${A23_SLOW}) took ${elapsed}ms (>= 400ms) — ` +
+      `cancellation discard regression: cancel-inflight(${A23_SLOW}) took ${elapsed}ms (>= 400ms) — ` +
         `an undecorated import's cancel must discard and resolve ` +
         `CANCELLED_BEFORE_RETURNED promptly (contracts/embedder-api.md ` +
-        `amendment A23), not stall until the dropped subtask's host promise ` +
+        `§"Functions and async"), not stall until the dropped subtask's host promise ` +
         `settles naturally. A regression here means the discard path in ` +
         `createLoweredImport's async arm (runtime/src/exec/boundary.ts) has ` +
         `been lost and cancellation is back to run-to-completion for every ` +
@@ -320,7 +320,7 @@ Deno.test(
 );
 
 Deno.test(
-  "cancel-import A23: deferCancel() opt-out still runs the cancelled import to completion",
+  "cancel-import cancellation discard: deferCancel() opt-out still runs the cancelled import to completion",
   async () => {
     const { component } = await instantiate();
     const e = component.exports as Exports;
@@ -331,9 +331,9 @@ Deno.test(
 
     assertTrue(
       elapsed >= 800,
-      `A23 opt-out regression: cancel-defer(${A23_SLOW}) took only ${elapsed}ms ` +
+      `cancellation discard opt-out regression: cancel-defer(${A23_SLOW}) took only ${elapsed}ms ` +
         `— an import branded deferCancel() (protocol/src/defer_cancel.ts) must ` +
-        `keep the pre-A23 behavior: cancelling it answers BLOCKED and the ` +
+        `keep the pre-cancellation discard behavior: cancelling it answers BLOCKED and the ` +
         `guest waits for the natural result, so this export should not ` +
         `return before the host timer it dropped actually settles.`,
     );
@@ -346,7 +346,7 @@ Deno.test(
 );
 
 Deno.test(
-  "cancel-import A23: ping is healthy after both discard and deferCancel cancellations",
+  "cancel-import cancellation discard: ping is healthy after both discard and deferCancel cancellations",
   async () => {
     // A fresh instance isn't the point here — the point is that neither
     // cancellation path (discard, nor deferCancel-parked) leaves the store
@@ -365,7 +365,7 @@ Deno.test(
 );
 
 // ---------------------------------------------------------------------------
-// A24 (contracts/embedder-api.md amendment A24; polyengine#241): the
+// abortable() (contracts/embedder-api.md §"Functions and async"; polyengine#241): the
 // `abortable()` mark hands the host a per-call `AbortSignal`, aborted one
 // microtask after a guest cancellation discards the call — proved at the raw
 // exec layer against a real wit-bindgen guest.
@@ -376,7 +376,7 @@ Deno.test(
 const A24_SLOW = 1200;
 
 Deno.test(
-  "cancel-import A24: abortable() import observes the abort when its call is discarded",
+  "cancel-import abortable(): abortable() import observes the abort when its call is discarded",
   async () => {
     const { component, getAbortsObserved } = await instantiate();
     const e = component.exports as Exports;
@@ -387,41 +387,41 @@ Deno.test(
 
     assertTrue(
       elapsed < 400,
-      `A24 regression: cancel-abort(${A24_SLOW}) took ${elapsed}ms (>= 400ms) — ` +
+      `abortable() regression: cancel-abort(${A24_SLOW}) took ${elapsed}ms (>= 400ms) — ` +
         `an abortable()-branded import's cancel must still discard promptly ` +
-        `(A23), the same as an unmarked import; A24 only adds the signal.`,
+        `, the same as an unmarked import; abortable() only adds the signal.`,
     );
 
     // The abort is scheduled a microtask after the cancel built-in returns
-    // (contracts/embedder-api.md amendment A24), not synchronously inside
+    // (contracts/embedder-api.md §"Functions and async"), not synchronously inside
     // it — flush a few ticks before checking that the host actually
     // observed it. A regression here means the host never learned its
     // result was discarded and the dropped timer just kept running
-    // unaborted (the exact gap A24 closes over plain A23 discard).
+    // unaborted (the exact gap abortable() closes over plain cancellation discard discard).
     await delay(20);
     assertEq(
       getAbortsObserved(),
       1,
-      "A24 regression: the abortable()-branded import's AbortSignal never " +
+      "abortable() regression: the abortable()-branded import's AbortSignal never " +
         "fired after its subtask was discarded by the guest's cancellation " +
         "— cancel-import's `sleep-abort` should have had its AbortSignal " +
         "aborted exactly once.",
     );
 
     // The AbortError rejection this provokes is a late settlement on an
-    // already-cancelled subtask (A23's resolved-subtask guards) — it must
+    // already-cancelled subtask (cancellation discard's resolved-subtask guards) — it must
     // stay inert through the real composition, not surface as a store
     // failure that wedges a later call.
     await assertPing(e, "after cancel-abort's discard+abort");
 
     // Leak hygiene: the abort listener clears the timer on discard, so
-    // there is no stray `setTimeout` to outlive here (unlike A23's plain
+    // there is no stray `setTimeout` to outlive here (unlike cancellation discard's plain
     // discard, whose dropped timer keeps running to natural completion).
   },
 );
 
 Deno.test(
-  "cancel-import A24: abortable() import run to natural completion never aborts",
+  "cancel-import abortable(): abortable() import run to natural completion never aborts",
   async () => {
     const { component, getAbortsObserved } = await instantiate();
     const e = component.exports as Exports;
@@ -438,7 +438,7 @@ Deno.test(
     assertEq(
       getAbortsObserved(),
       0,
-      "A24 regression: the abortable()-branded import's AbortSignal fired " +
+      "abortable() regression: the abortable()-branded import's AbortSignal fired " +
         "on a call that ran to natural completion with no guest " +
         "cancellation anywhere — the signal must fire only on discard.",
     );

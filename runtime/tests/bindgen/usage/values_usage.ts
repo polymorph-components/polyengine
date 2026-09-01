@@ -1,7 +1,7 @@
 // Hand-written usage sample for the generated `values.ts` facade — pins
 // every host-value shape mapping (records, variants, enums, flags, options
 // incl. nested boxing, results-as-function-result, tuples, lists) against
-// the generated C1-convention types (contracts/embedder-api.md value
+// the generated bindgen types (contracts/embedder-api.md value
 // mapping table), at `deno check` time.
 
 import { bind } from "../generated/values.ts";

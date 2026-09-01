@@ -1,4 +1,5 @@
-// C0 finding R-1 — minimal repro: a host-side read of a guest stream hangs
+// Finding R-1 (host-pump starvation of pendingHostCalls) — minimal repro: a
+// host-side read of a guest stream hangs
 // when the guest's writer task is parked on a Promise-returning host import
 // and no export call is in flight.
 //

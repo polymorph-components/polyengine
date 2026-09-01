@@ -1,11 +1,11 @@
 // The embedder-facing error model (contracts/embedder-api.md §"Error model").
 //
-// The canonical definitions live in `@polyengine/protocol` since amendment A9 —
+// The canonical definitions live in `@polyengine/protocol` since §"Module identity and @polyengine/protocol" —
 // this module is the unchanged import path for them (every existing
 // `from "./errors.ts"` / `@polyengine/runtime/embedder` import keeps working) plus
 // the runtime-local `NameCollisionError`, which never crosses a copy boundary
 // (it is raised while BUILDING a facade, before any value exists) and
-// therefore carries no brand: the A9 table's omissions are deliberate.
+// therefore carries no brand: the module identity table's omissions are deliberate.
 //
 // Recognition at the runtime's own boundaries is by BRAND, not class: use the
 // `is*` predicates re-exported below, never `instanceof`, for any value that

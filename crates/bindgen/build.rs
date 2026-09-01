@@ -37,8 +37,8 @@ fn main() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
     let runtime_manifest = Path::new(&manifest_dir).join("../../runtime/deno.json");
     // Protocol's version is independent of the lockstep runtime version
-    // (contracts/embedder-api.md §"The host-ABI surface and its version",
-    // amendment A22: "protocol's version is the host-ABI version") — the
+    // (contracts/embedder-api.md §"The host-ABI surface and its version":
+    // "protocol's version is the host-ABI version") — the
     // generated bindings' `@polyengine/protocol` import pins protocol's own
     // manifest, never the runtime's.
     let protocol_manifest = Path::new(&manifest_dir).join("../../protocol/deno.json");

@@ -1,5 +1,5 @@
 // The 0.3 async canonical built-ins, as host trampolines
-// (contracts/intrinsics.md §B "M2"): task.{return,cancel},
+// (contracts/intrinsics.md §B): task.{return,cancel},
 // backpressure.{set,inc,dec}, waitable-set.{new,wait,poll,drop},
 // waitable.join, subtask.{drop,cancel} and thread.yield.
 //
@@ -120,8 +120,9 @@ export function createTaskReturn(
     //
     // Plan v3 enables this for FACT cross-component tasks too: the callee
     // task's declared result type is now resolvable from the raw
-    // `TypeTupleIndex` `prepare-call` carried (contracts/plan-format.md v3
-    // amendment 3, wired in fact_calls.ts). It remains skipped for the one
+    // `TypeTupleIndex` `prepare-call` carried (the task-return trampoline's
+    // raw `results` key + interned `resultType`, contracts/plan-format.md
+    // schema; wired in fact_calls.ts). It remains skipped for the one
     // case v3 does not answer — a callee the plan maps no `task.return`
     // tuple for, where `ft.results` is a placeholder rather than a
     // declaration (`factResultTypesKnown === false`); comparing against a
@@ -544,7 +545,7 @@ export function createSubtaskCancel(
         // cancel sits parked non-cancellably, which is determinate, so the
         // genuine BLOCKED answer is still immediate. Host-import subtasks
         // carry no callee task, and their state cannot be mid-hop: the
-        // default (A23) onCancel resolves them before this branch is ever
+        // default onCancel resolves them before this branch is ever
         // reached, and a `deferCancel` import's no-op onCancel leaves them
         // simply unresolved — either way the pre-jspi immediate answer
         // stands.
@@ -664,7 +665,7 @@ function unpackEvent(
   return event;
 }
 
-// Structural `ValType` equality (the C2-D bugfix) moved to cabi/types.ts
+// Structural `ValType` equality (the circular-structure bugfix) moved to cabi/types.ts
 // (`valTypesEqual`) when the #18 tls smoke found its stream-element sibling;
 // the contract note lives there now.
 

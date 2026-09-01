@@ -44,7 +44,7 @@ function upperFirst(s: string): string {
  *
  * The Component Model mangles resource membership into the name itself
  * (`[constructor]counter`, `[method]counter.increment`,
- * `[static]counter.merge`); C0 finding #2 was embedders hand-transcribing
+ * `[static]counter.merge`); embedders would otherwise hand-transcribe
  * these. Assembling and disassembling them is a runtime obligation.
  */
 export type LeafName =

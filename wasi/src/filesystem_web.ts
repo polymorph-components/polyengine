@@ -13,8 +13,9 @@
 // for the enforcement site: it is the provider, not this backend).
 //
 // ASYNC BY CONSTRUCTION: every OPFS op returns a promise, so the 0.2
-// track's sync WIT descriptor methods are marked park-capable (A14, on
-// the per-call class prototypes — fs_provider.ts): a p2 guest that
+// track's sync WIT descriptor methods are marked park-capable (embedder-api.md
+// §"The WASI parking kernel", on the per-call class prototypes — fs_provider.ts):
+// a p2 guest that
 // touches the filesystem parks through the suspending kernel and needs
 // JSPI; on engines without it a genuine wait raises `NeedsJspi` at the
 // park site. The 0.3 track is async in WIT and needs no parking. (The

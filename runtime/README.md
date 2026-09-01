@@ -6,7 +6,7 @@ today:
 1. the **canonical-ABI v1 value interpreter** (`src/cabi/`) with the
    **definitions.py test ports** (`tests/`): docs/architecture.md §11 row 2, feeding §7
    (canonical-ABI decisions) and §8 (the descriptor-IR interpreter);
-2. the **M0 plan executor on the task-model skeleton** (`src/plan/`,
+2. the **plan executor on the task-model skeleton** (`src/plan/`,
    `src/task/`, `src/exec/`, `src/intrinsics/`, `src/shim/`): loads the
    translator shim's plan v0 (contracts/plan-format.md), instantiates and
    links the component, and routes every lifted-export call through
@@ -29,11 +29,11 @@ src/cabi/          v1 reference interpreter, mirroring definitions.py sections
   values.ts        lift_flat_values / lower_flat_values (max_flat spilling)
 src/plan/          plan v0 wire types (format.ts) + loader/validator (loader.ts)
 src/task/          Task / Thread / Subtask / ComponentInstanceState + sync
-                   driving loop (the M2 scheduler's spine; docs/architecture.md §6)
+                   driving loop (the scheduler's spine; docs/architecture.md §6)
 src/exec/          plan executor (executor.ts: initializers, CoreDef/arg
                    resolution, export surface) + host boundary (boundary.ts:
                    canon_lift/canon_lower sync paths, LiveMemory grow-safe views)
-src/intrinsics/    host trampolines (contracts/intrinsics.md): M0 subset
+src/intrinsics/    host trampolines (contracts/intrinsics.md): core subset
                    implemented, milestone-aware instantiate-time failures
 src/shim/          client for the translator shim's wasm32 C-ABI + envelope
 tests/             deno test ports (table-driven; fixtures where generated)

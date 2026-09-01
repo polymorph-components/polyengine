@@ -1,7 +1,7 @@
 // FACT start-call unwind: lender scopes must not leak on the non-success
 // exits (issue #91).
 //
-// Authority: contracts/intrinsics.md v0.2 amendment 2 — on a trap escaping a
+// Authority: contracts/intrinsics.md §A's trap-unwind/lender-release obligation — on a trap escaping a
 // FACT bracket the host unwinds sync-call scopes (releasing lenders) because
 // this runtime deliberately supports post-trap re-entry on the caller side,
 // where definitions.py kills the whole store instead. The lent handles belong

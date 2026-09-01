@@ -1,10 +1,10 @@
 // ROW (c) — LIFTING (contracts/embedder-api.md §"Streams and futures").
 // What the host RECEIVES: lifted `stream<T>`/`future<T>` arrive branded (the
 // protocol predicates recognize them — never `instanceof` against an engine
-// class, which A9 removed from the contract); `stream<u8>` chunks are
+// class, which module identity removed from the contract); `stream<u8>` chunks are
 // `Uint8Array` through both `read(max)` and async iteration while every other
-// element type chunks as `T[]` (the `Chunk<T>` rule, A5); an export whose WIT
-// result is `future<T>` returns an EAGER handle, not `Promise<Future>` (C2);
+// element type chunks as `T[]` (the `Chunk<T>` rule, stream/future round-trip); an export whose WIT
+// result is `future<T>` returns an EAGER handle, not `Promise<Future>`;
 // and awaiting a future whose write end dropped without a value rejects
 // `DroppedError` — "no value, ever" discriminated from `future<void>`'s
 // legitimate `undefined`.
@@ -102,7 +102,7 @@ Deno.test({
 const futureUserReady = await haveFixture(guest("future-user"));
 
 Deno.test({
-  name: "conventions/c: C2 — a future<T> RESULT is an eager handle, not a Promise",
+  name: "conventions/c: a future<T> RESULT is an eager handle, not a Promise",
   ignore: !futureUserReady,
   fn: async () => {
     await transcript("c-lift-future-eager-handle", async (t) => {
@@ -135,9 +135,9 @@ Deno.test({
         drop(): void;
       };
       // Reach quiescence with one unrelated task, so the producing call has
-      // completed and the handle's host end exists (A16's deferred rule).
+      // completed and the handle's host end exists (handle disposal's deferred rule).
       await t.attempt("unrelated-call", () => c.exports.doubleFuture(1));
-      // A16: `drop()` is a plain handle operation — total and silent.
+      // handle disposal: `drop()` is a plain handle operation — total and silent.
       f.drop();
       t.note("dropped");
       // "No value, ever" is a different outcome from `future<void>`'s

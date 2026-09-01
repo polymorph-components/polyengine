@@ -412,7 +412,7 @@ async function main(): Promise<void> {
     assertEq(await clientGot, [4, 5], "tcp listen: echo reached the client");
     accepted[Symbol.dispose]();
 
-    // A13 producer cancellation: retire the parked accept loop.
+    // Producer cancellation (embedder-api.md §"Streams and futures"): retire the parked accept loop.
     stream.cancel();
     for await (const s of stream) s[Symbol.dispose]();
     socket[Symbol.dispose]();

@@ -230,7 +230,8 @@ Deno.test("fs-node 0.3: stream tuples and variant error shapes", async () => {
   const { root03 } = setup();
   const f = await root03.openAt(FOLLOW, "three.txt", { create: true }, RW);
 
-  // write-via-stream: the promise IS the future (A12).
+  // write-via-stream: the promise IS the future (embedder-api.md §"Streams
+  // and futures").
   const wrote = await f.writeViaStream(
     (async function* () {
       yield new TextEncoder().encode("stream");

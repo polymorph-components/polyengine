@@ -31,7 +31,7 @@ build:
     cargo build --workspace
 
 # The translator shim wasm: every Deno suite below loads this artifact.
-# Size-tuned (S0's figures: ~1.8 MB raw / ~0.5 MB gzip, vs 3.8 MB stock
+# Size-tuned (~1.8 MB raw / ~0.5 MB gzip, vs 3.8 MB stock
 # release): the shim is a shipped asset (issue #16), so the wasm build opts
 # into z/lto/abort via scoped env vars — the workspace [profile.release]
 # stays stock so testgen/bindgen keep fast builds and fast corpus runs.
@@ -59,7 +59,8 @@ examples: shim
     ./examples/hello-world/run.sh
     ./examples/kitchen-sink/run.sh
 
-# Build-time translation CLI (tools/translate, embedder-api A4): translate
+# Build-time translation CLI (tools/translate, contracts/embedder-api.md
+# §"Module wiring and instantiation"): translate
 # to an envelope, reconstitute artifacts without a translator, verify the
 # mismatched-pair refusal.
 test-translate: shim
@@ -80,8 +81,8 @@ test-rust:
 test-runtime: shim fixtures corpus
     cd runtime && deno task check && deno task test
 
-# The lift/lower CONVENTIONS suite alone (contracts/embedder-api.md amendment
-# A22): the executable definition of the host ABI, transcripts compared against
+# The lift/lower CONVENTIONS suite alone (contracts/embedder-api.md
+# §"The host-ABI surface and its version"): the executable definition of the host ABI, transcripts compared against
 # the committed goldens under `runtime/tests/conventions/golden/`. It lives
 # under runtime/tests/, so `test-runtime` already runs it — this is the focused
 # lane for working on the host boundary. Updating a golden asserts a host-ABI
@@ -90,7 +91,8 @@ test-runtime: shim fixtures corpus
 test-conventions: shim fixtures
     cd runtime && deno test --allow-read=..,/tmp --allow-write=/tmp --allow-env=POLYENGINE_SCHED_SEED tests/conventions/
 
-# The brand vocabulary (contracts/embedder-api.md amendment A9): dependency-
+# The brand vocabulary (contracts/embedder-api.md §"Module identity and
+# @polyengine/protocol"): dependency-
 # free, so this is the one Deno suite that needs no build artifacts at all.
 test-protocol:
     cd protocol && deno task test
@@ -114,7 +116,8 @@ test-ct-runner: shim fixtures
 # The embedder-bundle release-asset gate (polyengine-embedder.mjs:
 # build + shape checks for tools/release-bundle/entry.ts).
 # `dual_copy_test.ts` rides here because the bundle IS the second runtime copy
-# (amendment A9 / issue #83): it is the only way to get two genuinely distinct
+# (contracts/embedder-api.md §"Module identity and @polyengine/protocol";
+# issue #83): it is the only way to get two genuinely distinct
 # copies in one process — query-string cache-busting does not, since relative
 # imports below the entry resolve to the same cached modules.
 test-bundle: shim
@@ -191,7 +194,8 @@ npm-build: shim
 # guest) and type-check the SHIPPED .d.ts from outside. Catches what
 # `publish-check` cannot — npm `exports` subpaths, dependency edges, tarball
 # file lists — and above all pins the single-copy property: cross-package
-# imports must be npm dependencies, never inlined source (embedder-api A9).
+# imports must be npm dependencies, never inlined source (contracts/embedder-api.md
+# §"Module identity and @polyengine/protocol").
 # Runs under the PINNED Node (tools/shell/pins.json), like test-sockets-node.
 test-npm: npm-build fixtures
     deno run -A tools/shell/fetch.ts node-pinned
@@ -199,7 +203,7 @@ test-npm: npm-build fixtures
     # Stamp-path leg: a throwaway build with `--version` proves the
     # prerelease stamp (release.yml's pre-<shorthash> path) hits the
     # lockstep four exactly while leaving protocol on its own manifest
-    # version (A10). No packing/install — fast. Output goes under
+    # version (contracts/embedder-api.md §"Version canonicalization"). No packing/install — fast. Output goes under
     # .shell-cache, never the repo's npm/ dir, and is removed after.
     rm -rf .shell-cache/npm-stamp-check
     deno run -A tools/npm-build/build.ts --version 9.9.9-pre.gtest --out .shell-cache/npm-stamp-check
@@ -295,7 +299,8 @@ browsers:
 # filesystem-web against the REAL Origin Private File System (the unit
 # suite runs an in-memory fake — Deno has no navigator.storage): the
 # direct descriptor battery plus the fs-probe guest parking through
-# A14/JSPI over real async storage. tools/browser/opfs-smoke.ts.
+# the WASI parking kernel (contracts/embedder-api.md §"The WASI parking
+# kernel") over real async storage. tools/browser/opfs-smoke.ts.
 # `--realm worker|shared-worker` (issue #129) runs the battery inside that
 # realm — the OPFS × JSPI-parking × worker-realm intersection the first
 # consumer (polyvisor G5) actually ships.
@@ -311,7 +316,7 @@ smoke-opfs lane *args: shim fixtures
 smoke-tls: shim
     deno run --allow-read --allow-env=POLYMORPH_ROOT,WOSH_ROOT tools/smoke-tls/run.ts --exec
 
-# The C0 smoke legs (tools/smoke-c0/REPORT.md).
+# The consumer smoke legs (tools/smoke-c0/).
 smoke-c0: shim
     cd tools/smoke-c0 && deno task leg1 && deno task leg2 && deno task leg3 && deno task leg4
 

@@ -1,6 +1,6 @@
 // The conventions facade: `instantiate(artifacts, imports, opts)`.
 //
-// DESIGN (orchestrator ruling, C2): the facade is **runtime-driven**. Every
+// DESIGN: the facade is **runtime-driven**. Every
 // camelCase name, every resource class and every import wrapper is built here,
 // at instantiate time, from the loaded plan's type tables — the plan already
 // carries names, kinds and function types. Bindgen emits compile-time *types*
@@ -65,8 +65,8 @@ import { markSyncCallable, syncPayloadOf } from "./sync.ts";
  * wrapper.
  *
  * Every `#dispatcher` arm re-wraps the embedder's function in a closure, so a
- * brand left on the original is INVISIBLE to `buildLoweredImport` — for A1
- * that surfaced as a `NeedsJspi`, for A23 (`deferCancel()`) it would be a
+ * brand left on the original is INVISIBLE to `buildLoweredImport` — for suspending mark
+ * that surfaced as a `NeedsJspi`, for cancellation discard (`deferCancel()`) it would be a
  * silently discarded commit, which is precisely the failure the brand exists
  * to prevent. Both marks are relayed by the same helper so a third one cannot
  * be added to one arm and forgotten in the other three.
@@ -100,7 +100,7 @@ export interface ComponentArtifacts {
 
 /**
  * Untranslated alternative to `ComponentArtifacts` (embedder-api.md
- * amendment A3): hand `instantiate` the raw component plus the translator
+ * §"Module wiring and instantiation"): hand `instantiate` the raw component plus the translator
  * and it runs the translation internally — the pipeline collapses to
  * bytes-in, instance-out.
  *
@@ -125,7 +125,7 @@ export type InstantiateSource = ComponentArtifacts | UntranslatedArtifacts;
  * single-file JSON emitted by build-time translation (`tools/translate`,
  * or `Translator.translateRaw`), carrying the plan and the FACT adapter
  * modules. The production deploy set is `component.wasm` + its envelope +
- * the runtime: no translator ships (embedder-api.md amendment A4).
+ * the runtime: no translator ships (contracts/embedder-api.md §"Module wiring and instantiation").
  *
  * Pure and fetch-agnostic: acquire the two blobs however the platform
  * likes (HTTP, fs, bundler asset) and hand them over. The envelope embeds
@@ -147,7 +147,7 @@ export function artifactsFromEnvelope(
  * guest code runs: generated `instantiate` wrappers call this, verify the
  * plan, and only then delegate to `instantiate` below.
  * @internal — bindgen-generated code only — the digest handshake needs the
- * plan before instantiating (amendment A17).
+ * plan before instantiating (§"Module wiring and instantiation").
  */
 export async function resolveArtifacts(
   src: InstantiateSource,
@@ -237,7 +237,7 @@ export async function instantiate(
 }
 
 /**
- * Alias matching the C2 dispatch's spelling.
+ * Alias matching bindgen's generated import spelling.
  * @internal — alias kept for bindgen-generated code only; hosts call
  * `instantiate`.
  */
@@ -292,7 +292,7 @@ class Facade {
     // guest `start` function can resolve resource types normally.
     //
     // One resource TYPE can be reached through several resource TABLES
-    // (plan-format.md C2 amendment #1: a type export's index is a table
+    // (plan-format.md "Type exports index into `resourceTables`": a type export's index is a table
     // index, and the executor sets impl/dtor on every table whose `resource`
     // matches), hence index-keyed bindings with tokens as aliases.
     artifacts.plan.resourceTables.forEach((table, i) => {
@@ -303,8 +303,8 @@ class Facade {
     this.leaves = requiredImports(this.loaded);
     // A component that imports a resource TYPE cannot be wired without
     // `plan.importedResources`: that table is the only thing mapping the
-    // import back to a `ResourceIndex` (plan-format.md v0.1 amendment #2 /
-    // v0.2). Without it every own/borrow of that type would fail late, deep
+    // import back to a `ResourceIndex` (the `importedResources` field,
+    // contracts/plan-format.md schema). Without it every own/borrow of that type would fail late, deep
     // inside a call, as an unattributable `InvalidHandleError`.
     const resourceLeaves = this.leaves.filter((l) => l.kind === "resource");
     if (
@@ -405,7 +405,7 @@ class Facade {
    * construction — before instantiation, and therefore before a guest `start`
    * function can call an import that carries an `own`/`borrow` of one.
    * Imported resources occupy `ResourceIndex` 0..n-1 in `importedResources`
-   * order (plan-format.md v0.1 amendment #2 / v0.2).
+   * order (the `importedResources` field, contracts/plan-format.md schema).
    */
   #bindHostResources(): void {
     const importedResources = this.artifacts.plan.importedResources ?? [];
@@ -483,7 +483,7 @@ class Facade {
         return rep;
       },
       dropOwn(rep, t) {
-        // A13: a lowered `own` the guest will never take (an un-taken
+        // resource stream: a lowered `own` the guest will never take (an un-taken
         // stream element). Destroy it exactly as a guest-side drop would:
         // host-implemented R runs the instance's [Symbol.dispose] through
         // the registry; guest-implemented R runs the guest dtor via the
@@ -606,7 +606,7 @@ class Facade {
       }
       return impl(...raw);
     };
-    // A1/A23 brand relay, layer 2 of 2 (see #dispatcher): the executor reads
+    // suspending mark/cancellation discard brand relay, layer 2 of 2 (see #dispatcher): the executor reads
     // the brands off this wrapper, which is what lands in its hostImports
     // record.
     return relayMarks(dispatch, wrapper);
@@ -663,11 +663,11 @@ class Facade {
             `${describe(fn)}); expected '${camelCase(m.name)}'`,
         );
       }
-      // A1/A23: the `suspending()` and `deferCancel()` brands ride the
+      // suspending mark/cancellation discard: the `suspending()` and `deferCancel()` brands ride the
       // dispatch closure so #wrapLeaf can relay them onto the value the
       // executor actually receives.
       //
-      // A2 receiver rule: an interface member is invoked with its containing
+      // suspending mark receiver rule: an interface member is invoked with its containing
       // object as receiver (matching the static arm's `apply(cls)`), so a
       // class INSTANCE is a fully supported spelling of an interface
       // provider — methods reading instance state work. A world-level bare
@@ -695,12 +695,12 @@ class Facade {
     switch (m.form) {
       case "constructor":
         // Never markable: guest-driven construction of a host resource is
-        // synchronous by the C2 amendment, and stage-3 reserves no
+        // synchronous (contracts/embedder-api.md §"Functions and async"), and stage-3 reserves no
         // constructor-decorator position.
         // deno-lint-ignore no-explicit-any
         return (args) => new (cls as any)(...args);
       case "method": {
-        // A2: the brand authority for an instance method is the CLASS
+        // suspending mark: the brand authority for an instance method is the CLASS
         // PROTOTYPE, read at wrap time — the Suspending-wrap decision is
         // per-declaration and taken at instantiation, before any instance
         // exists. Instance-level method overrides do not change
@@ -712,7 +712,7 @@ class Facade {
         // `URLSearchParams.prototype.size`) brand-checks its receiver, and a
         // raw `prototype[member]` read runs it with `this` = the prototype —
         // an engine TypeError at instantiation, even for guests that never
-        // call the member. Only a data-property function can carry the A2
+        // call the member. Only a data-property function can carry the suspending mark
         // mark (stage-3 method decorators install data properties), so an
         // accessor-backed member yields no wrap-time function here and stays
         // a call-time concern for the per-call lookup below.
@@ -741,7 +741,7 @@ class Facade {
               `'${camelCase(m.member)}'`,
           );
         }
-        // A2: a static's brand sits on the function itself (a stage-3
+        // suspending mark: a static's brand sits on the function itself (a stage-3
         // static-method decorator marks the function value), readable here
         // at wrap time.
         const dispatch: (args: unknown[]) => unknown = (args) =>
@@ -782,7 +782,7 @@ class Facade {
       return fromHost(v, resultType, o);
     };
     const fail = (e: unknown, args: unknown[]): ComponentValue => {
-      // Brand, not class (amendment A9): a `ComponentException` thrown by a host module
+      // Brand, not class (§"Module identity and @polyengine/protocol"): a `ComponentException` thrown by a host module
       // that resolved a DIFFERENT runtime copy — or hand-rolled with the
       // registry symbol — is the same value here (issue #83).
       if (isComponentException(e) && isResult) {
@@ -809,9 +809,9 @@ class Facade {
         );
       }
       // The #83 signature: in a graph with several copies, an UNBRANDED throw
-      // is usually a pre-A9 copy's `ComponentException` (its brand rode class identity,
+      // is usually a pre-module identity copy's `ComponentException` (its brand rode class identity,
       // which does not survive the copy boundary). Say so rather than leaving
-      // the latent puzzle that motivated amendment A9.
+      // the latent puzzle that motivated §"Module identity and @polyengine/protocol".
       const census = copyCensus();
       throw new Trap(
         `${where} threw ${describeThrow(e)}. An unbranded throw from a host ` +
@@ -820,7 +820,7 @@ class Facade {
           (census === ""
             ? ""
             : ` (${census} — an error carrying no polyengine brand in a ` +
-              `multi-copy graph usually means a pre-A9 runtime copy threw ` +
+              `multi-copy graph usually means a pre-module identity runtime copy threw ` +
               `it, issue #83.)`),
       );
     };
@@ -830,7 +830,7 @@ class Facade {
       const args = ft.params.map((p, i) =>
         toHost(raw[i] as ComponentValue, p, o, scope)
       );
-      // CONTRACT (A24): anything the executor appended PAST the WIT-declared
+      // CONTRACT: anything the executor appended PAST the WIT-declared
       // params is a runtime-minted extra, not a component value — today
       // exactly the `abortable()` signal `createLoweredImport` adds for a
       // marked import. It is forwarded verbatim (no `toHost` conversion: it
@@ -848,7 +848,7 @@ class Facade {
         return fail(e, args);
       }
       if (isThenable(out)) {
-        // Amendment A12: when the WIT result type is `future<T>`, a thenable
+        // When the WIT result type is `future<T>`, a thenable
         // return IS the future source ("for `future<T>`, a `Promise<T>` or
         // `Future<T>`" — §"Streams and futures"), not the call's async
         // completion. The import completes immediately with the lowered
@@ -962,8 +962,8 @@ class Facade {
         continue;
       }
       if (exp.kind === "module") {
-        // Not WIT-expressible, digest-excluded (plan-format.md v4 amendment
-        // 2): the WIT-shaped facade skips it, the type-export precedent. The
+        // Not WIT-expressible, digest-excluded (the `module` export kind,
+        // contracts/plan-format.md schema notes): the WIT-shaped facade skips it, the type-export precedent. The
         // raw executor export surface still carries the compiled module.
         continue;
       }
@@ -1174,7 +1174,7 @@ class Facade {
         return toHost(raw as ComponentValue, resultType, o);
       };
     }
-    // A25 brand (contracts/embedder-api.md §"Functions and async"): every
+    // sync() brand (contracts/embedder-api.md §"Functions and async"): every
     // returned wrapper is branded, additively — the default Promise-shaped
     // surface above is unchanged either way.
     if (ft.async === true) {
@@ -1189,7 +1189,7 @@ class Facade {
   }
 
   /**
-   * The synchronous form of a sync-typed export (A25's `sync()` adapter),
+   * The synchronous form of a sync-typed export (sync()'s `sync()` adapter),
    * mirroring `#wrapExportFn`'s async form exactly minus the `await`:
    * arity check, `#lowerParams`, the plain (`SYNC_ENTRY`) entry, result
    * mapping.
@@ -1210,7 +1210,7 @@ class Facade {
       SYNC_ENTRY
     ] as RawFn | undefined) ?? fn;
     const unreachableThenable = (raw: unknown): never => {
-      // Defensive (see the dispatch prompt / A25 failure ladder): a genuine
+      // Defensive (see the dispatch prompt / sync() failure ladder): a genuine
       // park through a plain entry surfaces as a trap, `NeedsJspi`, or
       // `SyncEntryBusy` — never a settled thenable VALUE. A silent
       // Promise-as-value here would corrupt lifting rather than fail loudly,
@@ -1332,7 +1332,7 @@ function pick(
 /**
  * Read a DATA property from `obj` (walking its prototype chain, nearest own
  * descriptor wins) without ever invoking accessors. Accessor-backed and
- * absent members both yield `undefined`. Used by the A2 wrap-time suspending
+ * absent members both yield `undefined`. Used by the wrap-time suspending-mark
  * probe, which must not run platform getters against a bare prototype.
  */
 function dataMember(obj: unknown, key: string): unknown {

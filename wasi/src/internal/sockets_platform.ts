@@ -47,7 +47,7 @@
 //     `'error'` arrive later). The seam exposes that settle as
 //     `TcpListener.settled()`; the provider awaits it inside a
 //     `suspending`-marked `listen`, parking the calling guest frame for
-//     the one tick (embedder-api A1/A2 — the same kernel that serves
+//     the one tick (embedder-api.md §"The WASI parking kernel" — the same kernel that serves
 //     wasi:io's sync `block`). Full listener fidelity follows: real
 //     ephemeral addresses, real bind error codes.
 //   * dgram receive is push-shaped (`'message'` events); the adapter

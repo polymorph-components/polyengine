@@ -1,4 +1,4 @@
-// M2 end-to-end (docs/milestones.md M2): the async pipeline — translator shim
+// End-to-end async pipeline — translator shim
 // (plan v1, `unsafe-intrinsic`) -> executor -> task core -> callback ABI ->
 // correct result — against the real wit-bindgen `async-probe` guest.
 //
@@ -135,7 +135,7 @@ Deno.test("async-probe: sum-stream lifts a real stream handle", async () => {
 });
 
 Deno.test("async-probe: a terminating activation leaves nothing behind", async () => {
-  // The regression pin for M2 phase 3f's background-activation design.
+  // The regression pin for the background-activation design.
   //
   // Two shapes must both be right. A *terminating* activation (this one) has
   // to run all the way out — past `task.return`, through the callback loop's

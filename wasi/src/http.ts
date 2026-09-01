@@ -31,9 +31,10 @@
 //
 // Body/trailers plumbing is the same stream+future choreography the TCP
 // provider proved: constructors return `[resource, transmission-future]`
-// (the future is a Promise — amendment A12 lowers it as the future
-// source), `consume-body` returns `[stream<u8>, trailers-future]`, and
-// guest-abandoned streams are retired by the runtime's A13 machinery
+// (the future is a Promise — embedder-api.md §"Streams and futures"
+// lowers it as the future source), `consume-body` returns
+// `[stream<u8>, trailers-future]`, and guest-abandoned streams are
+// retired by the runtime's producer-cancellation machinery
 // (`ReadableStream` sources are cancel()ed, which aborts the underlying
 // fetch body).
 //
@@ -62,7 +63,8 @@
 // Error model: `client.send` and the fallible fields/options methods
 // throw branded `ComponentException`s whose payloads use the WIT case
 // names VERBATIM (`DNS-timeout`, `TLS-protocol-error`, `internal-error` —
-// A10: case names are data, kebab-case as written, including capitals).
+// embedder-api.md §"Naming and casing": case names are data, kebab-case
+// as written, including capitals).
 // Fetch failures are TypeErrors with prose; a small sniff table maps the
 // recognizable ones and everything else is `internal-error(message)`.
 
@@ -78,7 +80,7 @@ export const HTTP_TRACK = "0.3";
 
 // --- WIT value shapes -----------------------------------------------------------
 
-/** `method` — case names verbatim (A10). */
+/** `method` — case names verbatim (embedder-api.md §"Naming and casing"). */
 export type Method =
   | { kind: "get" }
   | { kind: "head" }

@@ -1,9 +1,9 @@
 // The generalized SYNC_ENTRY mechanism (contracts/embedder-api.md
-// §"Functions and async", amendment A25).
+// §"Functions and async", §"Functions and async").
 //
 // In jspi mode every lifted export's core entry is `promising`-wrapped, so
 // the entry returns a Promise even when the guest completed without
-// suspending (jspi pin (e)/(j)). A25 generalizes the constructor-only
+// suspending (jspi pin (e)/(j)). sync() generalizes the constructor-only
 // plain-entered variant to EVERY sync-typed export: each carries a second
 // lifted function, under the `SYNC_ENTRY` symbol, whose entry is plain, so a
 // synchronously-completing activation delivers its results synchronously.
@@ -14,7 +14,7 @@
 //
 //   1. **attachment** — sync-typed exports carry it, async-typed exports do
 //      not (an async WIT function has no synchronous form by definition);
-//   2. **hop-window refusal** (A25 failure-ladder arm 2) — a plain entry
+//   2. **hop-window refusal** (sync() failure-ladder arm 2) — a plain entry
 //      taken while the instance has HOP-parked activations would race the
 //      pending result LIFT of that activation, the corruption window
 //      `hop_atomicity_test.ts` documents. The Promise surface *defers* there
@@ -120,7 +120,7 @@ async function hopInstance() {
 
 Deno.test({
   name:
-    "A25: a sync-typed non-constructor export carries SYNC_ENTRY in jspi " +
+    "sync(): a sync-typed non-constructor export carries SYNC_ENTRY in jspi " +
     "mode, and it answers synchronously",
   ignore: shimWasm === null || !isSupported(),
   fn: async () => {
@@ -128,7 +128,7 @@ Deno.test({
     const tick = handle.exports.tick as Fn;
     const clobber = handle.exports.clobber as Fn;
 
-    // The promising-wrapped default surface is still Promise-shaped: A25 adds
+    // The promising-wrapped default surface is still Promise-shaped: sync() adds
     // a view, it does not change the default.
     const promised = tick();
     assert(
@@ -160,7 +160,7 @@ Deno.test({
 
 Deno.test({
   name:
-    "A25 arm 2: a SYNC_ENTRY call during a hop window refuses with " +
+    "sync() arm 2: a SYNC_ENTRY call during a hop window refuses with " +
     "SyncEntryBusy, non-poisoningly",
   ignore: shimWasm === null || !isSupported(),
   fn: async () => {
@@ -187,7 +187,7 @@ Deno.test({
       refused instanceof SyncEntryBusy,
       `expected SyncEntryBusy, got ${Deno.inspect(refused)}`,
     );
-    // Branded by name, per A25 ("e.name === 'SyncEntryBusy'").
+    // Branded by name, per sync() ("e.name === 'SyncEntryBusy'").
     assertEquals((refused as Error).name, "SyncEntryBusy");
     assert(
       (refused as Error).message.includes("clobber"),
@@ -206,7 +206,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "A25: an async-typed export carries no SYNC_ENTRY",
+  name: "sync(): an async-typed export carries no SYNC_ENTRY",
   ignore: shimWasm === null || !isSupported(),
   fn: async () => {
     const translator = await Translator.create(shimWasm!);

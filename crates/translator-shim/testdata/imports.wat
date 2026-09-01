@@ -1,6 +1,6 @@
 ;; (e) Component *imports*, live: a direct function import plus an imported
 ;; instance whose members are reached through `plan.imports[].path`
-;; (contracts/plan-format.md v0.1 amendment #4). Also exercises a lowered
+;; (`imports[].path`, contracts/plan-format.md schema). Also exercises a lowered
 ;; import with a non-trivial descriptor-IR signature (string -> string), which
 ;; drives realloc on the guest side.
 (component

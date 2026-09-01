@@ -1,14 +1,14 @@
-// C0 — throwaway host-import glue synthesized from `plan.imports`.
+// Consumer smoke — throwaway host-import glue synthesized from `plan.imports`.
 //
-// Not a shim package (that is C2). This exists so a leg can instantiate a
+// Not a shim package. This exists so a leg can instantiate a
 // real consumer component whose *binary* carries the Rust/TinyGo libc wasip2
 // baseline (wasi:cli, wasi:io, wasi:clocks, wasi:filesystem, wasi:random)
 // even when its WIT world declares almost nothing — see Leg 3's import
 // surfaces, where three different p2 versions (0.2.6 / 0.2.9 / 0.2.12) appear
 // across the corpus.
 //
-// Strategy: walk `plan.imports` (contracts/plan-format.md v0.1 amendment #4 —
-// `{name, path, kind}`), materialize the exact nested host object the
+// Strategy: walk `plan.imports` (`imports[].path`, contracts/plan-format.md
+// schema — `{name, path, kind}`), materialize the exact nested host object the
 // executor demands, and fill every leaf with a LOUD stub. Real behavior is
 // injected by `overrides`, keyed *version-independently* as
 // `"<pkg>:<iface>/<leaf>"` with the `@x.y.z` stripped, because the same
@@ -22,7 +22,7 @@ import type { WirePlan } from "../../runtime/src/plan/format.ts";
 
 export class StubCalled extends Error {
   constructor(readonly importPath: string) {
-    super(`C0 stub called: ${importPath} (not implemented by this leg)`);
+    super(`stub called: ${importPath} (not implemented by this leg)`);
     this.name = "StubCalled";
   }
 }

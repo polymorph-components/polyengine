@@ -1,6 +1,6 @@
 //! `test-suite` guest: an L1 suite component per the vendored
 //! `polymorph:test@0.1.0` contract (wit/tests.wit), used as polyengine's
-//! ct-runner fixture (TRACK C2-D).
+//! ct-runner fixture.
 //!
 //! Six deterministic cases exercising the contract surface:
 //!   - `suite/basic/pass`      — a passing case.

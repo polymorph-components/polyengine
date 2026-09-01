@@ -68,7 +68,7 @@ Deno.test({
         "(re-verify this gate's scope if this fails)",
     );
 
-    // FIXED (was: C2-C's known blocker). `engine-go`'s Go runtime calls
+    // FIXED (was a known blocker). `engine-go`'s Go runtime calls
     // `wasi:clocks/monotonic-clock now()` synchronously from its own
     // `schedinit`, which the executor runs as part of `instantiateComponent`'s
     // module-start step — i.e. while `instantiate()` is still awaiting, before

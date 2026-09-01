@@ -1,5 +1,5 @@
 ;; Host-import error-model fixture for the embedder conventions layer
-;; (contracts/embedder-api.md §"Error model", C2 checklist item 5).
+;; (contracts/embedder-api.md §"Error model").
 ;;
 ;; The corpus has no component that imports a *fallible* host function, so the
 ;; branded-throw round trip — `throw new ComponentException(payload)` becoming the guest's

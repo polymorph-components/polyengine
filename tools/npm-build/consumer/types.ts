@@ -29,14 +29,16 @@ export async function typeSurface(componentBytes: Uint8Array) {
   const component = await instantiate({ componentBytes, translator }, {
     ...wasi(),
     "example:pkg/iface": {
-      // A suspending sync import — the A1/A2 declared-capability form.
+      // A suspending sync import — contracts/embedder-api.md §"Functions
+      // and async"'s declared-capability form.
       lookup: suspending(async (key: string) => key.length),
     },
   });
 
   // A byte stream is `Stream<number>`: `Chunk<T>` widens a numeric element
   // type to `Uint8Array | number[]`, so the u8 bulk path is expressible.
-  // `createStream` (amendment A22) is the application-surface spelling of
+  // `createStream` (contracts/embedder-api.md §"The host-ABI surface and
+  // its version") is the application-surface spelling of
   // the former `Stream.create()` static — the concrete class is no longer
   // exported.
   const { stream, writer } = createStream<number>();

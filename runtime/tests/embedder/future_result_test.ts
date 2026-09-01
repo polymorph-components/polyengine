@@ -3,7 +3,7 @@
 // tuple<stream<u8>, future<…>>`), probed via the `future-import` fixture.
 //
 // The load-bearing rule (contracts/embedder-api.md §"Streams and futures",
-// amendment A12): an import whose WIT result type is `future<T>` treats a
+// §"Streams and futures"): an import whose WIT result type is `future<T>` treats a
 // thenable return as the FUTURE SOURCE — the import completes immediately
 // and the future settles on the producer's schedule. Without that rule the
 // dispatch wrapper adopts the Promise as the call's async completion, which

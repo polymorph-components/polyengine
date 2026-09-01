@@ -5,11 +5,12 @@
 //
 //   Pin 1 — structural ValType equality must not JSON.stringify types that
 //           contain `own`/`borrow` (ResourceTypeInfo cycles back to live
-//           instance state). Sibling of the C2-D `task.return` fix; hit
+//           instance state). Sibling of the `task.return` structural-equality fix; hit
 //           again via `sameElemType` and lowerStream/lowerFuture's EAGERLY
 //           evaluated diagnostic strings.
 //   Pin 2 — one `ResourceTypeInfo` per component-wide ResourceIndex, aliased
-//           across resource tables (plan-format.md C2 amendment #1). Per-
+//           across resource tables (plan-format.md "Type exports index into
+//           `resourceTables`" note). Per-
 //           table tokens made FACT stream/future transfers trap "destination
 //           element mismatch" in wac-composed components.
 //   Pin 3 — `resource.transfer-borrow` inside a FACT `[async-start]` window

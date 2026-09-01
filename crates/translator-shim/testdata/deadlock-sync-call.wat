@@ -1,4 +1,4 @@
-;; A genuine deadlock across a sync-lowered call, for the M2 jspi driver.
+;; A genuine deadlock across a sync-lowered call, for the jspi driver.
 ;;
 ;; Component $A exports an ASYNC-lifted function whose implementation parks on
 ;; a freshly created, EMPTY waitable set. Nothing holds a handle to that set,

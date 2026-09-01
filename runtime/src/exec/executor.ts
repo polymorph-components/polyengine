@@ -78,7 +78,8 @@ const SUSPENDABLE_TRACE = (() => {
 /**
  * Host-provided imports: a nested record keyed by the component's *exact*
  * import strings. A plan import with a non-empty `path` (an item extracted
- * from an imported instance — plan-format.md v0.1 amendment #4) is looked up
+ * from an imported instance — `imports[].path`, contracts/plan-format.md
+ * schema) is looked up
  * by walking `imports[name]` then each path segment in order. So an import
  * of `"ns:pkg/iface"` exposing `f` is supplied as
  * `{ "ns:pkg/iface": { f: (…) => … } }`.
@@ -136,7 +137,7 @@ export interface InstantiateInput {
    * returns a Promise (empirical fact (e) — `WebAssembly.promising` always
    * does), which is an API-shape change. Ignored on an engine without JSPI,
    * where every blocking site keeps raising the precise `NeedsJspi` it raises
-   * today (the M3 degradation path).
+   * today (the browser-matrix degradation path; see `just browsers`).
    */
   jspi?: boolean;
   /**
@@ -364,7 +365,7 @@ class Executor {
   /** Scratch: set by `importValue` while one module's imports are resolved. */
   private sawBlockingImport = false;
   /** LoweredIndex-es whose host functions carry the `suspending()` brand —
-   * populated by `buildLoweredImport`, read by `importValue` (A1). */
+   * populated by `buildLoweredImport`, read by `importValue`. */
   private readonly suspendableLowerings = new Set<number>();
   /** Host trap held across a FACT exception barrier (see `HostTrapState`). */
   readonly trapState: HostTrapState = { pending: undefined };
@@ -378,13 +379,13 @@ class Executor {
     this.adapterBytes = input.adapters ?? new Map();
     this.hostImports = input.imports ?? {};
     this.verifyHash = input.verifyHash ?? true;
-    // AUTO-DETECTION IS ON (M2 exit). `chooseMode` picks jspi when the
+    // AUTO-DETECTION IS ON by default. `chooseMode` picks jspi when the
     // embedder opts in OR when the plan needs suspension: a stackful async
     // lift, or a genuinely blocking built-in — classified per DECLARATION
     // (`trampolineNeedsSuspension`; the async form of a copy/cancel built-in
     // never blocks and is not evidence). An explicit `jspi: false` still
     // forces plain, and a sync-only component never detects as needing
-    // suspension, so the M1 synchronous API is untouched (pinned by
+    // suspension, so the synchronous API is untouched (pinned by
     // bridge_test "plain mode: lifted exports still return values" and the
     // planNeedsSuspension(hello) === false pin beside it).
     //
@@ -410,7 +411,7 @@ class Executor {
       // stackful async lift or a blocking built-in — per-declaration), and
       // the IMPORTS RECORD (a `suspending()`-marked host function: the
       // embedder's declared intent to park a sync-lowered frame, which no
-      // plan field can express — embedder-api.md amendment A1).
+      // plan field can express — contracts/embedder-api.md §"Functions and async").
       planNeedsSuspension(loaded.wire) || anySuspendingImport(this.hostImports),
     );
   }
@@ -728,15 +729,15 @@ class Executor {
         case "resource": {
           // Wire the dtor + implementing instance into every concrete
           // resource-table token for this defined resource
-          // (tolerate-if-unreferenced for M0; plan-format.md open item).
+          // (tolerate-if-unreferenced; plan-format.md open item).
           const dtor = init.dtor === null
             ? null
             : this.resolveFunction(init.dtor, `resource ${init.index} dtor`);
           const inst = this.componentInstance(init.instance);
           // `init.index` is a DefinedResourceIndex; resource *tables* key off
           // the component-wide ResourceIndex, which counts imported resources
-          // first (plan-format.md v0.1 amendment #2 / v0.2
-          // `importedResources`; wasmtime `Component::resource_index`).
+          // first (the `importedResources` field, contracts/plan-format.md
+          // schema; wasmtime `Component::resource_index`).
           const resourceIndex = resourceIndexOfDefined(this.loaded, init.index);
           this.wire.resourceTables.forEach((table, tableIndex) => {
             if (table.kind === "concrete" && table.resource === resourceIndex) {
@@ -870,7 +871,7 @@ class Executor {
           allInstances: () => this.componentInstances.values(),
         });
         // Every SYNC-TYPED export additionally carries a plain-entered
-        // variant (see SYNC_ENTRY, contracts/embedder-api.md amendment A25):
+        // variant (see SYNC_ENTRY, contracts/embedder-api.md §"Functions and async"):
         // in jspi mode the promising-wrapped entry above necessarily returns
         // a Promise, which some host contexts cannot use however promptly it
         // resolves — a JS class constructor cannot await it at all, and the
@@ -881,7 +882,7 @@ class Executor {
         // Deliberately NOT noteEntry()-recorded — this is the documented
         // exception to the bridge invariant (entries wrapped iff imports
         // wrapped), safe because a synchronously-completing activation never
-        // reaches the Suspending seam. A25 extends the exception from
+        // reaches the Suspending seam. sync() extends the exception from
         // constructors to all sync entries.
         if (this.suspensionMode === "jspi" && !ft.async) {
           (value as unknown as Record<PropertyKey, unknown>)[
@@ -896,7 +897,7 @@ class Executor {
               trapState: this.trapState,
               syncCallStack: this.syncCallStack,
               allInstances: () => this.componentInstances.values(),
-              // A25 arm 2: a synchronous caller cannot be deferred by the
+              // sync() arm 2: a synchronous caller cannot be deferred by the
               // hop-quiescence gate, so it refuses (SyncEntryBusy) instead.
               // This deliberately changes constructor behaviour: the
               // constructor sync entry previously bypassed the gate
@@ -926,8 +927,9 @@ class Executor {
           reason: "type export: no runtime surface",
         };
       case "module": {
-        // plan-format.md v4 amendment 2: an exported embedded core module
-        // surfaces as the already-compiled `WebAssembly.Module` — the same
+        // The `module` export kind (contracts/plan-format.md schema notes):
+        // an exported embedded core module surfaces as the already-compiled
+        // `WebAssembly.Module` — the same
         // compilation `instantiate-module` initializers use.
         const module = this.modules[exp.module];
         if (module === undefined) {
@@ -1022,7 +1024,7 @@ class Executor {
     const optionsAsync = (i: number) =>
       this.wire.canonicalOptions[i]?.async === true;
     const d = decl as { kind: string; async?: unknown; options?: unknown };
-    // Host lowers (A1): `trampolineCanBlock` classifies DECLARATIONS and a
+    // Host lowers: `trampolineCanBlock` classifies DECLARATIONS and a
     // `lower-import` declaration says nothing about the host's intent — the
     // evidence is the `suspending()` brand on the host function, recorded by
     // `buildLoweredImport` into `suspendableLowerings` (which resolving this
@@ -1247,14 +1249,14 @@ class Executor {
     const ft = this.funcType(decl.type, `import '${label}'`);
     const opts = this.resolveOptions(decl.options);
     const suspendable = isSuspending(value);
-    // A23 (contracts/embedder-api.md §"Functions and async"): does this import
+    // cancellation discard (contracts/embedder-api.md §"Functions and async"): does this import
     // opt out of cancel-discard? Unlike `suspendable` above, this needs no
     // executor-state detour — the brand is consumed by `createLoweredImport`
     // itself (it only decides which `onCancel` the lowered import installs, not
     // whether the CoreFn gets wrapped), so nothing downstream has to read a
     // brand off a replaced function identity.
     const deferCancel = isDeferCancel(value);
-    // A24 (same section): does this import want a per-call `AbortSignal`?
+    // abortable() (same section): does this import want a per-call `AbortSignal`?
     // Read exactly like `deferCancel` above and for the same reason — the
     // brand is consumed inside `createLoweredImport`, which mints the
     // controller and appends the signal itself, so no function identity is
@@ -1284,7 +1286,7 @@ class Executor {
   /**
    * Resolve one plan import against the host-provided import record: index by
    * the component's exact import string, then walk `path` (instance imports —
-   * plan-format.md v0.1 amendment #4).
+   * `imports[].path`, contracts/plan-format.md schema).
    */
   lookupHostImport(name: string, path: string[], label: string): unknown {
     if (!(name in this.hostImports)) {

@@ -1,7 +1,7 @@
 // Unit tests for the `wasi:sockets@0.2` track (src/internal/sockets_02.ts): the
 // two-phase state machines, the poll-shaped would-block contracts, and
 // the BARE-STRING enum error payloads (0.2's error-code is an enum, not
-// 0.3's variant — the A10 rule the composed gate can't isolate). The
+// 0.3's variant — embedder-api.md §"Naming and casing" — the rule the composed gate can't isolate). The
 // happy composed path is integration_net_test.ts's std::net battery.
 
 import { ComponentException } from "@polyengine/protocol";

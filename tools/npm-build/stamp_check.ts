@@ -1,7 +1,7 @@
 // The stamp-path leg of `just test-npm`: proves the `--version` override
 // works as release.yml's prerelease path relies on it — stamping the
 // lockstep four while leaving @polyengine/protocol on its own manifest
-// version (embedder-api A10).
+// version (contracts/embedder-api.md §"Version canonicalization").
 //
 //   deno run -A tools/npm-build/stamp_check.ts <out-dir> <stamp>
 //
@@ -45,7 +45,7 @@ async function main() {
     fail(
       `protocol emitted at ${built.protocol.version} under --version ` +
         `${stamp}, expected it to stay at its manifest version ` +
-        `${protocolManifestVersion} (A10: --version must not affect it)`,
+        `${protocolManifestVersion} (--version must not affect it)`,
     );
   }
 

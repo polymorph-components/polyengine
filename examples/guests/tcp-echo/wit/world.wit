@@ -6,7 +6,8 @@ package polyengine:tcp-echo;
 /// wasi/tests/integration_sockets_test.ts against the à la carte
 /// sockets provider: the client half is the wosh listener's exact shape
 /// (create/connect/send-stream/receive-stream), and the server half runs
-/// listen/accept through amendment A13's resource-element streams —
+/// listen/accept through contracts/embedder-api.md §"Streams and futures"'s
+/// resource-element streams —
 /// including the guest dropping the accept stream, which must close the
 /// provider's OS listener through the producer-cancellation hook.
 world tcp-echo {

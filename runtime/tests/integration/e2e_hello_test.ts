@@ -1,4 +1,4 @@
-// M0 end-to-end integration (docs/milestones.md M0 exit criterion): the full-JS
+// End-to-end integration: the full-JS
 // pipeline — translator shim (wasm32, running under Deno) -> plan v0 ->
 // TS plan executor -> typed call -> correct result — against the real
 // wit-bindgen `hello` guest (strings, realloc, post-return).

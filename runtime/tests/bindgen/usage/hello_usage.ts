@@ -1,7 +1,7 @@
 // Hand-written usage sample exercising the generated `hello.ts` facade
-// (track C2-B gate: "a hand-written usage sample per world must pass `deno
+// ("a hand-written usage sample per world must pass `deno
 // check` against the generated types"). Type-check only — no runtime
-// component here, just call-site type shape verification against the C1
+// component here, just call-site type shape verification against the
 // embedder conventions (contracts/embedder-api.md).
 
 import type { WirePlan } from "../../../src/plan/mod.ts";

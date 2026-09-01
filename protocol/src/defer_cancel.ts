@@ -1,5 +1,5 @@
 // The per-declaration cancel-discard opt-out (contracts/embedder-api.md
-// §"Functions and async", amendment A23; polyengine#241).
+// §"Functions and async"; polyengine#241).
 //
 // A guest may cancel an in-flight async-typed import (`subtask.cancel`;
 // wit-bindgen reaches it by dropping the import's future). The reference
@@ -21,18 +21,18 @@
 // brand exists for. Mark an import whose body has a COMMIT POINT — a flush, a
 // database write, a payment — where "cancelled" would let the guest believe
 // nothing happened while the write is landing anyway. A marked import keeps
-// the pre-A23 behavior, now per-declaration: the request is accepted and
+// deferCancel()'s behavior, now per-declaration: the request is accepted and
 // ignored, the async cancel form answers BLOCKED, the sync form parks, and the
 // guest observes RETURNED with the real result.
 //
 // The mark is tolerated and INERT on sync-typed imports. That is vacuous
-// truth, not a wart: a sync-typed import's A1 park never mints a subtask
+// truth, not a wart: a sync-typed import's suspending() park never mints a subtask
 // handle, so `subtask.cancel` cannot name it at all, and the no-discard
 // guarantee holds because nothing can request the discard.
 //
 // Independent of `suspending()` — different questions, different brands, and
 // both may sit on one function. There is deliberately no
-// `anyDeferCancelImport` analogue: unlike A1's mark, this brand is not
+// `anyDeferCancelImport` analogue: unlike suspending()'s mark, this brand is not
 // evidence for mode selection, so nothing needs to walk an imports record
 // looking for it. It is read per-declaration at lowering time
 // (exec/executor.ts `buildLoweredImport`).
@@ -45,7 +45,7 @@ import { DEFER_CANCEL, defineBrand, hasBrand } from "./brands.ts";
 /**
  * Declare that this host import must run to completion: a guest cancellation
  * of an in-flight call is accepted and IGNORED rather than answered with the
- * default A23 discard.
+ * default cancel-discard.
  *
  * Use it for imports with a commit point — anything whose side effects land
  * regardless, where reporting CANCELLED_BEFORE_RETURNED to the guest would be
@@ -69,7 +69,7 @@ import { DEFER_CANCEL, defineBrand, hasBrand } from "./brands.ts";
  * convention throws with a pointer here — under that convention the decorator
  * receives the PROTOTYPE, not the method, and marking it would both brand the
  * wrong object and corrupt the property descriptor. Constructors are never
- * markable (synchronous by the C2 amendment; the language reserves no
+ * markable (synchronous per §"Resources"; the language reserves no
  * constructor-decorator position anyway).
  *
  * Tolerated and inert on sync-typed imports (they can never be cancelled);
@@ -114,7 +114,7 @@ export function deferCancel<F extends CallableFunction>(
       `deferCancel: expected a function, got ${typeof fn}`,
     );
   }
-  // Non-enumerable (A9 `defineBrand`): the mark must not show up in value
+  // Non-enumerable (`defineBrand`): the mark must not show up in value
   // walks of an imports record, and re-marking the same function is a no-op.
   defineBrand(fn as unknown as object, DEFER_CANCEL);
   return fn;

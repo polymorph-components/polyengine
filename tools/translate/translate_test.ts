@@ -1,4 +1,5 @@
-// End-to-end pin for the build-time translation path (embedder-api.md A4):
+// End-to-end pin for the build-time translation path (contracts/embedder-api.md
+// §"Module wiring and instantiation"):
 // the CLI translates a fixture component to an envelope file, and a "deploy
 // host" that never sees the translator reconstitutes artifacts from the
 // envelope and runs the component. Also pins the loud-failure pairing check

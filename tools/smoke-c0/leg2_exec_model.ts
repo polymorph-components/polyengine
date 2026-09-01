@@ -1,4 +1,4 @@
-// C0 Leg 2 — polymorph-iroh's exec-model probe: the lann/jco#11 kill shot.
+// Leg 2 — polymorph-iroh's exec-model probe: the lann/jco#11 kill shot.
 //
 //   deno run --allow-read leg2_exec_model.ts
 //
@@ -11,7 +11,7 @@
 // an in-flight `wait-for` and every LATER export call deadlocks before its
 // first wasm slice. We drive exactly that order and assert each step.
 //
-// Host glue implemented here (throwaway; the real thing is C2):
+// Host glue implemented here (throwaway; the real thing is the shim):
 //   - wasi:clocks/monotonic-clock@0.3.0 `wait-for` — an async host function
 //     (Promise + setTimeout). No JSPI: the runtime's Promise-returning-import
 //     path parks the callback-ABI task.
@@ -46,7 +46,8 @@ function check(cond: boolean, msg: string) {
   if (!cond) failures.push(msg);
 }
 // Retightened after the R-fix round: probes 4a/4b originally carried
-// `xfail(...)` wrappers against findings R-1/R-2 (see REPORT.md); both are
+// `xfail(...)` wrappers against findings R-1 (host-pump starvation of
+// pendingHostCalls) / R-2 (check-then-act poisoning via hostFailure); both are
 // fixed (runtime/tests/host_pump_test.ts pins them), so every probe is now a
 // hard assertion and a regression fails this leg.
 function note(msg: string) {
@@ -71,7 +72,7 @@ function classify(e: unknown): string {
   return `${name}: ${(e as Error)?.message ?? String(e)}`;
 }
 
-console.log("=== C0 Leg 2: iroh exec-model probe ===\n");
+console.log("=== Leg 2: iroh exec-model probe ===\n");
 
 const bytes = await readArtifact(ARTIFACTS.execModel);
 console.log(`artifact: ${ARTIFACTS.execModel}`);

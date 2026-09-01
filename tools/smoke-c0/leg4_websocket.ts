@@ -1,4 +1,4 @@
-// C0 Leg 4 (best-effort, translate-only) — the polymorph-websocket
+// Leg 4 (best-effort, translate-only) — the polymorph-websocket
 // conformance suite.
 //
 //   deno run --allow-read leg4_websocket.ts
@@ -10,7 +10,7 @@
 //
 //   bare:     target/wasm32-wasip2/release/conformance_guest_ct.wasm
 //             — the suite with `polymorph:websocket` still IMPORTED. Its
-//               import surface is the definitive minimal shim list for C2.
+//               import surface is the definitive minimal shim list.
 //   composed: target/wasm32-wasip2/release/composed/conformance_guest_ct.wasm
 //             — `wac plug`ged with the guest provider + the TLS component, so
 //               websocket is satisfied in-guest and only WASI (incl. sockets)
@@ -35,7 +35,7 @@ const TARGETS: Array<[string, string]> = [
   ["websocket guest provider", `${WS}/websocket_guest_provider.wasm`],
 ];
 
-console.log("=== C0 Leg 4: polymorph-websocket conformance suite (translate-only) ===\n");
+console.log("=== Leg 4: polymorph-websocket conformance suite (translate-only) ===\n");
 
 let failures = 0;
 for (const [label, path] of TARGETS) {
@@ -71,7 +71,7 @@ for (const [label, path] of TARGETS) {
   console.log(`    ${planShape(cold.plan!)}`);
   console.log(`    exports:`);
   for (const e of cold.plan!.exports) console.log(`      ${e.kind} ${e.name}`);
-  console.log(`    IMPORT SURFACE (the C2 shim shopping list):`);
+  console.log(`    IMPORT SURFACE (the shim shopping list):`);
   console.log(fmtSurface(cold.plan!));
   console.log();
 }

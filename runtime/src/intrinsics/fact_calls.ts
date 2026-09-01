@@ -380,8 +380,9 @@ function mkCalleeTask(input: {
   // `task_return_type` at all: fact.rs's comment on `PrepareCall.memory` says
   // the same for the memory check).
   // `task_return_type` arrives as wasmtime's *own* `TypeTupleIndex` — a
-  // runtime argument, not a plan field. Plan v3 (contracts/plan-format.md v3
-  // amendment 3) supplies the dictionary for it: every `task-return`
+  // runtime argument, not a plan field. The task-return trampoline's raw
+  // `results` key + interned `resultType` (contracts/plan-format.md schema)
+  // supplies the dictionary for it: every `task-return`
   // trampoline decl carries that raw index alongside its interned
   // `plan.types` entry, so the callee task CAN now carry its declared result
   // types and `canon_task_return`'s `trap_if(result_type != task.ft.result)`
@@ -475,8 +476,8 @@ function mkCalleeTask(input: {
     // entry that owns a FACT sync-call bracket: `enter-sync-call` runs here
     // under this task, and if the callee suspends, the engine resumes it later
     // with no driver. Without the ambient travelling with the activation the
-    // matching `exit-sync-call` had no task in scope at all (traced in M2
-    // phase 3h as `ENTER-SYNC owner=K26` / `EXIT-SYNC owner=EXECUTOR`).
+    // matching `exit-sync-call` had no task in scope at all (traced as
+    // `ENTER-SYNC owner=K26` / `EXIT-SYNC owner=EXECUTOR`).
     //
     // Entries deliberately NOT wrapped: `realloc`, `post-return`, resource
     // destructors and the `[async-start]`/`[async-return]` copy adapters.
@@ -491,7 +492,7 @@ function mkCalleeTask(input: {
     // line 12). This is only coherent together with site 1 below blocking
     // rather than raising `NeedsJspi`, since a promising callee resolves on a
     // later turn by construction.
-    // NOTE (M2 stackful round): this wrap is RIGHT for a callee that blocks and
+    // NOTE: this wrap is RIGHT for a callee that blocks and
     // Wrap ONLY a callee that can actually reach a suspension point.
     //
     // The wrap is required when the callee blocks: without its own `promising`
@@ -680,7 +681,8 @@ export function createSyncStartCall(
         notifyInstancePoisoned(prepared.calleeInst, e);
       }
       // The lent handles are the CALLER's, and the caller is not poisoned by
-      // either exit (contracts/intrinsics.md v0.2 amendment 2: this runtime
+      // either exit (contracts/intrinsics.md §A's trap-unwind/lender-release
+      // obligation: this runtime
       // deliberately supports post-trap re-entry on the caller side, where
       // the reference kills the whole store, so the sync-call scopes it
       // skipped have to be unwound explicitly). Leaving `numLends` elevated
@@ -749,7 +751,7 @@ export function createSyncStartCall(
         //     sits in `store.waiting`, e.g. the caller's whole host call was
         //     abandoned). No JS runs, so nothing can release; the lent
         //     handles die with the store, which is the reference's own
-        //     outcome. Out of scope for amendment 2 (no non-poisoning exit).
+        //     outcome. Out of scope for the trap-unwind/lender-release obligation (no non-poisoning exit).
         //  6. Trap-poisoning of the parked instance: does not settle this
         //     point by itself — it reaches the guest either as (2) (a
         //     produce-time trap) or as (4) (teardown abandons the park), so
@@ -946,7 +948,7 @@ export function createAsyncStartCall(
     // NO WAIT FOR RESOLUTION HERE, deliberately. An async-lowered caller must
     // not block on its callee's *completion* -- that is the entire point of
     // async lowering: it takes a subtask handle and learns of completion
-    // through events. An earlier attempt (M2 "Fix 1") parked the caller here
+    // through events. An earlier attempt parked the caller here
     // until the callee resolved. It made cross-abi-calls agree in both modes,
     // and it broke the thing it had no business touching: the caller's
     // activation was now suspended, so the sync-lowered parked caller of
@@ -1052,7 +1054,7 @@ export function createAsyncStartCall(
         // subtask index (it either threw before `handles.add`, or after it
         // with the index lost), so nothing will ever deliver this subtask's
         // resolution — exactly the state `unwindSubtaskLenders` exists for
-        // (contracts/intrinsics.md v0.2 amendment 2).
+        // (contracts/intrinsics.md §A's trap-unwind/lender-release obligation).
         let produced = false;
         return blockCurrentActivation({
           store: prepared.callerInst.store,

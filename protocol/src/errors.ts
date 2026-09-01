@@ -1,6 +1,6 @@
 // The embedder-facing error model (contracts/embedder-api.md §"Error model").
 //
-// Canonical since amendment A9: these classes used to live in
+// These classes used to live in
 // `runtime/src/embedder/errors.ts` and `runtime/src/cabi/trap.ts`, which now
 // re-export them. Every class carries a process-global brand on its
 // prototype, and the runtime recognizes values by BRAND, not by class
@@ -25,7 +25,7 @@
 // deliberately NOT installed as `Symbol.hasInstance` on the classes: a
 // consumer subclass would inherit that `hasInstance` and then match ANY
 // branded value (`x instanceof MyComponentException` true for a plain `ComponentException`),
-// which is a worse footgun than the one A9 removes.
+// which is a worse footgun than brand-based recognition would create.
 
 import {
   defineBrand,
@@ -88,7 +88,7 @@ defineBrand(InvalidHandleError.prototype, INVALID_HANDLE);
 
 /**
  * A stream/future operation whose peer end died in a trap-poisoned component
- * instance (#66; contracts/embedder-api.md amendment A7).
+ * instance (#66; contracts/embedder-api.md §"Streams and futures").
  *
  * Discriminated from `DroppedError` on purpose: a clean drop is a normal
  * outcome (end-of-stream, "no value"), while a poisoned peer means the
@@ -139,32 +139,32 @@ export class StreamProducerError extends Error {
 }
 defineBrand(StreamProducerError.prototype, STREAM_PRODUCER);
 
-/** Brand check: is this a WIT `result` err value? (A9; any copy, or hand-rolled.) */
+/** Brand check: is this a WIT `result` err value? (any copy, or hand-rolled.) */
 export function isComponentException(v: unknown): v is ComponentException {
   return hasBrand(v, COMPONENT_EXCEPTION);
 }
 
-/** Brand check: is this a component-fatal trap? (A9.) */
+/** Brand check: is this a component-fatal trap? */
 export function isTrap(v: unknown): v is Trap {
   return hasBrand(v, TRAP);
 }
 
-/** Brand check: a dropped-future rejection? (A9.) */
+/** Brand check: a dropped-future rejection? */
 export function isDroppedError(v: unknown): v is DroppedError {
   return hasBrand(v, DROPPED);
 }
 
-/** Brand check: a peer-fault rejection (A7)? (A9.) */
+/** Brand check: a peer-fault rejection (§"Streams and futures")? */
 export function isPeerTrappedError(v: unknown): v is PeerTrappedError {
   return hasBrand(v, PEER_TRAPPED);
 }
 
-/** Brand check: resource-wrapper misuse? (A9.) */
+/** Brand check: resource-wrapper misuse? */
 export function isInvalidHandleError(v: unknown): v is InvalidHandleError {
   return hasBrand(v, INVALID_HANDLE);
 }
 
-/** Brand check: a producer-side stream failure? (A9.) */
+/** Brand check: a producer-side stream failure? */
 export function isStreamProducerError(v: unknown): v is StreamProducerError {
   return hasBrand(v, STREAM_PRODUCER);
 }

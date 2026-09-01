@@ -3,7 +3,7 @@
 // probed via the `resource-stream` fixture with a one-u32 `ticket`
 // resource.
 //
-// Pinned properties (contracts/embedder-api.md amendment A13):
+// Pinned properties (contracts/embedder-api.md §"Streams and futures"):
 //   * host-minted instances lower as `own` stream elements and arrive in
 //     the guest as live handles (methods dispatch on them);
 //   * each guest-side drop runs the host dtor — element handles are real
@@ -68,7 +68,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "resource streams: un-taken elements are released when the reader drops (A13)",
+  name: "resource streams: un-taken elements are released when the reader drops",
   ignore: !have,
   async fn() {
     reset();
@@ -107,7 +107,7 @@ Deno.test({
     let unpark!: () => void;
     const parked = new Promise<Ticket | null>((r) => (unpark = () => r(null)));
     // The accept shape: after one element the producer parks on an external
-    // event (a listener's accept()); its cancel() — the A13 producer-
+    // event (a listener's accept()); its cancel() — the resource stream producer-
     // cancellation hook — settles the park, standing in for closing the
     // listener.
     const source = (async function* () {

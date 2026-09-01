@@ -108,8 +108,8 @@ export class Subtask extends Waitable {
   /**
    * Release a never-delivered subtask's lenders after its call broke off a
    * non-poisoning exit — trap-rethrow past the CALLEE, capability bail, or
-   * an abandoned park (contracts/intrinsics.md v0.2 amendment 2, #91 scope
-   * clarification; the park legs are #102/#106).
+   * an abandoned park (contracts/intrinsics.md §A's trap-unwind/lender-release
+   * obligation; the park legs are #102/#106).
    *
    * The reference has no analogue because it never resumes after a trap:
    * the store dies with the lent handles inside it. The resolution state

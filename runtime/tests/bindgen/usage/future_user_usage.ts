@@ -1,8 +1,8 @@
 // Hand-written usage sample for the generated `future-user.ts` facade —
 // pins both `future<T>` directions: consuming a future as a parameter
 // (widens to `FutureSource<T>`, the accepted-producers union) and producing
-// one as an export return value — the latter is an **eager handle** (C2
-// amendment, contracts/embedder-api.md §"Streams and futures"): the export
+// one as an export return value — the latter is an **eager handle**
+// (contracts/embedder-api.md §"Streams and futures"): the export
 // returns `Future<T>` directly, NOT `Promise<Future<T>>`, because JS
 // promise resolution unconditionally adopts thenables (`Future<T>` is
 // itself `PromiseLike<T>`), so a Promise can never resolve *to* a `Future`

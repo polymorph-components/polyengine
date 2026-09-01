@@ -1,4 +1,4 @@
-// Plan v3 (contracts/plan-format.md "v3 amendments", polyengine#89) pins.
+// Plan v3 (contracts/plan-format.md schema, polyengine#89) pins.
 //
 //   1. `errorContextTables` is a required section, and the
 //      `error-context-transfer` trampoline resolves its table arguments

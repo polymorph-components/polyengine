@@ -1,9 +1,9 @@
 // Resources as classes on both sides of the boundary
-// (contracts/embedder-api.md §"Resources"; C2 checklist item 3).
+// (contracts/embedder-api.md §"Resources").
 //
 // The raw boundary represents `own<R>` / `borrow<R>` as bare **reps**
 // (cabi/handles.ts `liftOwn` returns `rh.rep`; the host never holds a table
-// index). C0 findings 1-3 were embedders turning that into identity tables and
+// index). Embedders otherwise turn that into identity tables and
 // hand-transcribed `[method]…` keys by hand. Both become runtime obligations
 // here.
 //
@@ -26,18 +26,18 @@ import { markSyncCallable, syncPayloadOf } from "./sync.ts";
 /**
  * Internal state of a guest-resource wrapper.
  *
- * The KEY is the process-global `polyengine.resourceState/1` brand since amendment
- * A9 (it used to be a module-local `Symbol(...)`, on the now-repealed
+ * The KEY is the process-global `polyengine.resourceState/1` brand
+ * (contracts/embedder-api.md §"Module identity": it used to be a module-local `Symbol(...)`, on the now-repealed
  * assumption that bundle and source runtimes are never mixed in one process —
  * issue #83 showed they routinely are). The state SHAPE stays strictly
- * runtime-internal, exactly as the A9 brand table notes: another copy may
+ * runtime-internal, exactly as the module identity brand table notes: another copy may
  * RECOGNIZE a wrapper, and must never read or write this object. `copyUrl` is
  * what lets this copy tell its own wrappers from a foreign copy's.
  */
 const STATE = RESOURCE_STATE;
 
 interface WrapperState {
-  /** The runtime copy that minted this wrapper (A9). */
+  /** The runtime copy that minted this wrapper. */
   copyUrl: string;
   rep: number;
   /** False once the handle was transferred away or dropped. */
@@ -77,7 +77,7 @@ export class GuestResource {
   declare [STATE]: WrapperState;
 
   constructor() {
-    // A20 (contracts/embedder-api.md §"Realm boundaries and
+    // realm boundary (contracts/embedder-api.md §"Realm boundaries and
     // structured-clone-safe forms"; issue #131): guest-resource wrappers are
     // realm-local by principle (their machinery lives in the minting
     // copy's tables, issue #129's identity rule) — the pill makes a raw
@@ -183,7 +183,7 @@ export function initWrapper(
  *
  * A wrapper minted by ANOTHER copy carries the same (process-global) brand key
  * but its state belongs to that copy — reading it here would be reading a
- * foreign copy's private shape (A9). So it is not a state: it is
+ * foreign copy's private shape. So it is not a state: it is
  * `undefined` here, and `requireLive` turns that into the named cross-copy
  * error rather than a misleading "not a resource handle" / "not live".
  */
@@ -194,9 +194,9 @@ export function wrapperState(w: object): WrapperState | undefined {
 }
 
 /**
- * True iff `w` carries the A9 resource-state key but is not one of ours.
+ * True iff `w` carries the module identity resource-state key but is not one of ours.
  *
- * Note the resource brand is the odd one out in the A9 table: its value is the
+ * Note the resource brand is the odd one out in the module identity table: its value is the
  * state OBJECT, not `true`, so `hasBrand` does not apply — presence of the key
  * is the recognition. Only meaningful once `wrapperState` has returned
  * `undefined`, i.e. presence here means "another copy's wrapper".
@@ -332,7 +332,7 @@ export interface GuestResourceSpec {
     raw: (...a: unknown[]) => unknown;
     params: ValType[];
     results: ValType[];
-    /** True for an `async func` — see A25's `{ kind: "async" }` brand. */
+    /** True for an `async func` — see sync()'s `{ kind: "async" }` brand. */
     async: boolean;
   }[];
   statics: {
@@ -348,7 +348,7 @@ export interface GuestResourceSpec {
  * Build (once, at class-build time — never per call) the Promise-shaped
  * wrapper for one method/static's raw lifted function, exactly as
  * `Facade#wrapExportFn` would for a plain export. `buildGuestResourceClass`
- * reads the A25 brand off the returned wrapper to install the matching
+ * reads the sync() brand off the returned wrapper to install the matching
  * `"method"`/`"free"`/`"async"` brand on the class member it builds around
  * it — the wrapper itself IS what a per-call closure invokes, so a `self`
  * receiver is `wrapper(self, ...args)` for a method the same way a bare
@@ -417,7 +417,7 @@ export function buildGuestResourceClass(
   for (const m of spec.methods) {
     const js = camelCase(m.member);
     const where = `${className}.${js}`;
-    // Built ONCE at class-build time (A25: "prototype methods and statics
+    // Built ONCE at class-build time (sync(): "prototype methods and statics
     // must carry the brand at class-build time, not per call") — every
     // instance's method call goes through this same wrapper, receiver
     // (`self`) prepended.
@@ -471,7 +471,7 @@ export function makeWrapper(
   owns: boolean,
 ): GuestResource {
   const w = Object.create(cls.prototype) as GuestResource;
-  // A20: `Object.create` bypasses `GuestResource`'s constructor, so the
+  // realm boundary: `Object.create` bypasses `GuestResource`'s constructor, so the
   // realm-local pill is installed explicitly here (see that constructor).
   defineRealmLocal(w);
   initWrapper(w, {

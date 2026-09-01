@@ -125,11 +125,13 @@ const componentBytes = await Deno.readFile(
   new URL("build/kitchen-sink.component.wasm", import.meta.url),
 );
 
-// `{ componentBytes, translator }` translates internally (A3);
+// `{ componentBytes, translator }` translates internally (contracts/embedder-api.md
+// §"Module wiring and instantiation");
 // `defaultTranslator()` is @polyengine/translator's packaged, per-realm-cached
 // loader (on Deno: a native wasm-module import — no permissions). Apps
 // that know their components at build time can skip the translator
-// entirely: see tools/translate (embedder-api A4).
+// entirely: see tools/translate (contracts/embedder-api.md §"Module wiring
+// and instantiation").
 //
 // A marked import is auto-detection evidence: this instantiation selects
 // JSPI mode by itself. (`jspi: false` would force plain mode, where a
@@ -281,8 +283,8 @@ assertEq(await fut, 42, "awaiting the handle yields the value");
 
 // --- §10: sync() — the explicit synchronous view --------------------------
 
-// The motivating case (contracts/embedder-api.md §"Functions and async",
-// amendment A25): a cancelable-event dispatcher, DOM's model for
+// The motivating case (contracts/embedder-api.md §"Functions and async":
+// sync()): a cancelable-event dispatcher, DOM's model for
 // preventDefault(). The handler must decide RIGHT NOW, before it returns
 // control to the dispatcher — a Promise cannot express that. Even an
 // ALREADY-RESOLVED Promise only lets its continuation run on a later
@@ -319,7 +321,7 @@ function dispatch(handler: (ev: CancelableEvent) => void): boolean {
 // that path for a genuine JSPI-mode instance — it works here because
 // `allowed` never reaches the suspending `readSensor` import and so
 // completes without parking. (A guest call that DOES park fails loudly
-// instead of hanging — A25's failure ladder: SyncEntryBusy if the instance
+// instead of hanging — sync()'s failure ladder: SyncEntryBusy if the instance
 // has in-flight activity to settle first (transient; retry or use the
 // Promise surface), NeedsJspi for a blocking built-in reached through the
 // plain entry (both leave the instance usable), or a trap if the guest

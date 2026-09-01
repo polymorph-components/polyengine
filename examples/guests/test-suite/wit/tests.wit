@@ -1,7 +1,7 @@
 // Vendored verbatim from polymorph-test's L1 contract (frozen surface).
 // Upstream: polymorph-test/wit/tests.wit @ b80c13b
 // ("Shorten WIT package to polymorph:test (match repo rename pattern)").
-// Read-only reference; copied here per TRACK C2-D's fixture-building
+// Read-only reference; copied here per the ct-runner fixture's
 // license (polyengine is not a polymorph-test consumer checkout).
 //
 // DO NOT hand-edit: re-copy from upstream if the contract changes.

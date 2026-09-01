@@ -1,9 +1,9 @@
 // Resources as classes, guest side: the `resources` fixture through the
-// conventions facade (contracts/embedder-api.md §"Resources", C2 item 3).
+// conventions facade (contracts/embedder-api.md §"Resources").
 //
 // What the raw boundary exposes here is bare reps and hand-transcribed
 // `[method]counter.increment` keys (see tests/integration/e2e_resources_test.ts,
-// the same fixture without this layer). C0 findings 1-3 are the friction this
+// the same fixture without this layer): that friction is what this
 // test asserts away.
 
 import { assertEq } from "../support/asserts.ts";

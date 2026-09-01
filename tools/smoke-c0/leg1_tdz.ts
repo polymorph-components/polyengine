@@ -1,4 +1,4 @@
-// C0 Leg 1 — the lann/jco#51 TDZ shape, executed.
+// Leg 1 — the lann/jco#51 TDZ shape, executed.
 //
 //   deno run --allow-read leg1_tdz.ts
 //
@@ -37,7 +37,7 @@ function check(cond: boolean, msg: string) {
 }
 const failures: string[] = [];
 
-console.log("=== C0 Leg 1: compose-async-tdz (lann/jco#51 shape) ===\n");
+console.log("=== Leg 1: compose-async-tdz (lann/jco#51 shape) ===\n");
 
 const bytes = await readArtifact(ARTIFACTS.tdz);
 console.log(`artifact: ${ARTIFACTS.tdz}`);
@@ -109,9 +109,9 @@ check(
 const result = await pending;
 console.log(`\nrun() = ${JSON.stringify(result, (_k, v) =>
   typeof v === "bigint" ? `${v}n` : v)}`);
-// OBSERVED CONVENTION (C1 design input): `result<u32, string>` lifts to the
+// OBSERVED CONVENTION: `result<u32, string>` lifts to the
 // single-key object `{ ok: 42 }` / `{ err: "…" }` — not a `{tag, val}`
-// variant and not a bare payload. Recorded here because C1 (embedder-api.md)
+// variant and not a bare payload. Recorded here because embedder-api.md
 // owns this shape and jco's bare-payload-throw is the footgun being replaced.
 const asRec = result as { ok?: unknown; err?: unknown };
 const isOk = asRec !== null && typeof asRec === "object" && "ok" in asRec;

@@ -1,8 +1,8 @@
 // `@polyengine/wasi` — the WASI providers for polyengine hosts, and the
 // executable check that the embedder conventions
-// (`@polyengine/protocol`, amendment A22 — this package is protocol-only)
-// serve WASI (contracts/embedder-api.md C2
-// checklist item 7; docs/architecture.md §2 keeps implementations out of
+// (`@polyengine/protocol` — this package is protocol-only, per
+// embedder-api.md §"The host-ABI surface and its version")
+// serve WASI (docs/architecture.md §2 keeps implementations out of
 // the RUNTIME — this package is where they live). Scope: p2
 // baseline + p3 clocks + à la carte sockets on BOTH tracks (the
 // poll-shaped `@0.2` surface std::net links, and `@0.3` UDP + TCP
@@ -54,9 +54,9 @@
 // canonicalization" (`@0.2`, `@0.3`) — this package is the flagship
 // track-key-registration consumer: one `@0.2` provider serves every p2
 // leaf regardless of whether the guest's binary says `0.2.6`, `0.2.9` or
-// `0.2.12` (C0 finding D-2), and one `@0.3` union provider serves both
+// `0.2.12`, and one `@0.3` union provider serves both
 // divergent `monotonic-clock@0.3.0` drafts the corpus actually links
-// (C0 finding D-1).
+// (§"Version canonicalization").
 
 import { cli, type CliCaptured, type CliOptions } from "./cli.ts";
 import { clocks, type ClocksOptions } from "./clocks.ts";

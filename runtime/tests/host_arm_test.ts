@@ -1,5 +1,5 @@
 // Host-activity arm liveness == host retention (issue #162, embedder-api
-// amendment A15).
+// §"Streams and futures").
 //
 // THE BUG THESE PIN
 // =================
@@ -188,12 +188,12 @@ Deno.test({
     fireLowered(shared, store);
     assertEq(store.pendingHostCalls.size, 0);
 
-    // The guest hands it back out again (A5: same cached wrapper).
+    // The guest hands it back out again (stream/future round-trip: same cached wrapper).
     fireLifted(shared, store);
     assertEq(store.pendingHostCalls.size, 1);
     assert(
       hostStreamFor<number>(shared as unknown as ComponentValue) === first,
-      "A5: a re-lift yields the wrapper the host already holds",
+      "stream/future round-trip: a re-lift yields the wrapper the host already holds",
     );
 
     fireLowered(shared, store);
@@ -223,7 +223,7 @@ Deno.test({
     assertEq(store.pendingHostCalls.size, 1);
     assert(
       hostFutureFor<number>(shared as unknown as ComponentValue) === first,
-      "A5: a re-lifted future yields the cached wrapper",
+      "stream/future round-trip: a re-lifted future yields the cached wrapper",
     );
     fireLowered(shared, store);
     assertEq(store.pendingHostCalls.size, 0);

@@ -1,4 +1,4 @@
-// Embedder conventions layer (contracts/embedder-api.md; docs/milestones.md C2 / docs/consumers.md).
+// Embedder conventions layer (contracts/embedder-api.md; docs/consumers.md).
 //
 // The host-facing surface: camelCase facades, resource classes on both sides,
 // stream/future handles, version-canonical import resolution and the branded
@@ -7,7 +7,7 @@
 // types that cast this facade; no generated code participates.
 
 // Copy registration (contracts/embedder-api.md §"Module identity and
-// @polyengine/protocol", amendment A9; issue #83). Runs at module evaluation, so
+// @polyengine/protocol"; issue #83). Runs at module evaluation, so
 // merely importing the embedder surface puts this copy on the census — which
 // is what makes every cross-copy diagnostic below able to name both sides.
 // Multiple copies are DIAGNOSED, NEVER REFUSED: two isolated bundles on one
@@ -26,8 +26,8 @@ registerRuntimeCopy({
 
 export { COPY_URL, RUNTIME_VERSION } from "./copy.ts";
 
-// Amendment A22 (contracts/embedder-api.md §"The host-ABI surface and its
-// version"): the runtime's exported surface is application-only. The A9
+// The host-ABI version (contracts/embedder-api.md §"The host-ABI surface and its
+// version"): the runtime's exported surface is application-only. The
 // courtesy re-exports (error classes, predicates, brands, `suspending`,
 // realm crossing, the copy registry) are removed — host modules import that
 // vocabulary from `@polyengine/protocol` directly. The runtime still
@@ -51,12 +51,12 @@ export { type FuncSummary, type ImportLeaf, type PlanLike, requiredImports } fro
 // `NameCollisionError` is the one error class that stays here: it's raised
 // while building an instantiation facade, before any handle/value exists —
 // application machinery, not host-ABI vocabulary (contracts/embedder-api.md
-// §"The host-ABI surface and its version", amendment A22).
+// §"The host-ABI surface and its version", §"The host-ABI surface and its version").
 export { NameCollisionError } from "./errors.ts";
 
 export { type ElemCodec } from "./streams.ts";
 
-// `createStream<T>()` — the A22 stream-pair factory (contracts/embedder-api.md
+// `createStream<T>()` — the host-ABI version stream-pair factory (contracts/embedder-api.md
 // §"The host-ABI surface and its version" / §"Streams and futures"): the
 // `Stream.create()` static's application-surface spelling, since the
 // concrete `Stream`/`StreamWriter` classes are no longer exported. Handle

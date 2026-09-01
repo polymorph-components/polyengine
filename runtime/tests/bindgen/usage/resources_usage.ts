@@ -26,7 +26,7 @@ type _HasSymbolDispose = Expect<
   Equal<ReturnType<Counter[typeof Symbol.dispose]>, void>
 >;
 
-// **Constructors are synchronous** (C2 amendment, contracts/embedder-api.md
+// **Constructors are synchronous** (contracts/embedder-api.md
 // §"Resources"): a JS class constructor cannot await, so `new Counter(...)`
 // is typed as an ordinary synchronous constructor despite going through an
 // async guest-export ABI call underneath — a runtime error (named) if the

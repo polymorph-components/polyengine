@@ -1,12 +1,12 @@
 ;; Host-implemented resource with a true `[method]`/`[static]` surface, for
-;; the A1 scope extension (contracts/embedder-api.md §"Functions and async"):
+;; the suspending mark scope extension (contracts/embedder-api.md §"Functions and async"):
 ;; a `suspending()`-marked resource METHOD is the shape the tier-(c) WASI
 ;; blocking profile hangs off (`[method]pollable.block`), and no corpus or
 ;; testdata component imports one — host-borrow/imported-resource use plain
 ;; functions taking borrows.
 ;;
 ;; `gauge` is the smallest host resource with all three member forms:
-;;   [constructor]gauge        (synchronous by the C2 amendment — never marked)
+;;   [constructor]gauge        (always synchronous — never marked)
 ;;   [method]gauge.read        (self borrow -> u32; the parking candidate)
 ;;   [static]gauge.calibrate   (() -> u32; the static parking candidate)
 ;;

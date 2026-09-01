@@ -3,7 +3,7 @@
 `wasmtime-environ`'s component frontend (validate, resolve linkage, FACT
 fused-adapter synthesis) behind the stable **plan v0** output format of
 [contracts/plan-format.md](../../contracts/plan-format.md). Promoted from the
-S0 spike (`translator-spike`); docs/architecture.md §4.1/§4.2, milestone M0.
+translator-spike (an earlier prototype crate); docs/architecture.md §4.1/§4.2.
 
 This crate is the only code in the repository that sees wasmtime's unstable
 internal shapes; everything it emits is our own schema. Pinned:
@@ -93,7 +93,7 @@ deno run --allow-read driver.ts                                 # smoke
 Some tests use the example fixture corpus (`examples/guests/build/*.wasm`,
 gitignored); they skip with a notice unless `./examples/build.sh` has run.
 
-Size note: the default release wasm32 build is ~3.4 MiB. The S0 spike's
+Size note: the default release wasm32 build is ~3.4 MiB. The translator-spike's
 "1.66 MiB size-tuned" figure used size flags; reproduce without editing the
 workspace manifest via:
 

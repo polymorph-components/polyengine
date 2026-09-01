@@ -5,8 +5,9 @@
 // Direct calls on the WIT-facing surface.
 //
 // The load-bearing assertions, mirror-image of fs_node_test.ts:
-//   * PARKING: the 0.2 descriptor methods are `suspending`-marked (A14 —
-//     the per-call prototype carries the brand) and genuinely return
+//   * PARKING: the 0.2 descriptor methods are `suspending`-marked (the
+//     per-call prototype carries the brand — embedder-api.md §"The WASI
+//     parking kernel") and genuinely return
 //     promises; the streams from read/write-via-stream are the io.ts
 //     async-backed classes whose blocking ops park.
 //   * ERROR SHAPES: 0.2 bare enum strings; 0.3 `{kind}` variants.
@@ -83,7 +84,7 @@ async function rejectedPayload(f: () => unknown): Promise<unknown> {
   return (e as ComponentException).payload;
 }
 
-Deno.test("fs-web: 0.2 descriptor methods carry the A14 suspending marks", () => {
+Deno.test("fs-web: 0.2 descriptor methods carry the suspending marks", () => {
   const { root02 } = setup();
   const proto = Object.getPrototypeOf(root02) as Record<string, unknown>;
   for (const name of ["openAt", "stat", "statAt", "read", "write", "readDirectory"]) {

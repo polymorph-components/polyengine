@@ -1,7 +1,7 @@
 // Guest cancellation of an in-flight HOST import (contracts/embedder-api.md
-// §"Functions and async", amendment A23; polyengine#241).
+// §"Functions and async", §"Functions and async"; polyengine#241).
 //
-// THE QUESTION A23 ANSWERS. `Store.invoke` takes the callee's `OnCancel` back
+// THE QUESTION cancellation discard ANSWERS. `Store.invoke` takes the callee's `OnCancel` back
 // from the callee itself — `on_cancel = f(on_start, on_resolve, caller = None)`
 // (definitions.py line 572) — so the reference deliberately leaves a host
 // callee's cancellation behaviour to the embedding. wasmtime hosts get a real
@@ -21,7 +21,7 @@
 //     outside, so its side effects still land. Discard is about DELIVERY.
 //
 // The last point is the hazard `deferCancel()` exists for: an import with a
-// commit point marks itself and keeps the pre-A23 run-to-completion behaviour.
+// commit point marks itself and keeps the pre-cancellation discard run-to-completion behaviour.
 //
 // These tests drive `createLoweredImport` + `createSubtaskCancel` directly,
 // the same way tests/async_lower_test.ts does, so each step of the reference's
@@ -122,7 +122,7 @@ function mkFixture(hostFn: (...a: unknown[]) => unknown): Fixture {
     // Read off the host value exactly as `executor.ts buildLoweredImport`
     // reads it from the embedder's imports record.
     deferCancel: isDeferCancel(hostFn),
-    // A24 likewise: the mark is read off the host value, and it is what makes
+    // abortable() likewise: the mark is read off the host value, and it is what makes
     // `createLoweredImport` append a fresh `AbortSignal` to every call.
     abortable: isAbortable(hostFn),
   }) as (...args: number[]) => unknown;
@@ -177,7 +177,7 @@ function inFlight(f: Fixture): { subtaski: number; subtask: Subtask } {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
-Deno.test("A23: the async cancel form discards and answers CANCELLED_BEFORE_RETURNED", () => {
+Deno.test("cancellation discard: the async cancel form discards and answers CANCELLED_BEFORE_RETURNED", () => {
   // The headline: NOT BLOCKED. `canon_subtask_cancel` calls `on_cancel`, which
   // is now the prompt-cancel host, so `subtask.resolved()` is already true when
   // the built-in re-checks it — every parking branch is skipped and the tail
@@ -199,7 +199,7 @@ Deno.test("A23: the async cancel form discards and answers CANCELLED_BEFORE_RETU
   assertEq(subtask.hasPendingEvent(), false);
 });
 
-Deno.test("A23: the SYNC cancel form under jspi also answers synchronously (no park)", () => {
+Deno.test("cancellation discard: the SYNC cancel form under jspi also answers synchronously (no park)", () => {
   // The sync form's jspi arm parks on `hasPendingEvent` and sets
   // `hasSyncWaiter` for the duration (SITE 5, async_builtins.ts). A prompt
   // cancel never reaches it: the subtask is resolved before the park decision,
@@ -221,8 +221,8 @@ Deno.test("A23: the SYNC cancel form under jspi also answers synchronously (no p
   assertEq(subtask.resolveDelivered(), true);
 });
 
-Deno.test("A23: a late value settle after a discard is inert (no host failure)", async () => {
-  // Pre-A23 this poisoned the store: the settle continuation called
+Deno.test("cancellation discard: a late value settle after a discard is inert (no host failure)", async () => {
+  // Pre-cancellation discard this poisoned the store: the settle continuation called
   // `onResolve` unconditionally, which ran into its `state === STARTED` assert
   // ("on_resolve on a subtask that never started") and parked that
   // AssertionError on `store.hostFailure` — surfacing on whatever unrelated
@@ -244,9 +244,9 @@ Deno.test("A23: a late value settle after a discard is inert (no host failure)",
   assertEq(subtask.state, SubtaskState.CANCELLED_BEFORE_RETURNED);
 });
 
-Deno.test("A23: a late REJECTION after a discard is inert (not a host failure)", async () => {
+Deno.test("cancellation discard: a late REJECTION after a discard is inert (not a host failure)", async () => {
   // The guest renounced the call, so there is no addressee for the error.
-  // Pre-A23 the rejection landed on `store.hostFailure` unconditionally and
+  // Pre-cancellation discard the rejection landed on `store.hostFailure` unconditionally and
   // failed the next call into the instance with the error of an operation
   // nobody was waiting for.
   const d = deferred<number>();
@@ -261,7 +261,7 @@ Deno.test("A23: a late REJECTION after a discard is inert (not a host failure)",
   assertEq(f.store.pendingHostCalls.size, 0);
 });
 
-Deno.test("A23: a discarded call stops counting for deadlock detection", () => {
+Deno.test("cancellation discard: a discarded call stops counting for deadlock detection", () => {
   // `pendingHostCalls` is the driver's "progress is still possible, just not
   // this turn" evidence (`driveAsync`: `pendingHostCalls.size === 0` is a
   // precondition of the deadlock verdict). A renounced call can no longer wake
@@ -278,7 +278,7 @@ Deno.test("A23: a discarded call stops counting for deadlock detection", () => {
   assertEq(f.store.pendingHostCalls.size, 0);
 });
 
-Deno.test("A23: a discard releases the subtask's lenders, exactly like a RETURNED delivery", () => {
+Deno.test("cancellation discard: a discard releases the subtask's lenders, exactly like a RETURNED delivery", () => {
   // The #106 class: a subtask that breaks off without delivering its
   // resolution leaves every handle it borrowed elevated forever, and later
   // `resource.drop`s trap "handle still lent out" on a perfectly healthy
@@ -299,7 +299,7 @@ Deno.test("A23: a discard releases the subtask's lenders, exactly like a RETURNE
   assertEq(lendable.numLends, 0);
 });
 
-Deno.test("A23: deferCancel() keeps run-to-completion — BLOCKED, then the real result", async () => {
+Deno.test("cancellation discard: deferCancel() keeps run-to-completion — BLOCKED, then the real result", async () => {
   // The opt-out, end-to-end at this layer: the marked import's `onCancel` stays
   // the accept-and-ignore no-op, so the subtask is still unresolved when
   // `canon_subtask_cancel` re-checks it and the async form answers BLOCKED
@@ -329,7 +329,7 @@ Deno.test("A23: deferCancel() keeps run-to-completion — BLOCKED, then the real
   assertEq(subtask.resolveDelivered(), true);
 });
 
-Deno.test("A23: subtask.drop succeeds after a discard", () => {
+Deno.test("cancellation discard: subtask.drop succeeds after a discard", () => {
   // `Subtask.drop` traps unless the resolution was DELIVERED (definitions.py
   // `Subtask.drop`, line 912). Discard delivers, so the guest's ordinary
   // epilogue — cancel, then drop the handle — works with no special casing.
@@ -345,11 +345,11 @@ Deno.test("A23: subtask.drop succeeds after a discard", () => {
 });
 
 // ---------------------------------------------------------------------------
-// A24: the per-call AbortSignal (contracts/embedder-api.md §"Functions and
+// abortable(): the per-call AbortSignal (contracts/embedder-api.md §"Functions and
 // async"; polyengine#241)
 // ---------------------------------------------------------------------------
 //
-// A23's discard is about DELIVERY: the host operation runs on, and a
+// cancellation discard's discard is about DELIVERY: the host operation runs on, and a
 // discarded dial keeps dialing. `abortable()` hands the host the platform's
 // own cancellation vocabulary — every call of a marked import gets a fresh
 // `AbortSignal`, and the runtime aborts it when, and only when, the call is
@@ -369,7 +369,7 @@ function recorder(result: () => unknown) {
   return { seen, fn };
 }
 
-Deno.test("A24: a marked import receives WIT arity + 1, the extra arg an unaborted AbortSignal", () => {
+Deno.test("abortable(): a marked import receives WIT arity + 1, the extra arg an unaborted AbortSignal", () => {
   // The signature is the mark's unconditional half: `FT` declares one param,
   // so a marked host fn is called with two — the lifted `u32` and the signal.
   const d = deferred<number>();
@@ -386,7 +386,7 @@ Deno.test("A24: a marked import receives WIT arity + 1, the extra arg an unabort
   assertEq((r.seen.last as AbortSignal).aborted, false);
 });
 
-Deno.test("A24: an UNMARKED import receives exactly WIT arity (no stray signal)", () => {
+Deno.test("abortable(): an UNMARKED import receives exactly WIT arity (no stray signal)", () => {
   // The control for the test above: the mark is what appends the signal, so
   // an unmarked import's arity must not move. A stray trailing argument would
   // land on a host implementation that declared an optional parameter and
@@ -400,7 +400,7 @@ Deno.test("A24: an UNMARKED import receives exactly WIT arity (no stray signal)"
   assertEq(r.seen.last, 1);
 });
 
-Deno.test("A24: a discard aborts the signal — one microtask LATER, never inside the built-in", async () => {
+Deno.test("abortable(): a discard aborts the signal — one microtask LATER, never inside the built-in", async () => {
   // The ordering guarantee. `onCancel` runs synchronously inside
   // `canon_subtask_cancel`, i.e. inside a live guest activation; running host
   // abort listeners there is the issue-#24 attribution class plus arbitrary
@@ -424,8 +424,8 @@ Deno.test("A24: a discard aborts the signal — one microtask LATER, never insid
   assertEq(signal.aborted, true);
 });
 
-Deno.test("A24: an AbortError rejection provoked by the abort is inert", async () => {
-  // The composition with A23's guards: the host reacts to the abort by
+Deno.test("abortable(): an AbortError rejection provoked by the abort is inert", async () => {
+  // The composition with cancellation discard's guards: the host reacts to the abort by
   // rejecting, and that rejection belongs to a call the guest renounced. It
   // reaches the settle continuation with the subtask already resolved, so it
   // is discarded like any other late settlement — never `store.hostFailure`,
@@ -448,7 +448,7 @@ Deno.test("A24: an AbortError rejection provoked by the abort is inert", async (
   assertEq(subtask.state, SubtaskState.CANCELLED_BEFORE_RETURNED);
 });
 
-Deno.test("A24: deferCancel + abortable — cancellation never discards, so the signal never fires", async () => {
+Deno.test("abortable(): deferCancel + abortable — cancellation never discards, so the signal never fires", async () => {
   // The inert composition the contract calls out. A `deferCancel()` import's
   // cancellation is accepted and ignored (BLOCKED, then the real result), so
   // no discard ever happens and the signal — minted, because the signature is
@@ -480,7 +480,7 @@ Deno.test("A24: deferCancel + abortable — cancellation never discards, so the 
   assertEq(payload, SubtaskState.RETURNED);
 });
 
-Deno.test("A24: no cancellation, no abort — a marked import settles normally", async () => {
+Deno.test("abortable(): no cancellation, no abort — a marked import settles normally", async () => {
   // Discard-only, stated positively: an ordinary call of a marked import runs
   // to its natural settlement with the signal untouched, and delivers.
   const d = deferred<number>();

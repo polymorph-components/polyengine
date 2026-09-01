@@ -25,23 +25,26 @@
 //! only way for this to be sound" in Rust.
 //!
 //! `cancel-inflight`/`cancel-defer`/`cancel-defer-ifc` extend this corpus for
-//! amendment A23 (contracts/embedder-api.md; polyengine#241): the guest-side
-//! shape (poll once, drop, return) is identical across all three — what
-//! differs is which import the drop targets, and hence what the HOST does
-//! with the cancel. `sleep` (undecorated) gets the A23 default: discard, the
-//! export returns promptly. `sleep-defer`/`timers.sleep-defer` are branded
-//! `deferCancel()` host-side (protocol/src/defer_cancel.ts): the cancel
-//! parks until the import resolves naturally, so the export returns after
-//! ~ms — the pre-A23 behavior, opted back in per-declaration. The `timers`
-//! variant additionally proves the conventions layer's `relayMarks` carries
-//! the brand across an interface-member wrapper, not just a bare one.
+//! deferCancel() (contracts/embedder-api.md §"Functions and async";
+//! polyengine#241): the guest-side shape (poll once, drop, return) is
+//! identical across all three — what differs is which import the drop
+//! targets, and hence what the HOST does with the cancel. `sleep`
+//! (undecorated) gets the discard-by-default behavior: the export returns
+//! promptly. `sleep-defer`/`timers.sleep-defer` are branded `deferCancel()`
+//! host-side (protocol/src/defer_cancel.ts): the cancel parks until the
+//! import resolves naturally, so the export returns after ~ms — the
+//! un-annotated default before deferCancel() existed, opted back in
+//! per-declaration. The `timers` variant additionally proves the
+//! conventions layer's `relayMarks` carries the brand across an
+//! interface-member wrapper, not just a bare one.
 //!
-//! `cancel-abort`/`run-abortable` extend the corpus again for amendment A24
-//! (contracts/embedder-api.md; polyengine#241): `sleep-abort` is branded
-//! `abortable()` host-side (protocol/src/abortable.ts), so the host is
-//! handed a per-call `AbortSignal` it can use to actually stop the work a
-//! discarded cancellation would otherwise leave running. The guest-side
-//! shape is identical to `cancel_inflight`: poll once, drop, return.
+//! `cancel-abort`/`run-abortable` extend the corpus again for abortable()
+//! (contracts/embedder-api.md §"Functions and async"; polyengine#241):
+//! `sleep-abort` is branded `abortable()` host-side
+//! (protocol/src/abortable.ts), so the host is handed a per-call
+//! `AbortSignal` it can use to actually stop the work a discarded
+//! cancellation would otherwise leave running. The guest-side shape is
+//! identical to `cancel_inflight`: poll once, drop, return.
 
 wit_bindgen::generate!({
     world: "cancel-import",
@@ -106,9 +109,9 @@ impl Guest for Component {
         block(ms);
     }
 
-    /// A23 probe over the undecorated (discard-by-default) import: poll once,
-    /// drop, return. No detached task needed — the point is how fast THIS
-    /// export call itself returns.
+    /// deferCancel() probe over the undecorated (discard-by-default)
+    /// import: poll once, drop, return. No detached task needed — the
+    /// point is how fast THIS export call itself returns.
     async fn cancel_inflight(ms: u64) {
         let mut f = Box::pin(sleep(ms));
         // `Box::pin`, not `pin!`: dropping a `Pin<&mut _>` drops the
@@ -134,18 +137,20 @@ impl Guest for Component {
         drop(f);
     }
 
-    /// A24 probe (contracts/embedder-api.md amendment A24): mirrors
-    /// `cancel_inflight` exactly, but over `sleep-abort` — the host-side
-    /// `abortable()`-branded import — so the host receives the discard as an
-    /// `AbortSignal` firing, not merely as an uncollected promise.
+    /// abortable() probe (contracts/embedder-api.md §"Functions and
+    /// async"): mirrors `cancel_inflight` exactly, but over `sleep-abort` —
+    /// the host-side `abortable()`-branded import — so the host receives
+    /// the discard as an `AbortSignal` firing, not merely as an uncollected
+    /// promise.
     async fn cancel_abort(ms: u64) {
         let mut f = Box::pin(sleep_abort(ms));
         let _ = futures::poll!(f.as_mut());
         drop(f);
     }
 
-    /// A24 control: run `sleep-abort` to natural completion, no cancellation
-    /// anywhere — the host's `AbortSignal` must never fire on this path.
+    /// abortable() control: run `sleep-abort` to natural completion, no
+    /// cancellation anywhere — the host's `AbortSignal` must never fire on
+    /// this path.
     async fn run_abortable(ms: u64) {
         sleep_abort(ms).await;
     }

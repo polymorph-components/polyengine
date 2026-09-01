@@ -1,5 +1,5 @@
 // The copy registry (contracts/embedder-api.md §"Module identity and
-// @polyengine/protocol", amendment A9; issue #83).
+// @polyengine/protocol"; issue #83).
 //
 // The registry's job is diagnosis, never refusal. These tests use fake
 // entries: the real registrant is runtime/src/embedder/mod.ts, and the
@@ -19,7 +19,7 @@ function reset(): void {
   delete (globalThis as any)[RUNTIME_COPIES];
 }
 
-Deno.test("A9: registration is visible through the global slot", () => {
+Deno.test("registration is visible through the global slot", () => {
   reset();
   assertEquals(runtimeCopies().length, 0);
   assertEquals(copyCensus(), "", "a healthy graph adds nothing to messages");
@@ -48,7 +48,7 @@ Deno.test("A9: registration is visible through the global slot", () => {
   reset();
 });
 
-Deno.test("A9: registration is idempotent per URL", () => {
+Deno.test("registration is idempotent per URL", () => {
   reset();
   const e = {
     url: "file:///a/mod.ts",
@@ -62,7 +62,7 @@ Deno.test("A9: registration is idempotent per URL", () => {
   reset();
 });
 
-Deno.test("A9: a foreign pre-seeded array is adopted, never replaced", () => {
+Deno.test("a foreign pre-seeded array is adopted, never replaced", () => {
   reset();
   // Exactly the production shape: another copy (older package, bundled copy)
   // created the array before this module was ever evaluated.
@@ -89,7 +89,7 @@ Deno.test("A9: a foreign pre-seeded array is adopted, never replaced", () => {
   reset();
 });
 
-Deno.test("A9: entries are frozen and snapshots do not alias the slot", () => {
+Deno.test("entries are frozen and snapshots do not alias the slot", () => {
   reset();
   registerRuntimeCopy({
     url: "file:///a/mod.ts",

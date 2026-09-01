@@ -685,8 +685,9 @@ Deno.test("cut: the first cut ever has no window", async () => {
   assertEquals(fx.written["changes.md"], "");
 });
 
-// ----- A22: conventions goldens (contracts/embedder-api.md "The
-// conventions suite is the executable definition of the host ABI") -------------
+// ----- conventions goldens (contracts/embedder-api.md §"The host-ABI
+// surface and its version": "The conventions suite is the executable
+// definition of the host ABI") -------------------------------------------------
 
 const GOLDEN_DIR = "runtime/tests/conventions/golden/";
 const goldenNameStatus = (lines: string[]) => lines.join("\n");

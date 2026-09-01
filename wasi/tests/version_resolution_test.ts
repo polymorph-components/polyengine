@@ -1,13 +1,12 @@
-// D-2 resolution test: leaves at three 0.2.x versions all resolve against
+// Resolution test: leaves at three 0.2.x versions all resolve against
 // the one `@0.2` track provider — via the embedder's real `ImportResolver`,
-// not string tricks (contracts/embedder-api.md §"Version canonicalization";
-// C0 finding D-2). This is the test the mission dispatch names explicitly.
+// not string tricks (contracts/embedder-api.md §"Version canonicalization").
 
 import { assertEq, assertTrue } from "./asserts.ts";
 import { ImportResolver } from "@polyengine/runtime/embedder";
 import { wasi } from "../src/mod.ts";
 
-Deno.test("D-2: the one wasi() @0.2 provider serves 0.2.6 / 0.2.9 / 0.2.12", () => {
+Deno.test("the one wasi() @0.2 provider serves 0.2.6 / 0.2.9 / 0.2.12", () => {
   const shims = wasi();
   const resolver = new ImportResolver(shims);
   for (const v of ["0.2.6", "0.2.9", "0.2.12"]) {
@@ -24,7 +23,7 @@ Deno.test("D-2: the one wasi() @0.2 provider serves 0.2.6 / 0.2.9 / 0.2.12", () 
   }
 });
 
-Deno.test("D-1: the one wasi() @0.3 clocks provider serves both diverging drafts", () => {
+Deno.test("the one wasi() @0.3 clocks provider serves both diverging drafts", () => {
   const shims = wasi();
   const resolver = new ImportResolver(shims);
   const hit = resolver.resolve("wasi:clocks/monotonic-clock@0.3.0");

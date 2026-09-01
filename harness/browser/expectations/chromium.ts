@@ -1,4 +1,4 @@
-// Chromium lane expectation — the REQUIRED lane (docs/milestones.md M3).
+// Chromium lane expectation — the REQUIRED lane.
 //
 // Chromium and Deno share V8, so the browser lane SHOULD be the Deno lane.
 // **It now is, exactly**: zero deltas, and the TOTAL row below is the Deno

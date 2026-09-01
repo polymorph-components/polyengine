@@ -2,7 +2,8 @@
 //! surface (see wit/world.wit) — guest-constructed requests, `client.send`,
 //! streamed response bodies, and the trailers/res future choreography the
 //! WIT mandates (every guest-created future writer MUST write: dropping
-//! one unwritten is a CABI trap, amendment A8).
+//! one unwritten is a CABI trap; contracts/embedder-api.md §"Streams and
+//! futures").
 
 wit_bindgen::generate!({
     world: "http-fetch",

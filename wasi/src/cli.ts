@@ -12,7 +12,8 @@
 // tuple<stream<u8>, future<result<_, error-code>>>` (the tcp-receive
 // tuple shape) and `stdout/stderr.write-via-stream: func(data:
 // stream<u8>) -> future<result<_, error-code>>` (the tcp-send shape:
-// the async method's promise IS the future source, amendment A12); exit
+// the async method's promise IS the future source, per embedder-api.md
+// §"Streams and futures"); exit
 // gains `exit-with-code: func(status-code: u8)`, and environment's cwd
 // getter is renamed `get-initial-cwd` (0.2 spells it `initial-cwd`).
 
@@ -87,9 +88,9 @@ function concat(chunks: Uint8Array[]): Uint8Array {
  * `exit`'s WIT signature is `exit: func(status: result)` — `result` with no
  * type parameters, i.e. `result<_, _>`. Per contracts/embedder-api.md's value
  * table, a `result` in **parameter** (non-return) position is plain nested
- * data: `{ kind: "ok" } | { kind: "err" }` (the A10 family — this comment
- * and the impl carried the pre-A10 `tag` spelling until 2026-08-14, a
- * latent bug the direct-call unit tests masked), never a throw. Only a
+ * data: `{ kind: "ok" } | { kind: "err" }` (embedder-api.md §"Naming and
+ * casing" — enum/variant case names are data, not `{tag}` wrappers),
+ * never a throw. Only a
  * function's own *return*-position result throws/rejects.
  */
 export function cli(options: CliOptions = {}): CliResult {
@@ -119,7 +120,7 @@ export function cli(options: CliOptions = {}): CliResult {
     exitCode: () => exitCode,
   };
 
-  /** 0.3 write-via-stream into a capture buffer (A12: the promise IS the future). */
+  /** 0.3 write-via-stream into a capture buffer (the promise IS the future — embedder-api.md §"Streams and futures"). */
   const captureViaStream = (
     chunks: Uint8Array[],
     mirror: ((text: string) => void) | undefined,

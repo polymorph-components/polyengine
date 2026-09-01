@@ -1,6 +1,6 @@
 // Two platform facts about JSPI resumption that decide how the scheduler's
 // ambient "current thread" can work at all. Both were established
-// experimentally in M2 phase 3d; pinning them here so the next change to the
+// experimentally; pinning them here so the next change to the
 // ambient mechanism cannot silently invalidate its premise.
 //
 // See the "engine-driven resumptions" section of runtime/src/task/scheduler.ts

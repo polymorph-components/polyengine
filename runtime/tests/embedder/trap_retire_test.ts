@@ -1,5 +1,5 @@
 // #66: a component fault must never strand or silently satisfy a host
-// stream/future operation (contracts/embedder-api.md amendment A7).
+// stream/future operation (contracts/embedder-api.md §"Streams and futures").
 //
 // Mechanism under test: a trap breaks the enter/leave bracket, the instance
 // is poisoned (permanently, by the poison marker), and the retirement walk

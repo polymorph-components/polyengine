@@ -1,4 +1,4 @@
-;; The genuinely-blocking guest — the shape C0 finding #6 said no consumer
+;; The genuinely-blocking guest — the shape no consumer previously
 ;; had, and the polymorph-iroh upstream-iroh class now has: a sync export
 ;; that parks its own wasm frame on wasi:io pollables (a timer here; the
 ;; consumer's real reactor adds socket pollables minted by external glue).

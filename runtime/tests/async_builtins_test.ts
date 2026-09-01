@@ -229,7 +229,7 @@ Deno.test("waitable-set.wait: without an event and without a cancel, needs JSPI"
 });
 
 // ---------------------------------------------------------------------------
-// The callback-ABI loop's trap conditions (A2)
+// The callback-ABI loop's trap conditions
 // ---------------------------------------------------------------------------
 
 Deno.test("unpack_callback_result: a code above MAX traps", () => {

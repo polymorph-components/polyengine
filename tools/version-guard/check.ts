@@ -61,10 +61,10 @@ export const PACKAGES = [...LOCKSTEP, "protocol"];
 const JSR_PROTOCOL = "https://jsr.io/@polyengine/protocol";
 
 /** The committed conventions-suite goldens (contracts/embedder-api.md
- * "The conventions suite is the executable definition of the host ABI",
- * amendment A22): the suite itself lands in a later track, so this
- * directory does not exist yet in most trees — every check below must
- * pass vacuously (no M/D found) when it is absent or untouched. */
+ * §"The host-ABI surface and its version": "The conventions suite is the
+ * executable definition of the host ABI"): this directory may not exist in
+ * every tree — every check below must pass vacuously (no M/D found) when it
+ * is absent or untouched. */
 export const LOCKED_GOLDEN_DIR = "runtime/tests/conventions/golden/";
 
 export type Check = { name: string; ok: boolean; detail: string };
@@ -154,7 +154,8 @@ export async function latestCutVersion(
   return { tag, version: tag.slice(1) };
 }
 
-// ----- conventions goldens (A22) -----------------------------------------------
+// ----- conventions goldens (contracts/embedder-api.md §"The host-ABI
+// surface and its version") ---------------------------------------------------
 
 export type GoldenChange = { status: "A" | "M" | "D"; path: string };
 
@@ -218,7 +219,7 @@ export function conventionsGoldenPrCheck(
     "conventions-goldens",
     `this PR modifies or deletes committed goldens under ${LOCKED_GOLDEN_DIR} (${
       touched.map((c) => c.path).join(", ")
-    }) — that asserts a host-ABI behavior change (contracts/embedder-api.md A22) and requires either the breaking/protocol label (the protocol minor bump it implies) or, for a reviewed behavior-neutral correction of the suite itself, the conventions-fix label`,
+    }) — that asserts a host-ABI behavior change (contracts/embedder-api.md §"The host-ABI surface and its version") and requires either the breaking/protocol label (the protocol minor bump it implies) or, for a reviewed behavior-neutral correction of the suite itself, the conventions-fix label`,
   );
 }
 
@@ -265,7 +266,7 @@ export async function fetchBase(
   }
   // Same base, same three-dot/two-dot fallback, scoped to the locked
   // goldens dir and asking for rename/status detail instead of names only
-  // — the A22 gate needs to tell "added" from "modified/deleted".
+  // — the conventions-goldens gate needs to tell "added" from "modified/deleted".
   let goldenDiff = await fx.run("git", [
     "diff",
     "--name-status",
@@ -401,7 +402,8 @@ export async function prChecks(fx: Effects, env: PrEnv): Promise<Check[]> {
   }
 
   // 6/7 are measured against the PUBLISHED protocol, not the last cut:
-  // protocol is outside the lockstep (embedder-api A10), publishes on its
+  // protocol is outside the lockstep (contracts/embedder-api.md §"Version
+  // canonicalization"), publishes on its
   // own manifest, and can therefore tear whether or not this repo has ever
   // cut a release.
   const publishedProtocol = await jsrProtocolLatest(fx);
@@ -412,11 +414,11 @@ export async function prChecks(fx: Effects, env: PrEnv): Promise<Check[]> {
     changed,
   }));
 
-  // 8. A22: modifying/deleting a locked conventions golden asserts a
-  // host-ABI behavior change (contracts/embedder-api.md "The conventions
-  // suite is the executable definition of the host ABI"). Advisory here,
-  // same trust model as the breaking labels; authoritative gate is in cut
-  // mode below.
+  // 8. Modifying/deleting a locked conventions golden asserts a
+  // host-ABI behavior change (contracts/embedder-api.md §"The host-ABI
+  // surface and its version": "The conventions suite is the executable
+  // definition of the host ABI"). Advisory here, same trust model as the
+  // breaking labels; authoritative gate is in cut mode below.
   checks.push(conventionsGoldenPrCheck(goldenChanges, labels));
 
   return checks;
@@ -789,7 +791,7 @@ export function cutGuards(input: {
     ));
   }
 
-  // A22, authoritative: any M/D under the locked conventions goldens in
+  // Authoritative: any M/D under the locked conventions goldens in
   // this window asserts a host-ABI behavior change. The escape is either
   // protocol on a LATER MINOR LINE than at the last cut (a behavior change
   // is breaking by definition, so a patch move does not satisfy; a
@@ -797,7 +799,7 @@ export function cutGuards(input: {
   // this does not duplicate that enforcement — it catches the change that
   // shipped with no label at all) or a conventions-fix label anywhere in
   // the window (the reviewed behavior-neutral-correction escape,
-  // contracts/embedder-api.md A22).
+  // contracts/embedder-api.md §"The host-ABI surface and its version").
   const touchedGoldens = input.goldenChanges.filter((c) =>
     c.status === "M" || c.status === "D"
   );
@@ -827,7 +829,7 @@ export function cutGuards(input: {
         "cut-conventions-goldens",
         `this window modifies or deletes committed goldens under ${LOCKED_GOLDEN_DIR} (${
           touchedGoldens.map((c) => c.path).join(", ")
-        }) but protocol ${input.protocolVersion} is not a later minor line than the last cut's ${input.protocolAtLastCut}, and no PR in this window carries conventions-fix — a golden change asserts a host-ABI behavior change (contracts/embedder-api.md A22): label the PR breaking/protocol (and bump protocol's minor), or conventions-fix for a reviewed behavior-neutral correction`,
+        }) but protocol ${input.protocolVersion} is not a later minor line than the last cut's ${input.protocolAtLastCut}, and no PR in this window carries conventions-fix — a golden change asserts a host-ABI behavior change (contracts/embedder-api.md §"The host-ABI surface and its version"): label the PR breaking/protocol (and bump protocol's minor), or conventions-fix for a reviewed behavior-neutral correction`,
       ));
     }
   }

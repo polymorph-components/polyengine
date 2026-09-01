@@ -1,11 +1,11 @@
-// C0 Leg 3 — translator throughput on the multi-MB consumer corpus.
+// Leg 3 — translator throughput on the multi-MB consumer corpus.
 //
 //   deno run --allow-read leg3_throughput.ts
 //
 // Times `translateRaw` cold + 3 warm per artifact, records envelope size and
 // plan shape, and dumps `errorDetail` verbatim for rejections (rejections are
-// FINDINGS for the C0 discrepancy table, not failures of this leg).
-// Baseline datum from M0: 94 KB component in ~28 ms.
+// FINDINGS for the consumer-smoke discrepancy table, not failures of this leg).
+// Baseline datum: 94 KB component in ~28 ms.
 
 import {
   ARTIFACTS,
@@ -29,7 +29,7 @@ const CORPUS: Array<[string, string]> = [
 
 const t = await loadTranslator();
 
-console.log("=== C0 Leg 3: translator throughput ===\n");
+console.log("=== Leg 3: translator throughput ===\n");
 console.log(
   "| artifact | bytes | sha256[0..16] | cold ms | warm ms (3) | envelope B | verdict |",
 );

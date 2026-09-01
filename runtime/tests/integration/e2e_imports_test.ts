@@ -1,7 +1,7 @@
 // Component *imports*, end to end: host functions reached through
-// `plan.imports[].path` (contracts/plan-format.md v0.1 amendment #4) and
+// `plan.imports[].path` (contracts/plan-format.md schema) and
 // host-defined resource types reached through `plan.importedResources`
-// (contracts v0.2 proposal).
+// (contracts/plan-format.md schema).
 //
 // The official suite's sync corpus never imports anything (every `linking/`
 // and `resources/` component is closed), so these shapes get purpose-built
@@ -200,7 +200,7 @@ Deno.test({
   name: "imported resources: ResourceIndex counts imports first",
   ignore: shimWasm === null,
   fn: async () => {
-    // Regression guard for plan-format.md v0.1 amendment #2: the component's
+    // Regression guard for the `importedResources` field (contracts/plan-format.md schema): the component's
     // single resource table refers to ResourceIndex 0, which is the *imported*
     // resource. An executor that read it as DefinedResourceIndex 0 would bind
     // the table to a resource this component never defines.

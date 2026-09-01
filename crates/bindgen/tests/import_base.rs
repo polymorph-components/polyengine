@@ -3,8 +3,9 @@
 //! Generated bindings used to hardcode `../../../src/...` specifiers,
 //! calibrated to exactly one output directory in exactly one checkout — so
 //! a binding written anywhere else had unresolvable imports, and the
-//! world-digest handshake that `contracts/embedder-api.md` amendment A17
-//! scopes to the generated typed entry point was unreachable for consumers.
+//! world-digest handshake that `contracts/embedder-api.md` §"Module wiring
+//! and instantiation" scopes to the generated typed entry point was
+//! unreachable for consumers.
 //!
 //! Three properties are pinned here:
 //! a. depth independence, proven end-to-end with `deno check`;

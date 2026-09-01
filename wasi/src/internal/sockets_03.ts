@@ -114,7 +114,7 @@ export function sockets03(onCall: (call: string) => void): {
      * the remote and `send` needs no explicit address. An unbound socket
      * implicitly binds to the family wildcard first (wasmtime parity).
      *
-     * SUSPENDING (A1/A2): node's `dgram.connect` settles via callback one
+     * SUSPENDING (embedder-api.md §"The WASI parking kernel"): node's `dgram.connect` settles via callback one
      * tick later, so this sync WIT func parks the calling frame for that
      * tick — the same shape as tcp `listen`.
      */
@@ -619,11 +619,12 @@ export function sockets03(onCall: (call: string) => void): {
      * WIT: `listen: func() -> result<stream<tcp-socket>, error-code>` —
      * transitions to `listening` and returns the perpetual accept stream,
      * whose elements are connected `TcpSocket` resources (lowered as
-     * `own<tcp-socket>` — amendment A13 destroys any element the guest
-     * never takes, closing that accepted connection). An unbound socket
+     * `own<tcp-socket>` — embedder-api.md §"Streams and futures" destroys
+     * any element the guest never takes, closing that accepted connection).
+     * An unbound socket
      * implicitly binds to the family wildcard with an ephemeral port.
      *
-     * SUSPENDING (embedder-api A1/A2, the wasi:io `block` kernel): the OS
+     * SUSPENDING (embedder-api.md §"The WASI parking kernel", the wasi:io `block` kernel): the OS
      * bind is deferred one event-loop turn by `net.Server.listen` (module
      * header), so this async method awaits the settle and the runtime
      * parks the calling guest frame for that one tick. Full listener
@@ -695,7 +696,8 @@ export function sockets03(onCall: (call: string) => void): {
           release();
         }
       })();
-      // The A13 producer-cancellation hook: when the guest drops the
+      // The producer-cancellation hook (embedder-api.md §"Streams and
+      // futures"): when the guest drops the
       // stream while the loop above is PARKED in accept(), the runtime's
       // pump invokes this — closing the listener is what unparks the
       // accept (it rejects; classified fatal; the generator retires).
@@ -712,7 +714,8 @@ export function sockets03(onCall: (call: string) => void): {
 
     /**
      * WIT: `send: func(data: stream<u8>) -> future<result<_, error-code>>`
-     * — a sync func; the returned promise is the future source (A12).
+     * — a sync func; the returned promise is the future source
+     * (embedder-api.md §"Streams and futures").
      * NEVER throws: the function has no error channel of its own, so every
      * failure — including the state-machine ones — resolves the future as
      * an err value. The argument stream is dropped on failure so its
@@ -770,7 +773,7 @@ export function sockets03(onCall: (call: string) => void): {
      * close — the future distinguishes them (`ok` vs `err`). Dropping the
      * stream's reader (guest SHUT_RD) stops the pump, discards queued
      * data, and settles the future ok — the canceller is the observer
-     * (the same logic as embedder-api A8's cancelRead ruling).
+     * (the same logic as embedder-api.md §"Streams and futures"'s cancelRead ruling).
      */
     receive(): [TcpByteStream, Promise<SocketResult>] {
       onCall("tcp-socket.receive");
@@ -787,7 +790,8 @@ export function sockets03(onCall: (call: string) => void): {
         try {
           for (;;) {
             // The chunk is node's own buffer (no copy); it is borrowed by
-            // the rendezvous until the peer takes it (A5), which is safe —
+            // the rendezvous until the peer takes it (embedder-api.md
+            // §"Streams and futures": round-trip idempotence), which is safe —
             // each read hands back a distinct buffer.
             let chunk: Uint8Array | null;
             try {

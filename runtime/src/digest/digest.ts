@@ -5,8 +5,9 @@
 // must produce byte-identical canonical JSON (and therefore identical
 // sha256) for a structurally-equivalent world — this equality IS the
 // design validation (see runtime/tests/digest_test.ts's cross-language
-// fixture test). This resolves contracts/plan-format.md v0.1 amendment #7
-// ("worldDigest needs redesign before M1 bindgen").
+// fixture test). The wire plan's own `worldDigest` field is legacy
+// (contracts/plan-format.md), retained for wire compatibility only; this
+// module computes the normative digest independently.
 //
 // THE NORMALIZATION SPEC IS DOCUMENTED ONCE, in crates/bindgen/src/digest.rs's
 // module doc comment (kept in sync with this file) — read it first. Short
@@ -103,8 +104,8 @@ function hex(buf: ArrayBuffer): string {
 // ---------------------------------------------------------------------------
 
 function buildResourceNameMap(plan: WirePlan): Map<number, string> {
-  // CONTRACT: plan-format.md v0.1 amendment #2 / v0.2 proposal
-  // `importedResources` (format.ts:23-33). An imported resource occupies
+  // CONTRACT: the `importedResources` field (contracts/plan-format.md
+  // schema; format.ts:23-33). An imported resource occupies
   // `ResourceIndex` slots *before* every defined (own/exported) resource
   // (`ResourceIndex = importedResources.length + DefinedResourceIndex`), and
   // this implementation has no alias map from those imported-resource
@@ -180,8 +181,9 @@ function canonImport(
   resourceNames: Map<number, string>,
 ): Canon {
   // CONTRACT: the plan's `imports` list is flat (`{name, path, kind, type}`)
-  // even for interface-qualified imports (plan-format.md v0.1 amendment #4,
-  // "Untested: current corpus has no imports"); no fixture in this repo's
+  // even for interface-qualified imports (`imports[].path`,
+  // contracts/plan-format.md schema — "Untested: current corpus has no
+  // imports"); no fixture in this repo's
   // sync corpus (hello/values/resources) has any imports, so this path is
   // exercised by no test. Best-effort flattened-name treatment, chosen to
   // be structurally analogous to the export side's nested naming without
@@ -227,8 +229,8 @@ function canonExportItem(
     // digest.md's item rule: only functions and resources contribute as
     // export items. A module export is not WIT-expressible (bindgen can
     // never emit a digest containing one) and does not affect
-    // positional-calling ABI shape, so it is excluded — plan-format.md v4
-    // amendment 2.
+    // positional-calling ABI shape, so it is excluded — the `module` export
+    // kind (contracts/plan-format.md schema notes).
     return null;
   }
   // exp.kind === "type"

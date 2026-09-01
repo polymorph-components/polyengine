@@ -1,17 +1,17 @@
-// The real executor: components run through the M0 plan executor
+// The real executor: components run through the plan executor
 // (translator shim -> plan v0 -> runtime/src/exec), core modules through the
 // JS WebAssembly API (delegated to CoreOnlyExecutor's module path, which is
 // exact and needs no reimplementation).
 //
-// Scope note (task M1-B): the M0 runtime is a *sync* executor (docs/architecture.md §6
+// Scope note: the runtime is a *sync* executor (docs/architecture.md §6
 // degenerate path); async canonical options / stream|future types raise
-// PlanError("... M2 task scheduler ...") from
+// PlanError("... task scheduler ...") from
 // runtime/src/exec/boundary.ts createLiftedFunction, or NotImplemented from
 // runtime/src/cabi lift/lower for stream/future values. Both are mapped here
 // to PendingRuntimeError with a `pending-capability: ` prefix (see
 // runner.ts) rather than left to surface as a failure, since the command is
-// understood but the capability plainly doesn't exist yet — precise for
-// Track A hand-off.
+// understood but the capability plainly doesn't exist yet — precise
+// hand-off to whichever track builds it.
 
 import { loadPlan, PlanError } from "@polyengine/runtime/plan";
 import type { LoadedPlan } from "@polyengine/runtime/plan";
@@ -37,20 +37,19 @@ import type { Value } from "./schema.ts";
 import { collapseResultsByArity, toComponentValue } from "./value-mapping.ts";
 
 /** Substrings that indicate the command needs a not-yet-built runtime
- * capability (async/streams/etc, M2) rather than a genuine bug. Checked
+ * capability (async/streams/etc) rather than a genuine bug. Checked
  * against thrown error messages from the shim/plan/executor. Keep narrow —
  * anything else surfaces as a real failure. */
 const CAPABILITY_MARKERS = [
-  "M2 task scheduler",
   "stream/future",
   "needs task machinery",
   "needs copy machinery",
   "error-context",
-  // UnsupportedFeatureError from runtime/src/intrinsics for milestone-gated
-  // trampolines ("… — scheduled for M2 …"): a declared capability gap, not a
-  // wrong answer. Orchestrator ruling on the M1-B ambiguity: classify as
-  // pending-capability.
-  "scheduled for M2",
+  // UnsupportedFeatureError from runtime/src/intrinsics for capability-gated
+  // trampolines ("… — needs the "…" capability, not yet implemented …", the
+  // runtime's own literal text): a declared capability gap, not a wrong
+  // answer — classify as pending-capability.
+  "capability, not yet implemented",
 ];
 
 function asCapabilityOrRethrow(e: unknown, what: string): never {
@@ -171,7 +170,7 @@ export class RuntimeExecutor implements CommandExecutor {
         asCapabilityOrRethrow(e, "instantiate");
       }
       if (e instanceof PlanError) asCapabilityOrRethrow(e, "instantiate");
-      // Milestone-gated trampolines (UnsupportedFeatureError et al.) match
+      // Capability-gated trampolines (UnsupportedFeatureError et al.) match
       // via CAPABILITY_MARKERS regardless of error class:
       maybeCapability(e, "instantiate");
       if (expect === "link-error") throw new LinkError(String(e));

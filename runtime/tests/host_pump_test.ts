@@ -1,5 +1,6 @@
-// Host-stream pumping between export calls — regressions for C0 findings
-// R-1 and R-2, plus a pin on the documented embedder-never-acts behaviour.
+// Host-stream pumping between export calls — regressions for host-pump
+// starvation of pendingHostCalls and check-then-act poisoning via
+// hostFailure, plus a pin on the documented embedder-never-acts behaviour.
 //
 // WHY THESE ARE STORE-LEVEL AND NOT END-TO-END
 // ===========================================

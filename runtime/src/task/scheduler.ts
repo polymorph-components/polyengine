@@ -43,7 +43,7 @@
 // stackless (callback-ABI) path never blocks *inside* a wasm frame — every
 // wasm call returns a callback code before the host decides to wait. Blocking
 // inside a wasm frame (stackful async lifts; a sync lower on an unresolved
-// subtask) genuinely requires JSPI and is M2 phase 3; those sites fail loudly
+// subtask) genuinely requires JSPI; those sites fail loudly
 // rather than pretending (see `needsJspi`).
 
 import { assert_, trapIf } from "../cabi/trap.ts";
@@ -97,7 +97,7 @@ export type ThreadBody = Generator<BlockRequest, void, any>;
  */
 export class NeedsJspi extends Error {
   constructor(what: string) {
-    super(`needs JSPI (M2 phase 3): ${what}`);
+    super(`needs JSPI: ${what}`);
     this.name = "NeedsJspi";
   }
 }
@@ -108,8 +108,8 @@ export function needsJspi(what: string): never {
 
 /**
  * Failure raised when a synchronous entry into an instance would race a
- * pending lift (contracts/embedder-api.md amendment A25, failure-ladder arm
- * 2).
+ * pending lift (contracts/embedder-api.md §"Functions and async",
+ * failure-ladder arm 2).
  *
  * In jspi mode a promising-wrapped entry settles through a microtask hop even
  * when nothing suspended, and the hop-quiescence gate (exec/boundary.ts)
@@ -134,8 +134,8 @@ export class SyncEntryBusy extends Error {
 }
 
 /**
- * Failure raised where a capability scheduled for a later M2 phase is
- * required. Same rationale as `NeedsJspi`: never a `Trap`.
+ * Failure raised where a not-yet-implemented capability is required. Same
+ * rationale as `NeedsJspi`: never a `Trap`.
  */
 export class PendingCapability extends Error {
   constructor(what: string) {

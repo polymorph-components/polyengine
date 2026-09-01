@@ -15,8 +15,10 @@
 //
 //   1. ONE copy of each package in the installed graph. Cross-package imports
 //      must be npm dependencies, not inlined source — see
-//      contracts/embedder-api.md amendment A9 and the header of build.ts.
-//   2. Versions and dependency edges match the A9/A10 policy: protocol rides
+//      contracts/embedder-api.md §"Module identity and @polyengine/protocol"
+//      and the header of build.ts.
+//   2. Versions and dependency edges match the module-identity /
+//      version-canonicalization policy: protocol rides
 //      its own manifest version (on both registries); the lockstep four
 //      share one emission version; dep edges are exact-lockstep-sibling vs.
 //      caret-protocol.
@@ -50,7 +52,8 @@ function readJson(path) {
 }
 
 /**
- * Versions and dependency edges (contracts/embedder-api.md A9/A10): protocol
+ * Versions and dependency edges (contracts/embedder-api.md §"Module identity
+ * and @polyengine/protocol", §"Version canonicalization"): protocol
  * rides its own manifest version on both registries; the lockstep four share
  * runtime's manifest version; a lockstep sibling dep pins exact, a protocol
  * dep pins caret-of-protocol's-manifest-version. Checked against the ALREADY
@@ -124,7 +127,7 @@ function checkVersionsAndEdges() {
   }
 
   console.log(
-    `    protocol@${built.protocol.version} (manifest-pinned, A10)`,
+    `    protocol@${built.protocol.version} (manifest-pinned)`,
   );
   console.log(`    lockstep@${runtimeManifestVersion}: ${LOCKSTEP.join(", ")}`);
   console.log(`    runtime -> protocol: "${expectedCaret}"`);

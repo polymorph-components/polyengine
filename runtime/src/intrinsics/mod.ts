@@ -1,17 +1,17 @@
 // Host trampolines (contracts/intrinsics.md §B) and FACT-adapter intrinsic
-// obligations (§A) — the M0 subset, with instantiate-time (never call-time)
-// milestone-aware failures for everything else.
+// obligations (§A) — the core subset, with instantiate-time (never
+// call-time) capability-gated failures for everything else.
 //
-// Implemented in M0:
+// Implemented from the core subset:
 //   lower-import        host function call through descriptor-IR lift/lower
 //   trap                FACT `Trap` import -> ComponentTrap
 //   enter/exit-sync-call  degenerate sync-call bookkeeping (assert-and-count)
 //   resource-new/rep/drop  sync resource paths over cabi handle tables
-//                          (M1 schedule, implemented early: the resources
-//                          fixture references them at instantiation)
+//                          (resources capability, implemented early: the
+//                          resources fixture references them at instantiation)
 //
-// Everything else fails at instantiate time with the milestone at which
-// intrinsics.md §B schedules it — "this component needs the M2 task core"
+// Everything else fails at instantiate time naming the capability that
+// intrinsics.md §B schedules it under — "this component needs the task core"
 // is a feature, not a crash.
 
 import {
@@ -148,22 +148,22 @@ const TRAP_UNCAUGHT_EXCEPTION = 49;
 
 export { UnsupportedFeatureError } from "./errors.ts";
 
-/** Milestone at which each trampoline kind stops instantiate-failing. */
-const TRAMPOLINE_MILESTONE: Record<string, "M0" | "M1" | "M2"> = {
-  "lower-import": "M0",
-  "trap": "M0",
-  "enter-sync-call": "M0",
-  "exit-sync-call": "M0",
-  "resource-new": "M1",
-  "resource-rep": "M1",
-  "resource-drop": "M1",
-  "transcoder": "M1",
-  "resource-transfer-own": "M1",
-  "resource-transfer-borrow": "M1",
+/** Capability at which each trampoline kind stops instantiate-failing. */
+const TRAMPOLINE_CAPABILITY: Record<string, "core" | "resources" | "task-core"> = {
+  "lower-import": "core",
+  "trap": "core",
+  "enter-sync-call": "core",
+  "exit-sync-call": "core",
+  "resource-new": "resources",
+  "resource-rep": "resources",
+  "resource-drop": "resources",
+  "transcoder": "resources",
+  "resource-transfer-own": "resources",
+  "resource-transfer-borrow": "resources",
 };
 
-function milestoneOf(kind: string): "M0" | "M1" | "M2" {
-  return TRAMPOLINE_MILESTONE[kind] ?? "M2";
+function capabilityOf(kind: string): "core" | "resources" | "task-core" {
+  return TRAMPOLINE_CAPABILITY[kind] ?? "task-core";
 }
 
 /**
@@ -321,7 +321,7 @@ interface ResourceTrampolineDecl {
  * unsupported kind fails instantiation, not the first call
  * (plan-format.md "Executor obligations"). Unreferenced trampolines are
  * never created and therefore never fail (intrinsics.md §B tolerates e.g.
- * an unreferenced task-return until M2).
+ * an unreferenced task-return until the task core exists).
  */
 export function createTrampoline(
   decl: WireTrampoline,
@@ -455,8 +455,8 @@ function createTrampolineBody(
         );
       };
 
-    // Sync-call task bookkeeping (intrinsics.md §A: "degenerate-case
-    // implementation in M0: assert-and-count"). wasmtime 47 signatures:
+    // Sync-call task bookkeeping (intrinsics.md §A) — assert-and-count.
+    // wasmtime 47 signatures:
     // enter-sync-call carries the caller/callee instance pair, which is what
     // the reentrance gate below needs; balance of the bracket is asserted at
     // component teardown by tests.
@@ -585,7 +585,7 @@ function createTrampolineBody(
     // `lift_own`/`lower_own` and `lift_borrow`/`lower_borrow`
     // (definitions.py) with the src/dst tables named by index rather than
     // implied by the running instance.
-    // FACT string transcoders (contracts/intrinsics.md §B "M1"). The plan
+    // FACT string transcoders (contracts/intrinsics.md §B). The plan
     // carries the op name plus the source/destination `RuntimeMemoryIndex`es;
     // `./transcode.ts` holds the twelve operations.
     case "transcoder": {
@@ -600,13 +600,13 @@ function createTrampolineBody(
         // 64-bit linear memories are out of scope (https://github.com/polymorph-components/polyengine/issues/12); refusing at
         // instantiate time keeps "instantiate-time, never call-time".
         throw new UnsupportedFeatureError(
-          "M2",
+          "task-core",
           `transcoder '${d.op}' over a 64-bit linear memory`,
         );
       }
       if (!(TRANSCODE_OPS as readonly string[]).includes(d.op)) {
         throw new UnsupportedFeatureError(
-          "M2",
+          "task-core",
           `unknown string transcode operation '${d.op}'`,
         );
       }
@@ -617,7 +617,7 @@ function createTrampolineBody(
       ) as CoreFn;
     }
 
-    // --- 0.3 async built-ins (contracts/intrinsics.md §B "M2") -------------
+    // --- 0.3 async built-ins (contracts/intrinsics.md §B) -------------
     // All ported in ./async_builtins.ts; the ones that would have to block a
     // wasm frame fail there, at the call site, with a JSPI-shaped message.
     case "task-return":
@@ -761,7 +761,7 @@ function createTrampolineBody(
 
     default:
       throw new UnsupportedFeatureError(
-        milestoneOf(decl.kind) === "M1" ? "M1" : "M2",
+        capabilityOf(decl.kind) === "resources" ? "resources" : "task-core",
         `component requires host trampoline '${decl.kind}'`,
       );
   }
@@ -818,10 +818,9 @@ function transferOwn(
  *    which is this path's stand-in for the callee `Subtask`/`Task` of
  *    definitions.py.
  */
-// CONTRACT: contracts/intrinsics.md §A schedules ResourceTransfer* at "M1,
-// resources milestone" and describes them only as "handle-table moves between
-// component instances" — the borrow-scope interaction is unspecified there.
-// The reading implemented here is taken from definitions.py
+// CONTRACT: contracts/intrinsics.md §A describes ResourceTransfer* only as
+// "handle-table moves between component instances" — the borrow-scope
+// interaction beyond the lender registration is taken from definitions.py
 // (`lift_borrow`/`lower_borrow` + `Subtask.lenders`/`Task.num_borrows`) and
 // is what makes `test/resources/borrows.wast:162` (`lend-trap`) trap.
 function transferBorrow(

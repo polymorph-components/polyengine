@@ -352,7 +352,7 @@ export function contains(
 /**
  * Structural `ValType` equality.
  *
- * CONTRACT (bugfix, TRACK C2-D; generalized during the #18 tls smoke): naive
+ * CONTRACT (bugfix, generalized during the #18 tls smoke): naive
  * `JSON.stringify(a) === JSON.stringify(b)` recurses into `own`/`borrow`'s
  * `ResourceTypeInfo` — a class whose `impl` field is documented "Compared by
  * object identity everywhere" (see `ResourceTypeInfo` above) and which cycles
@@ -360,7 +360,7 @@ export function contains(
  * tables that reference their types), so `JSON.stringify` throws
  * `TypeError: Converting circular structure to JSON` on ANY type containing
  * `own<R>`/`borrow<R>` at any depth. First hit by `task.return` result types
- * (C2-D, polymorph-test's `list<own<test-case>>`), then by stream/future
+ * (polymorph-test's `list<own<test-case>>`), then by stream/future
  * element types (polymorph-tls streams carrying resource-bearing payloads).
  * Object-identity types (`ResourceTypeInfo`) are compared by reference, per
  * the documented invariant.
