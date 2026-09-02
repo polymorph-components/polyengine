@@ -1,8 +1,8 @@
 // Resource destructor gating and host-side lend tracking (issues #85, #86).
 //
 // Authority: definitions.py `canon_resource_drop` (@ 2f13265) and the
-// `Store.lift` it routes the dtor through — which post-CM#705 carries NO
-// entry gate, so dtor reentrance into a live instance is valid — plus
+// `Store.lift` it routes the dtor through — which carries NO entry gate
+// (CM#705), so dtor reentrance into a live instance is valid — plus
 // the lend bookkeeping of `Subtask.add_lender` / `deliver_resolve`
 // (lines 890, 902) and the `num_lends` traps in `lift_own` /
 // `canon_resource_drop` (lines 1508, 2325).
@@ -88,9 +88,9 @@ function mkPair(): {
 // ---------------------------------------------------------------------------
 
 Deno.test("#85/#173: dropping a cross-instance own while the impl is LIVE succeeds", () => {
-  // INVERTED by polyengine#173 (CM#705): `canon_resource_drop` lifts the dtor
-  // through a `Store.lift` that no longer gates, so a drop whose implementing
-  // instance is mid-execution is valid and the dtor simply runs.
+  // `canon_resource_drop` lifts the dtor through a `Store.lift` that does
+  // not gate (CM#705), so a drop whose implementing instance is
+  // mid-execution is valid and the dtor simply runs.
   const { caller, impl } = mkPair();
   let ran = 0;
   const rt = new ResourceTypeInfo(impl, () => {
@@ -183,15 +183,10 @@ Deno.test("#85: a guest-initiated dtor that does not finish synchronously traps"
 });
 
 Deno.test("#160: a host-initiated async dtor is not external work", async () => {
-  // REVISED from the #85 pin "holds the gate until it settles". That
-  // behaviour was the bug: the held host-entry bracket made the impl
-  // instance non-enterable for the whole activation, so `Store.tick`'s
-  // enterability filter could never resume a suspension point belonging to
-  // the dtor itself (#160). A host-initiated dtor is a full canonical lift
-  // (definitions.py `canon_resource_drop`), and post-CM#705 (polyengine#173)
-  // there is no gate left to hold at all. What still needs pinning: the
-  // completion promise is NOT a `pendingHostCalls` entry (it is not external
-  // work), and the store drains cleanly.
+  // A host-initiated dtor is a full canonical lift (definitions.py
+  // `canon_resource_drop`), and there is no gate to hold across it (CM#705).
+  // What needs pinning: the completion promise is NOT a `pendingHostCalls`
+  // entry (it is not external work), and the store drains cleanly.
   const { store, impl } = mkPair();
   let resolveDtor: () => void = () => {};
   const rt = new ResourceTypeInfo(

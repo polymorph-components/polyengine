@@ -51,7 +51,7 @@
 //     this layer never sees.
 
 import type { WirePlan } from "../plan/format.ts";
-import { loadEnvelope, PlanError, TranslateError } from "../plan/loader.ts";
+import { loadEnvelope, PlanError } from "../plan/loader.ts";
 
 /**
  * The minimal surface `translateCached`/`keyFor` need from a translator.
@@ -246,14 +246,7 @@ export async function translateCached(
   // verdict — must propagate uncached, per TranslateError's docs: a
   // validation verdict is a judgment about the *input component*, not
   // something to cache-and-replay) and gives us the split plan/adapters.
-  let wire: WirePlan;
-  let adapters: Map<string, Uint8Array>;
-  try {
-    ({ wire, adapters } = loadEnvelope(first));
-  } catch (e) {
-    if (e instanceof TranslateError) throw e;
-    throw e;
-  }
+  const { wire, adapters } = loadEnvelope(first);
 
   // A `put` failure (issue #196) is swallowed: the translation already
   // succeeded and was already validated above by `loadEnvelope` — failing

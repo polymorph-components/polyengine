@@ -68,12 +68,8 @@ export interface ComponentInstanceLike {
  * instance at all, and test harnesses supply bare `{handles, mayLeave}`
  * doubles. cabi must not depend on task/, so the symbol lives here and
  * `ComponentInstanceState` declares it; cabi/handles.ts `isComponentInstance`
- * is the only reader.
- *
- * It replaced a structural match on the pre-CM#705 reentrance methods
- * (`may_enter_from`/`enter_from`/`leave_to`), which polyengine#173 deleted
- * along with the rest of the transient reentrance model. `ComponentInstanceLike`
- * stays deliberately structural: the brand is NOT part of it.
+ * is the only reader. `ComponentInstanceLike` stays deliberately structural:
+ * the brand is NOT part of it.
  */
 export const COMPONENT_INSTANCE: unique symbol = Symbol(
   "polyengine.ComponentInstance",
@@ -106,9 +102,8 @@ export class LiftLowerContext {
    * with `may_leave` cleared, so a realloc that lowers an import traps
    * (`canon_lower`'s `trap_if(not ...may_leave)`, implemented here by
    * exec/boundary.ts `createLoweredImport`). That bracket is implemented
-   * below. What remains deferred is only the reference's routing of the call
-   * through `canon_lift`; upstream component-model PR #705 removes that
-   * routing, leaving this bracket as the whole story. polyengine issue #147.
+   * below, and it is the whole story: the pinned reference does not route
+   * the call through `canon_lift` (CM#705). polyengine issue #147.
    */
   reallocate(
     old: number,

@@ -1,13 +1,10 @@
-// Entry refusal on the sync fused-adapter bracket (issues #99, #173).
+// Entry refusal on the sync fused-adapter bracket (issue #99).
 //
-// INVERTED by polyengine#173. The reference chain that used to gate here —
-// `canon_lower` invoking the callee `FuncInst` with `caller =
-// thread.task.inst`, and `Store.lift`'s `trap_if(not
-// inst.may_enter_from(caller))` over `entering_set(caller)` — is GONE:
-// CM#705 (definitions.py @ 2f13265) removed `may_enter`, `entering_set`,
-// `enter_from`, `leave_to` and `ComponentInstance.parent` outright, and
-// `Store.lift` now runs `canon_lift` unconditionally. A sibling cycle
-// A -> C -> A through the trampoline therefore does NOT trap.
+// Nothing at the pinned reference gates this site: definitions.py @ 2f13265
+// has no `may_enter`, `entering_set`, `enter_from`, `leave_to` or
+// `ComponentInstance.parent`, and `Store.lift` runs `canon_lift`
+// unconditionally (CM#705). A sibling cycle A -> C -> A through the
+// trampoline therefore does NOT trap.
 //
 // wasmtime agreed all along: `enter_guest_sync_call`
 // (47.0.3 `runtime/component/concurrent.rs:1723`) performs no reentrance
@@ -69,8 +66,8 @@ Deno.test("enter-sync-call: an idle sibling callee is enterable", () => {
 });
 
 Deno.test("enter-sync-call: a sibling cycle A -> C -> A no longer traps (CM#705)", () => {
-  // Was: "sibling cycle A -> C -> A traps". Host entered A; A is mid-call
-  // into C; C calls back into A. Post-CM#705 that is simply a valid call.
+  // Host entered A; A is mid-call into C; C calls back into A. That is
+  // simply a valid call (CM#705).
   const { enter, exit, syncCallStack } = fixture();
   enter(A, 0, C);
   enter(C, 0, A);
@@ -100,8 +97,8 @@ Deno.test("enter-sync-call: a POISONED callee is refused, naming the trap", () =
 });
 
 Deno.test("enter-sync-call: a poisoned instance calling ITSELF passes vacuously", () => {
-  // `entryRefusal`'s `caller !== callee` guard: the pre-#705 entering set
-  // `{A} - {A}` was empty, and the vacuous pass is preserved.
+  // `entryRefusal`'s `caller !== callee` guard passes a self-call
+  // vacuously, even against a marked instance.
   const { enter, inst } = fixture();
   notifyInstancePoisoned(inst(A), new Error("earlier boom"));
   enter(A, 0, A);

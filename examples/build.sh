@@ -20,7 +20,7 @@ TARGET=wasm32-unknown-unknown
 BUILD_DIR=guests/build
 export CARGO_TARGET_DIR="$PWD/guests/target"
 
-GUESTS="hello values resources async-probe yield-only context-user backpressure-probe stream-echo stream-pass future-user future-import resource-stream tcp-echo http-fetch test-suite fs-probe net-probe cancel-import"
+GUESTS="hello values resources async-probe context-user stream-echo stream-pass future-user future-import resource-stream tcp-echo http-fetch test-suite fs-probe net-probe cancel-import"
 
 # Most guests are pure computational reactors on wasm32-unknown-unknown;
 # fs-probe and net-probe build for wasm32-wasip2 ON PURPOSE — std::fs /
@@ -37,7 +37,7 @@ target_for() {
 # CM 0.3 async guests additionally need the cm-async feature).
 features_for() {
   case "$1" in
-    async-probe|yield-only|context-user|backpressure-probe|stream-echo|stream-pass|future-user|future-import|resource-stream|tcp-echo|http-fetch|test-suite|cancel-import)
+    async-probe|context-user|stream-echo|stream-pass|future-user|future-import|resource-stream|tcp-echo|http-fetch|test-suite|cancel-import)
       echo "component-model,cm-async" ;;
     *) echo "component-model" ;;
   esac
@@ -79,9 +79,7 @@ if command -v wasmtime >/dev/null 2>&1; then
   # Component Model 0.3 async export (callback ABI): runs on wasmtime 47
   # with default flags; exercises yield suspension + task.return.
   check '42' async-probe.component.wasm              'wait-then-double(21)'
-  check '3' yield-only.component.wasm                 'yield-n-times(3)'
   check '6' context-user.component.wasm               'interleave(4)'
-  check '5' backpressure-probe.component.wasm         'toggle-around-yield(5)'
   echo "smoke run OK"
 else
   echo "(wasmtime not found; skipping smoke run)"

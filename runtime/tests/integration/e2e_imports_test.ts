@@ -366,20 +366,17 @@ Deno.test({
 });
 
 // ---------------------------------------------------------------------------
-// polyengine#173 (CM#705): HOST-MEDIATED REENTRANCE IS VALID
+// HOST-MEDIATED REENTRANCE IS VALID (CM#705)
 // ---------------------------------------------------------------------------
 
 Deno.test({
   name: "reentrance: a host import may synchronously re-enter its own instance",
   ignore: shimWasm === null,
   fn: async () => {
-    // The headline of the CM#705 adoption. Host calls `run`; `run` calls the
-    // host import `log`; the host handler synchronously calls `run` on the
-    // SAME instance again. This used to trap at the host-entry gate
-    // ("cannot enter component instance"): the reference's `Store.lift`
-    // refused a second entry while the first was live.
+    // Host calls `run`; `run` calls the host import `log`; the host handler
+    // synchronously calls `run` on the SAME instance again.
     //
-    // Merged reference (definitions.py @ 2f13265): `Store.lift` runs
+    // Reference (definitions.py @ 2f13265): `Store.lift` runs
     // `canon_lift` with no gate, `may_enter`/`entering_set`/`enter_from`/
     // `leave_to` do not exist, and nesting host entries is simply legal.
     // Both calls complete.

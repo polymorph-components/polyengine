@@ -28,24 +28,8 @@ and each CI job runs exactly one `gha::` recipe (`just ci` = exactly CI;
 affect; the full pass before commit is:
 
 ```sh
-just gates    # everything below, in this order
-```
-
-```sh
-just build test-rust      # cargo build --workspace; translator-shim/bindgen/testgen tests
-just test-runtime         # runtime check + tests (deps: shim, fixtures, corpus)
-just test-protocol
-just test-wasi test-ct-runner
-just test-sockets-node    # sockets fragment's node backend on pinned Node
-just test-bundle          # embedder-bundle release asset
-just publish-check        # deno publish --dry-run: the JSR publish checks, no upload
-just examples test-translate  # embedder examples; build-time translation CLI
-just conformance          # official CM suite, Deno lane
-just sched-seeds          # seeded-shuffle reruns: POLYENGINE_SCHED_SEED=1, =4242 (FIFO when unset)
-just shells               # pinned engine/runtime lanes: sm + node everywhere, jsc on x64, bun findings-only
-just browsers             # chromium + firefox lanes incl. worker/shared-worker realm rows (`just browsers-install` once)
-just smoke-tls            # polymorph-tls suite (issue #18)
-just smoke-c0             # consumer smoke legs
+just gates    # everything below, in this order; see the justfile (or
+              # `just --list`) for the recipe list and per-gate one-liners
 ```
 
 Conformance discipline: the harness fails loudly on unexpected failures *and*

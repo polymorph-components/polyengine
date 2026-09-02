@@ -309,7 +309,7 @@ if (pumpStarted) {
 // ---------------------------------------------------------------------------
 // Probe 4a — exported stream, read to completion.
 //
-// FINDING R-1 (see repro_stream_pump.ts): the guest fills this stream from a
+// FINDING R-1 (see runtime/tests/host_pump_test.ts): the guest fills this stream from a
 // DETACHED task that awaits `wait-for` between chunks. Once the export call
 // has returned there is no `driveAsync` loop, and nothing re-pumps the store
 // when a Promise-returning host import settles — so the host read stalls after

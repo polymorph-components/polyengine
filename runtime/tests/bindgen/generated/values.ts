@@ -104,10 +104,11 @@ export interface ValuesInstance extends Omit<EmbedderInstance, "exports"> {
 * Verifies the loaded plan's world digest against `WORLD_DIGEST`
 * BEFORE instantiating (contracts/digest.md; contracts/embedder-api.md
 * §"Module wiring and instantiation"), throwing
-* `WorldDigestMismatchError` with the structural diff on skew — no
-* guest code has run when that throws. Accepts the same sources as
-* the runtime `instantiate` (pre-translated artifacts, an envelope
-* via `artifactsFromEnvelope`, or component bytes plus a translator).
+* `WorldDigestMismatchError` — fails fast on skew, no
+* structural diff — no guest code has run when that throws. Accepts
+* the same sources as the runtime `instantiate` (pre-translated
+* artifacts, an envelope via `artifactsFromEnvelope`, or component
+* bytes plus a translator).
 *
 * Use `bind` instead only when the plan was verified already. */
 export async function instantiate(

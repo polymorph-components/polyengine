@@ -204,9 +204,9 @@ export function instancePoisonCause(inst: object): unknown {
 
 /**
  * Append the recorded poison cause to an entry-refusal trap message
- * (polyengine#145 ask 1). Since the transient gate went away with CM#705,
- * "cannot enter component instance" has exactly one cause left — a
- * permanently poisoned instance, the corpse of an earlier trap — and this
+ * (polyengine#145 ask 1). "cannot enter component instance" has exactly one
+ * cause — a permanently poisoned instance, the corpse of an earlier trap —
+ * and this
  * suffix names the trap that made it one. The call is kept unconditional at
  * the refusal sites (returning `base` unchanged for an unmarked instance) so
  * the message construction stays in one place; the suffix is
@@ -224,27 +224,22 @@ export function withPoisonCause(inst: object, base: string): string {
  * now, and if not, what does the refusal trap say? Returns `null` when entry
  * is allowed, otherwise the exact trap message for `base`.
  *
- * POISONING IS THE WHOLE MECHANISM (polyengine#173, CM#705 adoption). The
- * transient reentrance gate is GONE: at the pinned reference
- * (definitions.py @ 2f13265) `may_enter`, `entering_set`, `enter_from`,
- * `leave_to` and `ComponentInstance.parent` no longer exist — `Store.lift`
- * runs `canon_lift` with no gate at all, so host-mediated reentrance into a
- * live instance is simply VALID. The clause that consulted the transient
- * gate was deleted with the pin advance and the model itself with
- * polyengine#173; #251's re-key onto the marker is what made those deletions
- * pure subtractions (the marker never depended on `may_enter`).
+ * POISONING IS THE WHOLE MECHANISM (CM#705). There is no transient
+ * reentrance gate: at the pinned reference (definitions.py @ 2f13265)
+ * `may_enter`, `entering_set`, `enter_from`, `leave_to` and
+ * `ComponentInstance.parent` do not exist — `Store.lift` runs `canon_lift`
+ * with no gate at all, so host-mediated reentrance into a live instance is
+ * simply VALID.
  *
- * What survives is polyengine's NAMED DIVERGENCE: per-instance poisoning. A
+ * Against that, per-instance poisoning is polyengine's NAMED DIVERGENCE. A
  * trapped instance is a corpse — entry is refused permanently, with the
  * recorded cause appended (polyengine#145 ask 1) — where wasmtime instead
  * kills the whole store. The reference never faces the question because a
  * trap there is the end of the world.
  *
- * The `caller !== callee` guard preserves the reference's vacuous pass on an
- * EMPTY entering set (the pre-#705 `entering_set` was
- * `self_and_ancestors() - caller.self_and_ancestors()`, empty when caller is
- * callee). A dtor invoked from inside its own instance (cabi/handles.ts) is
- * the live case: it must not be refused by its own instance's marker.
+ * The `caller !== callee` guard keeps a self-call out of the refusal: a dtor
+ * invoked from inside its own instance (cabi/handles.ts) is the live case —
+ * it must not be refused by its own instance's marker.
  */
 export function entryRefusal(
   callee: object,
@@ -477,9 +472,9 @@ function activationOf(): any {
  * The opposite shape — A settles B's suspension so B runs AFTER A — is
  * deliberately NOT represented here: `SuspensionPoint.resume` pushes only when
  * nothing is currently running, so B never shadows A. B is picked up by its
- * own first `Suspending` call. (Until 2026-08-22 a third ambient tier — the
- * driver's `resumingThread` slot — also named B here; it was retired with the
- * slot, see `resolveAmbient` and `Store.pendingResumptions`.)
+ * own first `Suspending` call. A driver's settle-time claim would name B
+ * here, which is exactly why it is not an ambient tier — see `resolveAmbient`
+ * and `Store.pendingResumptions`.
  *
  * An activation leaves this stack when it parks again
  * (`blockCurrentActivation`) or finishes (its `awaitValue` promise settles —
@@ -570,14 +565,11 @@ export function releaseActivationAmbient(t: any): void {
 // The resumed-but-not-yet-run gate (a SEPARATE concern from the ambient above)
 // ---------------------------------------------------------------------------
 //
-// This used to be a module-global single slot, `resumingThread`, doing two
-// jobs: (1) the DRIVER's scheduling gate ("a suspension was settled and its
-// activation has not run yet — do not schedule anything else"), and (2) tier 3
-// of ambient resolution. Job (2) was retired on 2026-08-22 (issue #158) after
-// measurement showed it never decided a read; job (1) is real, but it is
-// per-Store SET semantics, not a global identity slot — see
-// `Store.pendingResumptions` below, and `resolveAmbient` for the retirement
-// evidence.
+// The gate answers one question for the DRIVER: "was a suspension settled
+// whose activation has not run yet — must I refrain from scheduling anything
+// else?" That is per-Store SET semantics, not a global identity slot, and it
+// is not an input to ambient resolution: see `Store.pendingResumptions`
+// below.
 
 const AMBIENT_TRACE = (() => {
   try {
@@ -621,48 +613,38 @@ export function ambientResidue(): { stack: number; claim: boolean } {
  *      is running outside our frames (a `Suspending` hop or a resumption).
  *      LIFO, because activations nest: an outer activation's built-in can
  *      synchronously enter an inner one's wasm.
- *   (There is no tier 3. A third tier — `resumingThread`, the driver's
- *      settle-time claim — existed from M3A-1 until 2026-08-22 and was
- *      RETIRED, see below.)
  *
- * Tier 2 replaced an async-context store (M3A-1). The store held
- * precisely "the innermost wasm activation currently executing, across the
- * engine's hops and resumptions", because it was written by `withActivation`
- * around the wasm entry and the engine restored it on every continuation it
- * had captured inside that extent. Tiers 1+2 now state that directly. The
- * equivalence is not asserted from the armchair: it was established
- * differentially, by running the whole conformance corpus with both the store
- * and this queue live and comparing them at every read (zero disagreements
- * over 1395 commands), and the corpus pins the result.
+ * What tiers 1+2 state directly is "the innermost wasm activation currently
+ * executing, across the engine's hops and resumptions" -- the same quantity
+ * an async-context store written around the wasm entry would carry, without
+ * depending on the engine to restore it on every continuation captured inside
+ * that extent (M3A-1). The equivalence is not asserted from the armchair: it
+ * was established differentially, against such a store, over the whole
+ * conformance corpus, comparing at every read (zero disagreements over 1395
+ * commands), and the corpus pins the result.
  *
- * Having TWO readers with different orders is not a hypothetical hazard: for
- * two rounds `currentThread` used store-first while `maybeCurrentThread` still
- * used slot-first, and since the FACT bracket sites read the latter, the
- * bracket was attributed to the driver's claim instead of its own activation
- * (`exit-sync-call with an empty sync-call stack`). Fixing the precedence in
- * one reader measured as "no change" because the failing sites used the other.
- * Do not add a third reader; extend this one. (`activationOf` above is not a
+ * Having TWO readers with different precedence orders is not a hypothetical
+ * hazard: they disagree silently at exactly the sites that matter -- the FACT
+ * bracket sites read `maybeCurrentThread`, so a divergent order there
+ * attributes the bracket to the driver's claim instead of its own activation
+ * (`exit-sync-call with an empty sync-call stack`), and a precedence fix
+ * applied to the other reader measures as "no change" because the failing
+ * sites never call it. Do not add a third reader; extend this one. (`activationOf` above is not a
  * second reader -- it answers a different question, "whose wasm frame are we
  * running on behalf of", and is used only by
  * `Store.consumePendingIfRunning`.)
  *
- * TIER 3 RETIRED, 2026-08-22 (issue #158). The bottom tier used to be
- * `resumingThread`, the driver's settle-time claim -- a last resort that named
- * whichever activation was settled or claimed across an await, right for that
- * one and wrong for every other in-flight activation. It was removed on the
- * strength of a re-run of the M3A-1 differential methodology: an instrumented
- * build counted every read where tiers 1-2 were empty and the slot was live,
- * and measured ZERO deciding reads across the conformance corpus (FIFO,
- * 1257/0), both seeded shuffles (`POLYENGINE_SCHED_SEED` 1 and 4242),
- * test-runtime (all jspi pins), and the smoke-tls three-async-component #24
- * corpus. A removal build then ran green on every engine lane we have:
- * test-runtime, test-protocol, conformance (1257/0, no expectation changes),
- * sched-seeds, the shells (sm + node + jsc + bun, all "OK, matches
- * expectation"), the browsers (chromium + firefox), smoke-tls and smoke-c0.
- * The reading: post-#24 the sentinel discipline (tier 2's claim/release edges)
- * always answers first, so the slot's attribution role was vestigial. Its
- * other, live role -- the scheduling gate -- survives as the per-Store
- * `Store.pendingResumptions` set.
+ * TWO TIERS ARE ENOUGH, and specifically a driver's settle-time claim is NOT
+ * a third: such a claim names whichever activation was settled or claimed
+ * across an await -- right for that one and wrong for every other in-flight
+ * activation. It is not needed, because the sentinel discipline (tier 2's
+ * claim/release edges, #24) always answers first: instrumented reads where
+ * tiers 1-2 were empty and a settle-time claim was live decided NOTHING
+ * across the conformance corpus, both seeded shuffles
+ * (`POLYENGINE_SCHED_SEED` 1 and 4242), test-runtime and the smoke-tls
+ * three-async-component #24 corpus. A driver's settle-time claim is a
+ * SCHEDULING gate only, and lives as the per-Store `Store.pendingResumptions`
+ * set (issue #158).
  */
 function resolveAmbient(): CurrentThreadLike | undefined {
   return threadStack[threadStack.length - 1] ??
@@ -855,22 +837,18 @@ export class Store {
    * wedges the loops, because an activation that merely hopped legitimately
    * holds an ambient while the scheduler is free to proceed.
    *
-   * PER-STORE and MULTI-ENTRY since 2026-08-22 (issues #158 mechanism B,
-   * #210). It was one module-global slot with a one-claimant assert, which
-   * (a) could not represent two legitimately-pending engine resumptions — a
-   * running activation X delivering a resume to Z while Y's resumption was
-   * still pending crashed on the assert — and (b) made every driver on every
-   * store yield while ANY store held a claim, so an idle store's
-   * `driveStoreAsync` died at the 10,000-hop assert (~311ms) while another
-   * store merely dwelt on a slow host import. The assert's invariant was
-   * tier-3 attribution unambiguity, which no longer exists (see
-   * `resolveAmbient`), so it is gone with the slot; the entries and their
-   * release edges are otherwise unchanged, per entry.
+   * PER-STORE and MULTI-ENTRY (issues #158 mechanism B, #210), both load
+   * bearing. MULTI-ENTRY because two engine resumptions can legitimately be
+   * pending at once: a running activation X may deliver a resume to Z while
+   * Y's resumption is still outstanding, and a one-claimant gate cannot
+   * represent that. PER-STORE because a claim held store-wide makes every
+   * driver on EVERY store yield: an idle store's `driveStoreAsync` dies at
+   * the 10,000-hop assert (~311ms) while another store merely dwells on a
+   * slow host import.
    *
    * Cross-store de-serialization is safe by disjointness: an activation
-   * belongs to exactly one store. Same-store it is strictly more conservative
-   * than the old slot — the gate keeps refusing until EVERY pending entry has
-   * died, rather than crashing on the second.
+   * belongs to exactly one store. Same-store the set is conservative — the
+   * gate keeps refusing until EVERY pending entry has died.
    *
    * Release edges, per entry: the activation PARKS again
    * (`blockCurrentActivation` -> `consumePendingIfRunning`), it FINISHES (its
@@ -1028,10 +1006,8 @@ export class Store {
    * throw (trap unwinding); callers propagate or park it exactly as they do
    * for `tick`.
    *
-   * Every non-stale tail is dispatched immediately, in queue order. (History,
-   * issue #156: tails whose instance was not host-enterable were deferred in
-   * place until the reentrance lock released. CM#705 / polyengine#173 deleted
-   * the reentrance model, so there is nothing left to defer on.)
+   * Every non-stale tail is dispatched immediately, in queue order: there is
+   * no enterability condition to defer on (CM#705).
    *
    * The ordering discipline is therefore settle order, full stop — and it is
    * the reason this queue exists rather than a direct resumption from the
@@ -1077,9 +1053,6 @@ export class Store {
    * It exists to gate `tick` (and to keep the driving loops from parking)
    * behind unserviced tails: resuming some other thread while a settled tail
    * waits would expose the out-of-order state the queue is there to prevent.
-   * (Pre-CM#705 this had to inspect each entry, because a queue holding only
-   * reentrance-DEFERRED tails had to answer false — issue #156. That case is
-   * gone with the reentrance model, polyengine#173.)
    */
   hasServiceableSettled(): boolean {
     return this.settled.length > 0;
@@ -1154,9 +1127,9 @@ export class Store {
   }
 
   /**
-   * definitions.py `Store.tick` (@ 2f13265): resume one ready thread. Post
-   * CM#705 there is no bracket and no gate — the reference body is exactly
-   * "pick a ready thread, resume it".
+   * definitions.py `Store.tick` (@ 2f13265): resume one ready thread. There
+   * is no bracket and no gate — the reference body is exactly "pick a ready
+   * thread, resume it" (CM#705).
    *
    * Returns false when no thread was ready, so callers can distinguish
    * "made progress" from "stuck" without inspecting the queue themselves.
@@ -1180,21 +1153,21 @@ export class Store {
     // Same discipline, other edge: a settled-but-unserviced activation tail
     // (see `settled`) is mid-"atomic resume" from the reference's point of
     // view; scheduling anything before servicing it acts on phantom state.
-    // That is settle-order discipline and has nothing to do with reentrance:
-    // it survives CM#705 unchanged. `hasServiceableSettled` (rather than
+    // That is settle-order discipline and has nothing to do with reentrance.
+    // `hasServiceableSettled` (rather than
     // "queue non-empty") only because a tail whose thread was already resumed
     // elsewhere must not wedge the store.
     if (this.hasServiceableSettled()) return false;
-    // Ready is sufficient — almost. The reentrance constraint that used to
-    // filter this set is GONE: post-CM#705 (definitions.py @ 2f13265)
-    // `Store.tick` resumes any ready thread with no gate and no bracket, so a
-    // sibling instance's thread going ready while another instance is entered
-    // from the host is simply resumable.
+    // Ready is sufficient — almost. Nothing filters this set for reentrance:
+    // at the pinned reference (definitions.py @ 2f13265) `Store.tick` resumes
+    // any ready thread with no gate and no bracket (CM#705), so a sibling
+    // instance's thread going ready while another instance is entered from
+    // the host is simply resumable.
     //
-    // What remains is polyengine's per-instance poisoning divergence: a
+    // What is added is polyengine's per-instance poisoning divergence: a
     // poisoned instance is a corpse, its threads must never resume, and the
-    // MARKER is the whole test (#251's re-key). `Thread.resumeWith` makes the
-    // same call on the tail path.
+    // MARKER is the whole test. `Thread.resumeWith` makes the same call on
+    // the tail path.
     const candidates = this.readyCandidates().filter((t) =>
       !isInstancePoisoned(t.task.inst)
     );

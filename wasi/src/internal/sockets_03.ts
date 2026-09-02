@@ -156,12 +156,6 @@ export function sockets03(onCall: (call: string) => void): {
         }
         this.#applyCachedOptions();
       }
-      if (this.#conn.connect === undefined) {
-        throw componentError(
-          { kind: "not-supported" },
-          "udp-socket.connect: this host's datagram backend has no connected mode",
-        );
-      }
       try {
         await this.#conn.connect({
           transport: "udp",
@@ -183,7 +177,7 @@ export function sockets03(onCall: (call: string) => void): {
         );
       }
       try {
-        this.#conn.disconnect?.();
+        this.#conn.disconnect();
       } catch (e) {
         throw mapPlatformError(e, "udp-socket.disconnect");
       }
@@ -422,12 +416,12 @@ export function sockets03(onCall: (call: string) => void): {
       const conn = this.#conn;
       if (conn === undefined) return;
       try {
-        if (this.#hopLimit !== undefined) conn.setTtl?.(this.#hopLimit);
+        if (this.#hopLimit !== undefined) conn.setTtl(this.#hopLimit);
         if (this.#recvBuffer !== undefined) {
-          conn.setRecvBufferSize?.(Number(this.#recvBuffer));
+          conn.setRecvBufferSize(Number(this.#recvBuffer));
         }
         if (this.#sendBuffer !== undefined) {
-          conn.setSendBufferSize?.(Number(this.#sendBuffer));
+          conn.setSendBufferSize(Number(this.#sendBuffer));
         }
       } catch (e) {
         throw mapPlatformError(e, "udp-socket (applying cached options)");
@@ -968,12 +962,6 @@ export function sockets03(onCall: (call: string) => void): {
     #applyKeepAlive(): void {
       const conn = this.#conn;
       if (this.#state !== "connected" || conn === undefined) return;
-      if (conn.setKeepAlive === undefined) {
-        throw componentError(
-          { kind: "not-supported" },
-          "tcp-socket: this host's TCP backend has no keep-alive control",
-        );
-      }
       try {
         conn.setKeepAlive(this.#keepAliveEnabled, Number(this.#keepAliveIdleNs / 1_000_000n));
       } catch (e) {

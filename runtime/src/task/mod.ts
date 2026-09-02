@@ -50,11 +50,11 @@ export type HandleTableEntry = unknown;
  * the may_leave boolean (wasmtime 47 FACT treats the whole flags global as
  * may_leave; there is no bitmask). Initial value 1 (true).
  *
- * There is no `may_enter` counterpart and no instance tree: upstream
- * component-model PR #705 (definitions.py @ 2f13265) deleted `may_enter`,
- * `parent`, `entering_set`, `enter_from` and `leave_to` outright, so nothing
- * gates entry into a live instance. polyengine#173 followed. What polyengine
- * keeps beyond the reference is per-instance POISONING — a named divergence
+ * There is no `may_enter` counterpart and no instance tree: at the pinned
+ * reference (definitions.py @ 2f13265, CM#705) there is no `may_enter`,
+ * `parent`, `entering_set`, `enter_from` or `leave_to`, so nothing gates
+ * entry into a live instance. What polyengine adds beyond the reference is
+ * per-instance POISONING — a named divergence
  * living entirely in ./scheduler.ts (`isInstancePoisoned`, `entryRefusal`),
  * not in any state on this class.
  *
@@ -316,8 +316,8 @@ export class Task {
    * picked up at the next cancellable block point (`deliverPendingCancel`).
    *
    * `caller` is retained for the call-site shape (fact_calls.ts's
-   * `subtask.onCancel`) and for diagnostics; the reentrance condition it used
-   * to feed went away with CM#705 (polyengine#173).
+   * `subtask.onCancel`) and for diagnostics; no condition here consults it
+   * (CM#705: entry into a live instance is ungated).
    */
   requestCancellation(caller: ComponentInstanceState | null): void {
     void caller;
@@ -379,8 +379,7 @@ export class Task {
     // threads never resume, so the request parks as pending-cancel forever —
     // which is the honest state, since a corpse can never reach a cancellable
     // suspension to deliver at. The reference never faces this because a trap
-    // there kills the whole store. The marker is the authoritative input
-    // (polyengine#173, #251's re-key).
+    // there kills the whole store. The marker is the authoritative input.
     if (candidates.length > 0 && !isInstancePoisoned(this.inst)) {
       this.state = "cancel-delivered";
       try {

@@ -25,7 +25,7 @@ import { trapIf } from "../cabi/trap.ts";
 import { assert_ } from "../cabi/trap.ts";
 import type { ResourceTypeInfo } from "../cabi/types.ts";
 import type { ComponentInstanceState } from "../task/mod.ts";
-import { entryRefusal, maybeCurrentThread, maybeCurrentTask, PendingCapability } from "../task/mod.ts";
+import { dbgId, entryRefusal, maybeCurrentThread, maybeCurrentTask } from "../task/mod.ts";
 import type { WireTrampoline } from "../plan/format.ts";
 import type { CoreFn, ExecutionStats } from "../exec/boundary.ts";
 import { UnsupportedFeatureError } from "./errors.ts";
@@ -345,19 +345,6 @@ export function createTrampoline(
 }
 
 /**
- * A trampoline that instantiates fine but fails at its first call, naming the
- * phase that will implement it. See the CONTRACT note at the stream/future
- * cases for why these are not instantiate-time failures.
- */
-function deferredCapability(kind: string, capability: string): CoreFn {
-  return () => {
-    throw new PendingCapability(
-      `built-in '${kind}' is not implemented yet: ${capability}`,
-    );
-  };
-}
-
-/**
  * The component instance a trampoline is declared in (wasmtime names it in
  * every instance-scoped `Trampoline` variant). This is the static answer to
  * definitions.py's `current_instance()`, and unlike it, it is defined during
@@ -396,18 +383,6 @@ const SCOPE_TRACE = (() => {
   }
 })();
 
-const taskIds = new WeakMap<object, number>();
-let nextTaskId = 1;
-function taskId(t: unknown): string {
-  if (t === undefined || t === null) return "NONE(->ctx fallback)";
-  let id = taskIds.get(t as object);
-  if (id === undefined) {
-    id = nextTaskId++;
-    taskIds.set(t as object, id);
-  }
-  return `T${id}`;
-}
-
 function syncScopes(ctx: TrampolineContext, site = "?"): any[] {
   const thread = maybeCurrentThread() as
     | { syncCallStack: any[] }
@@ -415,7 +390,8 @@ function syncScopes(ctx: TrampolineContext, site = "?"): any[] {
   const scopes = thread?.syncCallStack ?? ctx.syncCallStack;
   if (SCOPE_TRACE) {
     console.error(
-      `[scope] ${site} act=${taskId(thread)} depth=${scopes.length}`,
+      `[scope] ${site} act=${thread ? dbgId(thread) : "NONE(->ctx fallback)"} ` +
+        `depth=${scopes.length}`,
     );
   }
   return scopes;
@@ -472,9 +448,9 @@ function createTrampolineBody(
       ) => {
         // ENTRY REFUSAL at the fused sync-call boundary.
         //
-        // The reference's reentrance gate is GONE (CM#705; definitions.py @
+        // The reference has no reentrance gate (CM#705; definitions.py @
         // 2f13265 has no `may_enter`/`entering_set`/`enter_from`): a
-        // guest->guest call through `Store.lift` now runs `canon_lift`
+        // guest->guest call through `Store.lift` runs `canon_lift`
         // unconditionally, and host-mediated reentrance — host -> A.f -> C.g
         // -> host import -> host invokes C.g — is simply valid. wasmtime's
         // fused adapters agreed all along: `enter_guest_sync_call`
@@ -484,12 +460,7 @@ function createTrampolineBody(
         // `test/async/trap-on-reenter.wast` cases 2 and 3 pin — a translation
         // -time trap, not this site).
         //
-        // polyengine#165 recorded the omitted enter/leave bracket as a named
-        // divergence "pending the pin advance". The pin advance happened
-        // (polyengine#173): the divergence is CLOSED, because there is no
-        // bracket left to omit.
-        //
-        // What survives here is polyengine's per-instance poisoning: a
+        // What this site does check is polyengine's per-instance poisoning: a
         // callee that trapped is a corpse and may never be entered again,
         // and the refusal names the original trap (polyengine#145). That is
         // the whole content of this check.

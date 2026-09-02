@@ -26,7 +26,8 @@
 // Layering: dependency-free apart from ./brands.ts (the protocol package as a
 // whole imports nothing).
 
-import { defineBrand, hasBrand, SUSPENDING } from "./brands.ts";
+import { hasBrand, SUSPENDING } from "./brands.ts";
+import { makeMark } from "./mark_decorator.ts";
 
 interface Suspendable {
   [SUSPENDING]?: true;
@@ -67,46 +68,11 @@ interface Suspendable {
  * same function, typed for insertion into an imports record or for method
  * replacement.
  */
-export function suspending<F extends CallableFunction>(
+export const suspending: <F extends CallableFunction>(
   fn: F,
   context?: unknown,
   legacyDescriptor?: unknown,
-): F {
-  // TypeScript-legacy method decorator convention: (prototype, key,
-  // descriptor). Detectable because stage-3 contexts are objects with a
-  // string `kind`, never string/symbol property keys.
-  if (
-    typeof context === "string" || typeof context === "symbol" ||
-    legacyDescriptor !== undefined
-  ) {
-    throw new TypeError(
-      "suspending: legacy (experimentalDecorators) method decoration is not " +
-        "supported — the decorator would receive the prototype, not the " +
-        "method. Compile with stage-3 decorators (the default), or use the " +
-        "call form: `f: suspending(fn)`.",
-    );
-  }
-  if (context !== undefined) {
-    const kind = (context as { kind?: unknown }).kind;
-    if (kind !== "method") {
-      throw new TypeError(
-        `suspending: cannot decorate a ${String(kind)} — only methods ` +
-          `(instance or static) can be marked suspendable. Constructors are ` +
-          `synchronous by contract; for record-literal imports use the call ` +
-          `form: \`f: suspending(fn)\`.`,
-      );
-    }
-  }
-  if (typeof fn !== "function") {
-    throw new TypeError(
-      `suspending: expected a function, got ${typeof fn}`,
-    );
-  }
-  // Non-enumerable (`defineBrand`): the mark must not show up in value
-  // walks of an imports record, and re-marking the same function is a no-op.
-  defineBrand(fn as unknown as object, SUSPENDING);
-  return fn;
-}
+) => F = makeMark("suspending", "suspendable", SUSPENDING);
 
 /** Brand check (executor-side). */
 export function isSuspending(value: unknown): boolean {

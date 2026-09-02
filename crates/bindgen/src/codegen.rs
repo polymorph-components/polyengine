@@ -7,22 +7,24 @@
 //! behavior is emitted or assumed to exist yet (the runtime's own facade is
 //! a separate crate) — every generated file must `deno check` standalone.
 //!
-//! Built on `wit_bindgen_core::Source`/`Files` for text accumulation, still
-//! a hand-written generator, not a `WorldGenerator` trait implementation,
-//! not a `WorldGenerator` trait implementation (CONTRACT: docs/architecture.md §9 doesn't
-//! mandate the trait specifically, only "built on wit-bindgen-core").
+//! Built on a local `Source` buffer (`crate::source`) matching
+//! `wit_bindgen_core::Source`'s brace-tracking auto-indent behavior — still
+//! a hand-written generator, not a `WorldGenerator` trait implementation
+//! (CONTRACT: docs/architecture.md §9 doesn't mandate the trait
+//! specifically, only "built on wit-bindgen-core"; the vocabulary carries
+//! over even though the dependency itself does not).
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
 use anyhow::{bail, Context, Result};
-use wit_bindgen_core::Source;
 use wit_parser::{
     Function, FunctionKind, Handle, Resolve, Type, TypeDefKind, TypeId, WorldId, WorldItem,
     WorldKey,
 };
 
 use crate::digest;
+use crate::source::Source;
 
 /// Default import base for generated bindings: the versioned JSR specifier
 /// for `@polyengine/runtime`, with the version derived at build time from
@@ -271,7 +273,7 @@ pub fn generate(
     for (key, item) in w.imports.iter().chain(w.exports.iter()) {
         collect_and_emit_types(resolve, key, item, &mut emitted, &mut type_decls)?;
     }
-    src.push_str(&type_decls);
+    src.push_str(type_decls.as_str());
 
     // ---- Resource class declarations, in first-encountered order.
     for rid in &resource_order {
@@ -333,10 +335,11 @@ pub fn generate(
          * Verifies the loaded plan's world digest against `WORLD_DIGEST`\n\
          * BEFORE instantiating (contracts/digest.md; contracts/embedder-api.md\n\
          * §\"Module wiring and instantiation\"), throwing\n\
-         * `WorldDigestMismatchError` with the structural diff on skew — no\n\
-         * guest code has run when that throws. Accepts the same sources as\n\
-         * the runtime `instantiate` (pre-translated artifacts, an envelope\n\
-         * via `artifactsFromEnvelope`, or component bytes plus a translator).\n\
+         * `WorldDigestMismatchError` — fails fast on skew, no\n\
+         * structural diff — no guest code has run when that throws. Accepts\n\
+         * the same sources as the runtime `instantiate` (pre-translated\n\
+         * artifacts, an envelope via `artifactsFromEnvelope`, or component\n\
+         * bytes plus a translator).\n\
          *\n\
          * Use `bind` instead only when the plan was verified already. */\n\
          export async function instantiate(\n\

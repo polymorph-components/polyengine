@@ -395,10 +395,6 @@ export const XFAIL: XfailEntry[] = [
   //     fidelity, instance poisoning, instantiation-time task context, and one
   //     shim decoder gap).
   // =====================================================================
-  // --- async/async-calls-sync.json: GREEN under jspi auto-detection
-  // (the jspi flip); entries pruned. ---
-  // --- async/big-interleaving-test.json: GREEN under jspi auto-detection
-  // (the jspi flip); entry pruned. ---
   // --- async/builtin-trap-poisons-instance.json: root cause: STREAMS ---
   // --- async/cancel-and-exclusive-lock.json: CM#707 "always deliver
   // cancellation as soon as possible" (third_party/component-model commit
@@ -425,34 +421,11 @@ export const XFAIL: XfailEntry[] = [
       "finds no ready thread; cm707-cancel, https://github.com/polymorph-components/polyengine/issues/250",
   },
   // --- async/cancel-stream.json: root cause: STREAMS ---
-  // --- async/cancel-subtask.json: GREEN under jspi auto-detection
-  // (the jspi flip); entry pruned. ---
-  // --- async/cancellable.json: GREEN under jspi auto-detection (the jspi flip:
-  // request_cancellation now finds cancellable SuspensionPoints, and the
-  // async subtask.cancel waits for callee determinacy); entry pruned. Still
-  // GREEN after the CM#705 pin advance (polyengine#173): the dispatch
-  // predicted a single failing final assert here (cm707-cancel class,
-  // https://github.com/polymorph-components/polyengine/issues/250) but both of this file's commands pass —
-  // DEVIATION FROM PREDICTION, no entry added. ---
   // --- async/closed-stream.json: root cause: STREAMS ---
   // --- async/cross-abi-calls.json: root cause: FACT-ASYNC ---
   // --- async/cross-task-future.json: root cause: STREAMS ---
-  // --- async/deadlock.json: GREEN under jspi auto-detection (the jspi flip: the
-  // driver's deadlock verdict now fires with wasmtime's trap text); entry
-  // pruned. ---
-  // --- async/dont-block-start.json: GREEN under jspi auto-detection (the
-  // jspi flip: a start-function SuspendError maps to "cannot block a synchronous
-  // task before returning"); entry pruned. ---
   // --- async/drop-cross-task-borrow.json: root cause: FACT-ASYNC ---
-  // lines 305/307 GREEN after the #18 tls-smoke fixes (FACT [async-start]
-  // borrow window + ResourceTypeInfo unification); line 309 GREEN after the
-  // #13 wording fix (task-exit borrow check words as wasmtime's "borrow
-  // handles still remain at the end of the call"); entries pruned.
   // --- async/drop-stream.json: root cause: STREAMS ---
-  // line 158 GREEN after the #13 wording fix (busy readable-end drop words
-  // as a removal, matching wasmtime); entry pruned.
-  // --- async/drop-subtask.json: GREEN under jspi auto-detection (the jspi flip);
-  // entry pruned. ---
   // --- async/drop-waitable-set.json: root cause: FACT-ASYNC ---
   // --- async/during-sync-call-*.json + during-sync-scheduling-candidates.json:
   // all pin 🧵 sync-call-blocking semantics and are built largely from thread
@@ -816,14 +789,7 @@ export const XFAIL: XfailEntry[] = [
     line: 215,
     reason: "same line-162 cascade as line 214",
   },
-  // --- async/empty-wait.json: GREEN under jspi auto-detection (the jspi flip);
-  // entry pruned. ---
   // --- async/futures-must-write.json: root cause: STREAMS ---
-  // --- async/partial-stream-copies.json: GREEN under jspi auto-detection
-  // (the jspi flip); entry pruned. ---
-  // --- async/passing-resources.json: lines 175/176 GREEN after the #18
-  // tls-smoke fixes (cycle-safe structural ValType equality + token
-  // unification); entries pruned. ---
   // --- async/reentrance.json: BRAND NEW file (test/async/reentrance.wast is
   // 100% new content added by CM#705's "remove the may_enter flag/trap",
   // polyengine#173). CORRECTED CLASSIFICATION (revision round; verified by
@@ -1041,37 +1007,30 @@ export const XFAIL: XfailEntry[] = [
       "trap by firing first on the reentrant call; fact-reentrance-47, " +
       "https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmtime-environ bump)",
   },
-  // --- async/sync-barges-in.json: GREEN under jspi auto-detection
-  // (the jspi flip); entry pruned. ---
-  // --- async/sync-streams.json: mostly GREEN (see the #43 note below for
-  // the entry-gate/drain-policy history), but CM#705 (polyengine#173) FLIPPED
-  // three expected values in test/async/sync-streams.wast (STARTING vs
-  // STARTED at the sync-lowered `set` call, and a COMPLETED<->DROPPED
-  // completion-code swap on the paired stream.read/write) to track the new
-  // spec's blocking semantics now that may_enter no longer exists. polyengine
-  // still returns the pre-CM#705 codes, so the file's single all-in-one
-  // assert_return now hits a guest `unreachable`. Classed `cm705-sync-sched`
-  // (https://github.com/polymorph-components/polyengine/issues/249) exactly as the dispatch predicted. Since #43
-  // polyengine implements wasmtime's model: the entry gate is HELD for the
-  // whole core invocation (a resolved producer blocked mid-sync-write keeps
-  // gating), and the async-lowered call's initial status is decided only
-  // after the callee instance's runnable work has been drained to
-  // quiescence — by which time the producer has exited and the next task
-  // reports STARTED. Adjudicated 2026-08-10 (issue #43): the test's hard
-  // STARTED assertion is schedule-dependent — an upstream test defect
-  // overfitting wasmtime's deferred-entry policy (pristine definitions.py
-  // answers STARTING) — and polyengine's drain policy satisfies it as
-  // written under any seed. The former release-at-BLOCK divergence is gone.
-  // (Before the jspi flip this file was xfailed outright.) ---
+  // --- async/sync-streams.json: test/async/sync-streams.wast expects three
+  // values polyengine does not produce (STARTING vs STARTED at the
+  // sync-lowered `set` call, and a COMPLETED<->DROPPED completion-code swap
+  // on the paired stream.read/write) under CM#705's blocking semantics, so
+  // the file's single all-in-one assert_return hits a guest `unreachable`.
+  // Classed `cm705-sync-sched`
+  // (https://github.com/polymorph-components/polyengine/issues/249).
+  //
+  // For the rest of the file polyengine implements wasmtime's model (#43):
+  // the async-lowered call's initial status is decided only after the callee
+  // instance's runnable work has been drained to quiescence — by which time
+  // the producer has exited and the next task reports STARTED. Adjudicated
+  // 2026-08-10 (issue #43): the test's hard STARTED assertion is
+  // schedule-dependent — an upstream test defect overfitting wasmtime's
+  // deferred-entry policy (pristine definitions.py answers STARTING) — and
+  // polyengine's drain policy satisfies it as written under any seed. ---
   {
     file: "async/sync-streams.json",
     line: 208,
     reason:
-      "expected return, got trap: guest trapped: unreachable — CM#705 " +
-      "(polyengine#173) flipped this file's expected STARTING/STARTED and " +
-      "COMPLETED/DROPPED codes to match the post-may_enter blocking " +
-      "semantics; polyengine still returns the pre-CM#705 codes, so the " +
-      "guest's own assertion traps; cm705-sync-sched, " +
+      "expected return, got trap: guest trapped: unreachable — this file's " +
+      "expected STARTING/STARTED and COMPLETED/DROPPED codes track CM#705's " +
+      "blocking semantics, which polyengine's sync scheduling does not yet " +
+      "produce, so the guest's own assertion traps; cm705-sync-sched, " +
       "https://github.com/polymorph-components/polyengine/issues/249",
   },
   // --- async/trap-if-block-and-sync.json: cm705-gate-removal? No — the
@@ -1083,10 +1042,8 @@ export const XFAIL: XfailEntry[] = [
   // misparses, same mechanism as binary.json:974/1206. Every later
   // "(component instance $i $Tester)" + assert command cascades off the one
   // failed component-definition command at line 5; CM#705 grew the file from
-  // 17 to 18 exported tests (test/async/trap-if-block-and-sync.wast +82/-‑,
-  // adding trap-if-sync-cancel plus the four sync-stream/-future rows),
-  // stretching the cascade from lines 273-311 (was 286-331 pre-pin-advance;
-  // lines 312-331 no longer exist and their entries are deleted as stale). ---
+  // 17 to 18 exported tests (trap-if-sync-cancel plus the four
+  // sync-stream/-future rows), so the cascade spans lines 273-311. ---
   {
     file: "async/trap-if-block-and-sync.json",
     line: 5,
@@ -1097,11 +1054,8 @@ export const XFAIL: XfailEntry[] = [
       "the version wasmtime-environ 47.0.3 links against. The 0.253-0.255 " +
       "window re-aritied the thread built-in opcodes, so 0.252 misparses the " +
       "$Tester canonical section and rejects a 🧵 thread-built-in-derived " +
-      "leading byte (observed post-CM#705-pin-advance, polyengine#173: " +
-      "\"invalid leading byte (0x28) for canonical function lift (at offset " +
-      "0xb66)\" — offset moved from 0xc16 pre-advance because CM#705 added " +
-      "the trap-if-sync-cancel/sync-stream/sync-future exports ahead of it in " +
-      "the same canonical section; same decoder-level failure, not a plan.rs " +
+      "leading byte (\"invalid leading byte (0x28) for canonical function " +
+      "lift (at offset 0xb66)\" — a decoder-level failure, not a plan.rs " +
       "mapping bug). Lifted by a wasmtime-environ whose wasmparser is >= the " +
       "0.255 line; downgrading testgen to `wast` 252 is NOT a fix (verified: " +
       "it fails to parse 44 of the 59 suite files, which use the newer " +

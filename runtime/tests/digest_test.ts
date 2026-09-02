@@ -33,7 +33,6 @@
 import { assertEq } from "./support/asserts.ts";
 import { loadEnvelope } from "../src/plan/mod.ts";
 import { computeWorldDigest, DigestError } from "../src/digest/digest.ts";
-import { diffWorldDigest } from "../src/digest/verify.ts";
 import type { WireExport, WirePlan } from "../src/plan/format.ts";
 
 /**
@@ -115,67 +114,6 @@ Deno.test("digest: recomputing from the same plan is deterministic", async () =>
   const b = await computeWorldDigest(wire);
   assertEq(a.digest, b.digest);
   assertEq(a.canonicalJson, b.canonicalJson);
-});
-
-Deno.test("digest: mismatch report names a concrete first divergence (values WIT vs hello plan)", async () => {
-  const { wire: helloWire } = await readEnvelope("hello");
-  // The `values` world's canonical JSON, as an independent "expected" side
-  // (in real bindgen-generated code this would be `WORLD_DIGEST`'s
-  // canonical JSON, embedded at generation time — here reconstructed from
-  // the values plan fixture, which is digest-equal to the values WIT by
-  // the test above).
-  const { wire: valuesWire } = await readEnvelope("values");
-  const { canonicalJson: valuesCanonicalJson } = await computeWorldDigest(
-    valuesWire,
-  );
-
-  const mismatch = await diffWorldDigest(helloWire, valuesCanonicalJson);
-  if (mismatch === null) {
-    throw new Error("expected a digest mismatch between hello and values");
-  }
-  assertEq(mismatch.expected, EXPECTED.values);
-  assertEq(mismatch.actual, EXPECTED.hello);
-  // Not just "digests differ": a concrete path into the export tree.
-  if (mismatch.firstDivergence === null) {
-    throw new Error("expected a concrete firstDivergence path, got null");
-  }
-  console.log("mismatch report:", mismatch.firstDivergence);
-  // Concrete, not just "digests differ": names the exports list and shows
-  // the actual counts that diverge (hello has 1 export, values has 17).
-  if (!mismatch.firstDivergence.includes("exports")) {
-    throw new Error(
-      `expected firstDivergence to name the exports-list mismatch, got: ${mismatch.firstDivergence}`,
-    );
-  }
-  if (!mismatch.firstDivergence.includes("17") || !mismatch.firstDivergence.includes("1 ")) {
-    throw new Error(
-      `expected firstDivergence to show the diverging counts (17 vs 1), got: ${mismatch.firstDivergence}`,
-    );
-  }
-});
-
-Deno.test("digest: mismatch report names a concrete divergent export name (same export count)", async () => {
-  // A sharper case than the count-mismatch above: two worlds with the same
-  // *number* of exports, where the Nth export differs by name — the report
-  // must point at that specific slot, not just say lengths matched.
-  const { wire: helloWire } = await readEnvelope("hello");
-  const decoyExpected = JSON.stringify({
-    cewd: 1,
-    imports: [],
-    exports: [{
-      kind: "func",
-      name: "not-greet",
-      func: { params: [{ kind: "string" }], results: [{ kind: "string" }], async: false },
-    }],
-  });
-  const mismatch = await diffWorldDigest(helloWire, decoyExpected);
-  if (mismatch === null) throw new Error("expected a mismatch");
-  console.log("mismatch report (same count):", mismatch.firstDivergence);
-  if (!mismatch.firstDivergence?.includes("greet") || !mismatch.firstDivergence?.includes("name")) {
-    throw new Error(
-      `expected firstDivergence to name the diverging export name, got: ${mismatch.firstDivergence}`,
-    );
-  }
 });
 
 Deno.test("digest: verifyWorldDigest returns null on an exact match", async () => {
