@@ -72,7 +72,8 @@ Deno.test({
   name: "jspi pin (i): a resumed activation runs BEFORE our own continuation",
   ignore: !isSupported(),
   fn: async () => {
-    // This is the ordering the `resumingThread` mechanism relies on. Settling
+    // This is the ordering the driver's pending-resumption gate
+    // (`Store.pendingResumptions`) relies on. Settling
     // a Suspending import's Promise hands control to wasm, and the resumed
     // activation runs its built-ins *before* the promising Promise settles and
     // before our await continuation. Combined with JS being single-threaded,

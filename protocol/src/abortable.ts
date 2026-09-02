@@ -56,7 +56,8 @@
 // Layering: dependency-free apart from ./brands.ts (the protocol package as a
 // whole imports nothing).
 
-import { ABORTABLE, defineBrand, hasBrand } from "./brands.ts";
+import { ABORTABLE, hasBrand } from "./brands.ts";
+import { makeMark } from "./mark_decorator.ts";
 
 /**
  * Declare that this host import takes a per-call `AbortSignal`, appended after
@@ -105,46 +106,11 @@ import { ABORTABLE, defineBrand, hasBrand } from "./brands.ts";
  * type: the conventions facade is untyped at runtime, and bindgen owns the
  * compile-time shape of a marked import.
  */
-export function abortable<F extends CallableFunction>(
+export const abortable: <F extends CallableFunction>(
   fn: F,
   context?: unknown,
   legacyDescriptor?: unknown,
-): F {
-  // TypeScript-legacy method decorator convention: (prototype, key,
-  // descriptor). Detectable because stage-3 contexts are objects with a
-  // string `kind`, never string/symbol property keys.
-  if (
-    typeof context === "string" || typeof context === "symbol" ||
-    legacyDescriptor !== undefined
-  ) {
-    throw new TypeError(
-      "abortable: legacy (experimentalDecorators) method decoration is not " +
-        "supported — the decorator would receive the prototype, not the " +
-        "method. Compile with stage-3 decorators (the default), or use the " +
-        "call form: `f: abortable(fn)`.",
-    );
-  }
-  if (context !== undefined) {
-    const kind = (context as { kind?: unknown }).kind;
-    if (kind !== "method") {
-      throw new TypeError(
-        `abortable: cannot decorate a ${String(kind)} — only methods ` +
-          `(instance or static) can be marked abortable. Constructors are ` +
-          `synchronous by contract; for record-literal imports use the call ` +
-          `form: \`f: abortable(fn)\`.`,
-      );
-    }
-  }
-  if (typeof fn !== "function") {
-    throw new TypeError(
-      `abortable: expected a function, got ${typeof fn}`,
-    );
-  }
-  // Non-enumerable (`defineBrand`): the mark must not show up in value
-  // walks of an imports record, and re-marking the same function is a no-op.
-  defineBrand(fn as unknown as object, ABORTABLE);
-  return fn;
-}
+) => F = makeMark("abortable", "abortable", ABORTABLE);
 
 /** Brand check (executor-side, read per-declaration at lowering time). */
 export function isAbortable(value: unknown): boolean {

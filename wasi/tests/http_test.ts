@@ -337,17 +337,12 @@ Deno.test("http dispose: an unsent request settles its transmission future as er
 
 // --- fragment shape -------------------------------------------------------------------
 
-Deno.test("http fragment: the @0.3 track by default; rc snapshots re-key exactly", () => {
+Deno.test("http fragment: the @0.3 track by default", () => {
   assertTrue(
     `wasi:http/types@${HTTP_TRACK}` in imports &&
       `wasi:http/client@${HTTP_TRACK}` in imports,
     "track keys registered",
   );
-  const calls: string[] = [];
-  const custom = http({ version: "0.3.0-rc-2099-01-01", onCall: (c) => calls.push(c) });
-  assertTrue("wasi:http/types@0.3.0-rc-2099-01-01" in custom.imports, "rc override re-keys exactly");
-  new custom.Fields();
-  assertEq(JSON.stringify(calls), JSON.stringify(["fields.constructor"]));
 });
 
 Deno.test("fragment: imports table has no handler key (header recipe: embedder registers `send` under its own handler key)", () => {

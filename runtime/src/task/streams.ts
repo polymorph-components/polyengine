@@ -1000,18 +1000,14 @@ interface PoisonedInstanceLike {
  * can no longer be entered (`tick` excludes poisoned instances). Host sentinels are
  * not instances at all, so they are always notified.
  *
- * #100: THE HEALTH TEST IS "POISONED", NOT NON-ENTERABILITY. Historical: the
- * original test used the transient reentrance gate (`may_enter === False`) as
- * a proxy for deadness. That is settled twice over — CM#705 / polyengine#173
- * deleted the whole reentrance model, so the poison marker is not merely the
- * better test but the only one left — and the original argument is kept only
- * because it explains what the marker is FOR: the proxy was unsound in one
- * direction, and the unsoundness stranded healthy tasks. A caller instance
- * stayed non-enterable for the whole duration of a cross-component (FACT)
- * call into an instance that trapped, so a *different*, healthy task of that
- * caller, parked on an end of a stream/future the trapping callee also held,
- * was classified dead here and retired silently — stranded, the exact
- * outcome #66 exists to prevent.
+ * #100: THE HEALTH TEST IS "POISONED", NOT "BUSY". Deadness must be judged
+ * by the poison marker and nothing weaker: any liveness proxy that also
+ * covers a merely mid-call instance is unsound in one direction and strands
+ * healthy tasks. Under such a proxy a caller mid cross-component (FACT) call
+ * into an instance that trapped would drag its *other*, healthy tasks down
+ * with it — one parked on an end of a stream/future the trapping callee also
+ * held would be classified dead here and retired silently, the exact outcome
+ * #66 exists to prevent.
  *
  * So the test consults the poison marker itself. It is per-instance and
  * recorded at the single seam every poisoning site routes through

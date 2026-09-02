@@ -1,10 +1,10 @@
 // polyengine#145 ask 1: entry refusals on a poisoned instance name the
 // original trap. The scheduler records the FIRST poisoning cause per instance
 // (follow-on failures against a corpse are noise) and `withPoisonCause`
-// appends it to the refusal message. Since CM#705 (polyengine#173) poisoning
-// is the ONLY reason an entry is refused, so the helper's pass-through
-// behavior on an unmarked instance is just the "nothing to say" case rather
-// than a second refusal class. The e2e face is asserted in
+// appends it to the refusal message. Poisoning is the ONLY reason an entry is
+// refused (CM#705), so the helper's pass-through behavior on an unmarked
+// instance is just the "nothing to say" case rather than a second refusal
+// class. The e2e face is asserted in
 // integration/e2e_hello_test.ts, the trampoline face in
 // enter_sync_call_reentrance_test.ts.
 //

@@ -21,8 +21,7 @@ export async function useHello(instance: EmbedderInstance, plan: WirePlan) {
   const mismatch = await verify(plan);
   if (mismatch) {
     throw new Error(
-      `hello world digest mismatch: expected ${mismatch.expected}, got ${mismatch.actual}` +
-        (mismatch.firstDivergence ? ` (${mismatch.firstDivergence})` : ""),
+      `hello world digest mismatch: expected ${mismatch.expected}, got ${mismatch.actual}`,
     );
   }
   const exports = bind(instance);

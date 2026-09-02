@@ -32,9 +32,7 @@ WASI imports** — so componentization needs no wasip1 adapter.
 | `values.component.wasm` | [`guests/values/wit/world.wit`](guests/values/wit/world.wit) | 17 `echo-*` funcs, one per type shape: bool, u64, s64, f32, f64, char, string, record, variant, enum, flags, option, option-nested, result, list\<u8\>, list\<string\>, tuple | ~24 KB |
 | `resources.component.wasm` | [`guests/resources/wit/world.wit`](guests/resources/wit/world.wit) | interface `counters`: `counter` resource (constructor, `increment`, `get`, static `merge`) + free funcs over own/borrow handles (`make-counter`, `sum-both`, `bump`, `consume`) + `live-counters` (observes destructor runs) | ~24 KB |
 | `async-probe.component.wasm` | [`guests/async-probe/wit/world.wit`](guests/async-probe/wit/world.wit) | CM 0.3 async: `wait-then-double: async func` (yields once), `sum-stream: async func(stream<u32>)`, `future-add: async func(future<u32>, u32)` | ~57 KB |
-| `yield-only.component.wasm` | [`guests/yield-only/wit/world.wit`](guests/yield-only/wit/world.wit) | Pure callback-ABI exerciser: `yield-n-times: async func(count: u32) -> u32` (no I/O) | ~40 KB |
 | `context-user.component.wasm` | [`guests/context-user/wit/world.wit`](guests/context-user/wit/world.wit) | Context-local-storage (slot 0) via interleaved concurrent activations: `interleave: async func(count: u32) -> u32` (spawns `count` locally-concurrent tasks, each yielding a different number of times) | ~48 KB |
-| `backpressure-probe.component.wasm` | [`guests/backpressure-probe/wit/world.wit`](guests/backpressure-probe/wit/world.wit) | `toggle-around-yield: async func(x: u32) -> u32` (asserts backpressure, yields, clears backpressure) | ~40 KB |
 | `stream-echo.component.wasm` | [`guests/stream-echo/wit/world.wit`](guests/stream-echo/wit/world.wit) | `echo-doubled: async func(input: stream<u32>) -> stream<u32>` — consumes AND produces a stream in one export | ~60 KB |
 | `future-user.component.wasm` | [`guests/future-user/wit/world.wit`](guests/future-user/wit/world.wit) | `double-future: async func(f: future<u32>) -> u32` (awaits an imported future); `make-future: async func(x: u32) -> future<u32>` (resolves an exported one) | ~64 KB |
 | `future-import.component.wasm` | [`guests/future-import/wit/world.wit`](guests/future-import/wit/world.wit) | Host imports with future-bearing results (contracts/embedder-api.md §"Streams and futures"; the `wasi:sockets@0.3` TCP shapes reduced to `u32`): `next-value: func() -> future<u32>`, `send-sink: func(stream<u8>) -> future<u32>`, `recv-pair: func() -> tuple<stream<u8>, future<u32>>`, driven by `run-next`/`run-send`/`run-recv` exports (`run-send` writes the stream only after the sync import returns — the livelock probe) | ~64 KB |
@@ -125,19 +123,20 @@ here.** Details:
 
 ## Async corpus expansion: demand-side inventory
 
-Five targeted guests (`yield-only`, `context-user`, `backpressure-probe`,
-`stream-echo`, `future-user`) were added to give the task-core/scheduler and
-streams phases concrete, minimal fixtures per canonical built-in. Canonical
-imports per guest (`wasm-tools print *.component.wasm | grep -oE
-'\[[a-z0-9_-]+\]' | sort -u`):
+Guests were added to give the task-core/scheduler and streams phases
+concrete, minimal fixtures per canonical built-in. Canonical imports per
+guest (`wasm-tools print *.component.wasm | grep -oE '\[[a-z0-9_-]+\]' |
+sort -u`). The common base set —  `async-lift`, `callback`,
+`context.{get,set}`(slot 0), `task.{cancel,return}`,
+`waitable-set.{new,poll,drop}`, `waitable.join`, and **no `canon yield`**
+(`wit_bindgen::yield_async()` is implemented via the callback return-code
+protocol, not the `yield` builtin) — is shared by every guest below:
 
-| Guest | Canonical built-ins imported |
+| Guest | Canonical built-ins imported beyond the base set |
 |---|---|
-| `yield-only` | `async-lift`, `callback`, `context.{get,set}`(slot 0), `task.{cancel,return}`, `waitable-set.{new,poll,drop}`, `waitable.join`. **No `canon yield`** — confirms (again, isolated from the async-probe guest's other machinery) that `wit_bindgen::yield_async()` is implemented via the callback return-code protocol, not the `yield` builtin. |
-| `context-user` | Same set as `yield-only` — `spawn_local`'s locally-concurrent tasks are still driven by the one export's callback-ABI event loop; no additional canonical built-ins are needed to interleave them. This means context-slot isolation across interleaved activations is entirely a **guest-side** (wit-bindgen runtime) concern from the host's point of view — the host only ever sees one `context.get`/`context.set` pair per callback invocation, exactly as for a single non-interleaved task. |
-| `backpressure-probe` | `yield-only`'s set **plus** `backpressure.inc`, `backpressure.dec` — the only guest in the corpus that exercises these. |
-| `stream-echo` | `yield-only`'s set **plus** `async-lower` and the full `stream.*` suite: `stream.new`, `stream.read`, `stream.write`, `stream.cancel-read`, `stream.cancel-write`, `stream.drop-readable`, `stream.drop-writable`. `async-lower` appears here (and in `future-user`) but not in the pure-yield/backpressure guests — worth the streams phase confirming why (candidate explanation: the generated stream-forwarding task itself contains an async call shape lowered via `canon lower ... async`, from `spawn_local`'s internal task machinery, but this needs the streams-phase owner to confirm against `definitions.py`, not asserted here). |
-| `future-user` | `yield-only`'s set **plus** `async-lower` and the full `future.*` suite: `future.new`, `future.read`, `future.write`, `future.cancel-read`, `future.cancel-write`, `future.drop-readable`, `future.drop-writable`. |
+| `context-user` | None — `spawn_local`'s locally-concurrent tasks are still driven by the one export's callback-ABI event loop; no additional canonical built-ins are needed to interleave them. This means context-slot isolation across interleaved activations is entirely a **guest-side** (wit-bindgen runtime) concern from the host's point of view — the host only ever sees one `context.get`/`context.set` pair per callback invocation, exactly as for a single non-interleaved task. |
+| `stream-echo` | `async-lower` and the full `stream.*` suite: `stream.new`, `stream.read`, `stream.write`, `stream.cancel-read`, `stream.cancel-write`, `stream.drop-readable`, `stream.drop-writable`. `async-lower` appears here (and in `future-user`) but not in the pure-yield guests — worth the streams phase confirming why (candidate explanation: the generated stream-forwarding task itself contains an async call shape lowered via `canon lower ... async`, from `spawn_local`'s internal task machinery, but this needs the streams-phase owner to confirm against `definitions.py`, not asserted here). |
+| `future-user` | `async-lower` and the full `future.*` suite: `future.new`, `future.read`, `future.write`, `future.cancel-read`, `future.cancel-write`, `future.drop-readable`, `future.drop-writable`. |
 
 **Stream-producer viability (wit-bindgen 0.60.0, stable Rust 1.96):**
 `wit_stream::new()` (the per-world generated wrapper around
@@ -153,13 +152,13 @@ answers the task brief's open question: **producing a stream from a
 wit-bindgen 0.60 Rust guest needs no unstable feature, only the
 already-established `async-spawn` pattern used for `future-user`.**
 
-All five guests build with `cargo build --release --target
+All guests build with `cargo build --release --target
 wasm32-unknown-unknown` on stable Rust 1.96, validate with `wasm-tools
 validate --features component-model,cm-async` (wasm-tools 1.247), and
-round-trip their worlds via `wasm-tools component wit`. `yield-only`,
-`context-user`, and `backpressure-probe` are also smoke-run in `build.sh` via
-`wasmtime run --invoke`; `stream-echo`/`future-user` share the CLI limitation
-noted above (WAVE has no stream/future literals) and await the host harness.
+round-trip their worlds via `wasm-tools component wit`. `context-user` is
+also smoke-run in `build.sh` via `wasmtime run --invoke`; `stream-echo`/
+`future-user` share the CLI limitation noted above (WAVE has no
+stream/future literals) and await the host harness.
 
 ## Notes for the host implementation
 

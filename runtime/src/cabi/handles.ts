@@ -8,7 +8,7 @@
 //     current_instance() from the running thread;
 //   - canon_resource_drop routes the dtor through `callDtorGated` below,
 //     which reconstructs the reference's store.lift/store.lower bracket
-//     (may_enter gating + trap poisoning) around the destructor call (#85).
+//     (entry refusal + trap poisoning) around the destructor call (#85).
 //     Host-initiated drops do NOT come here: they run the dtor through the
 //     real lift harness (`hostDtorCall`, exec/boundary.ts) — see #160.
 
@@ -183,10 +183,6 @@ interface RealComponentInstance {
  * `ComponentInstanceLike`, which those doubles satisfy: it reads the
  * `COMPONENT_INSTANCE` brand, declared on `ComponentInstanceState` and
  * defined in ./context.ts so that cabi does not have to import task/.
- *
- * (It replaced a structural match on `may_enter_from`/`enter_from`/`leave_to`,
- * the reentrance methods CM#705 and polyengine#173 deleted. Same population,
- * by construction: `ComponentInstanceState` was their only implementor.)
  */
 function isComponentInstance(x: unknown): RealComponentInstance | null {
   if (x === null || typeof x !== "object") return null;
@@ -211,13 +207,10 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
  *   caller([h.rep])
  * ```
  *
- * Post-CM#705 that lift carries NO gate: dropping a handle whose implementing
- * instance is mid-execution is VALID, including the dtor-less case. The
- * pre-#705 `may_enter_from`/`enter_from`/`leave_to` bracket (and with it the
- * "same-instance exemption" that fell out of an empty entering set) is gone
- * from the reference and gone from here.
+ * That lift carries NO gate (CM#705): dropping a handle whose implementing
+ * instance is mid-execution is VALID, including the dtor-less case.
  *
- * What remains is polyengine's per-instance poisoning divergence, and it
+ * What this adds is polyengine's per-instance poisoning divergence, and it
  * applies to `rt.impl`, not to the dropping instance: a trap out of the dtor
  * buries the implementing instance (refusal names the original trap,
  * polyengine#145; its live stream/future ends are retired, #66). The
@@ -232,10 +225,8 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
  * SCOPE (#160): this is the **guest-initiated** path only. A guest-initiated
  * drop must complete synchronously (the reference lifts the dtor with
  * `async_ = False`), so a thenable here is a trap. The host-initiated path
- * used to share this function with an `allowAsync` flag that held the entry
- * bracket across the dtor's promise; it now goes through the full lift
- * harness instead (`hostDtorCall` in exec/boundary.ts), which is what
- * definitions.py actually does and what unwedges #160.
+ * goes through the full lift harness instead (`hostDtorCall` in
+ * exec/boundary.ts), which is what definitions.py actually does.
  */
 export function callDtorGated(
   rt: ResourceTypeInfo,
@@ -266,9 +257,8 @@ export function callDtorGated(
 
   // A poisoned target's refusal names the original trap (polyengine#145).
   // `callerInst` can legitimately BE `impl` here (a guest dropping its own
-  // resource): `entryRefusal`'s vacuous-pass guard keeps that entry allowed
-  // even against a marked instance, matching the pre-CM#705 reference's
-  // vacuous pass on an empty entering set.
+  // resource): `entryRefusal`'s self-call guard keeps that entry allowed
+  // even against a marked instance.
   {
     const refusal = entryRefusal(
       impl,

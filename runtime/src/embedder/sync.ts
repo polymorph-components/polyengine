@@ -224,17 +224,6 @@ function recordView(rec: object): unknown {
     for (const key of Object.keys(rec)) {
       const d = Object.getOwnPropertyDescriptor(rec, key);
       if (d === undefined) continue;
-      if (!("value" in d)) {
-        // An accessor-backed own member (not expected on a runtime-built
-        // exports record today, but nothing here assumes data properties
-        // only): forward reads/writes to the underlying record unmapped.
-        Object.defineProperty(view, key, {
-          enumerable: true,
-          configurable: true,
-          get: () => (rec as Record<string, unknown>)[key],
-        });
-        continue;
-      }
       const value = d.value;
       // Lazy: `mapMember` runs (and can throw, for an async member) only
       // when the caller actually reads this key — see the CONTRACT note on

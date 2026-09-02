@@ -452,9 +452,7 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       }
       let conn: TcpConn | undefined;
       try {
-        conn = state.listener.tryAccept === undefined
-          ? undefined
-          : state.listener.tryAccept();
+        conn = state.listener.tryAccept();
       } catch (e) {
         raise02(e, "tcp-socket.accept");
       }
@@ -600,8 +598,8 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       if (this.#state === "listening" && listen !== undefined) {
         const l = listen.listener;
         return new Pollable(
-          () => l.acceptReady === undefined ? true : l.acceptReady(),
-          () => l.waitAccept === undefined ? Promise.resolve() : l.waitAccept(),
+          () => l.acceptReady(),
+          () => l.waitAccept(),
         );
       }
       return new Pollable(); // no pending operation: ready
@@ -657,9 +655,6 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     #applyKeepAlive(): void {
       const conn = this.#conn;
       if (this.#state !== "connected" || conn === undefined) return;
-      if (conn.setKeepAlive === undefined) {
-        throw err02("not-supported", "tcp-socket: no keep-alive control on this backend");
-      }
       try {
         conn.setKeepAlive(this.#keepAliveEnabled, Number(this.#keepAliveIdleNs / 1_000_000n));
       } catch (e) {
@@ -787,7 +782,7 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       this.#streams = streams;
       // OS-level (dis)connect, fire-and-forget: failures surface on the
       // first datagram op (doc comment above).
-      if (remoteAddress !== undefined && conn.connect !== undefined) {
+      if (remoteAddress !== undefined) {
         void conn.connect({
           transport: "udp",
           hostname: ipHostname(remoteAddress),
@@ -797,7 +792,7 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
         });
       } else if (remoteAddress === undefined && wasConnected) {
         try {
-          conn.disconnect?.();
+          conn.disconnect();
         } catch {
           // Not connected at the OS level (compat backends).
         }
@@ -902,9 +897,9 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       const conn = this.#conn;
       if (conn === undefined) return;
       try {
-        if (this.#hopLimit !== undefined) conn.setTtl?.(this.#hopLimit);
-        if (this.#recvBuffer !== undefined) conn.setRecvBufferSize?.(Number(this.#recvBuffer));
-        if (this.#sendBuffer !== undefined) conn.setSendBufferSize?.(Number(this.#sendBuffer));
+        if (this.#hopLimit !== undefined) conn.setTtl(this.#hopLimit);
+        if (this.#recvBuffer !== undefined) conn.setRecvBufferSize(Number(this.#recvBuffer));
+        if (this.#sendBuffer !== undefined) conn.setSendBufferSize(Number(this.#sendBuffer));
       } catch (e) {
         raise02(e, "udp-socket (applying cached options)");
       }
@@ -947,7 +942,7 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       while (out.length < max) {
         let item: [Uint8Array, NetAddr] | undefined;
         try {
-          item = this.#conn.tryReceive === undefined ? undefined : this.#conn.tryReceive();
+          item = this.#conn.tryReceive();
         } catch (e) {
           raise02(e, "incoming-datagram-stream.receive");
         }
@@ -965,8 +960,8 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       onCall("incoming-datagram-stream.subscribe");
       const conn = this.#conn;
       return new Pollable(
-        () => conn.receiveReady === undefined ? true : conn.receiveReady(),
-        () => conn.waitReceive === undefined ? Promise.resolve() : conn.waitReceive(),
+        () => conn.receiveReady(),
+        () => conn.waitReceive(),
       );
     }
 

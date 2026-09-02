@@ -7,7 +7,7 @@
 //! Regenerate after an intentional codegen change:
 //! ```text
 //! for w in hello values resources async-probe stream-echo future-user; do
-//!   cargo run -p bindgen -- generate examples/guests/$w/wit --world $w \
+//!   cargo run -p bindgen -- examples/guests/$w/wit --world $w \
 //!     --out runtime/tests/bindgen/generated/$w.ts --import-base ../../../src
 //! done
 //! ```

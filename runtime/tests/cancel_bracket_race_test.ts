@@ -7,12 +7,9 @@
 // built-ins, `exit-sync-call`, etc.) runs on a LATER microtask. A concurrent
 // host EXPORT call can enter the same instance in between.
 //
-// Originally the delivery was wrapped in a host-entry bracket and
-// the question was whether that bracket closed too early. CM#705
-// (polyengine#173) removed the bracket — and the whole reentrance gate —
-// from the reference and from this runtime, so the concurrent entry is now
-// unconditionally ADMITTED by design rather than by an accident of bracket
-// timing. The behavioral pin is unchanged and still worth keeping: driving a
+// There is no host-entry bracket and no reentrance gate, in the reference or
+// here (CM#705), so the concurrent entry is ADMITTED by design rather than by
+// an accident of bracket timing. The behavioral pin: driving a
 // second export call through that window does not double-resume anything or
 // leave inconsistent final state. It is included in `just sched-seeds` so any
 // future schedule-order dependence here is caught.
@@ -114,8 +111,8 @@ Deno.test(
     assertEq(task.state, "cancel-delivered");
 
     // Drive a concurrent EXPORT call into the SAME instance through the real
-    // host-entry path (`createLiftedFunction`), which post-CM#705 refuses
-    // only a poisoned instance. If this traps or corrupts state, the
+    // host-entry path (`createLiftedFunction`), which refuses only a
+    // poisoned instance (CM#705). If this traps or corrupts state, the
     // divergence is no longer merely theoretical.
     const syncFt: FuncType = { params: [], results: [], async: false };
     const exportOpts: ResolvedOptions = {

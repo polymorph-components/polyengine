@@ -322,7 +322,8 @@ Deno.test("resume from a DIFFERENT running activation while a resumption is pend
 Deno.test("resume from a DIFFERENT running activation while a resumption is pending — same store (#158 mechanism B)", () => {
   // The same shape with all three activations in ONE store: the set holds both
   // pending entries, and the store's gate refuses to schedule while either
-  // lives (strictly more conservative than the old slot, which crashed).
+  // lives — two legitimately-pending resumptions, neither of which may be
+  // dropped.
   const store = new Store();
   const x = mkWorld({ store });
   const y = mkWorld({ store });

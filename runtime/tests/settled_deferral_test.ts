@@ -1,17 +1,13 @@
-// Driver-level coverage for issue #156, INVERTED by polyengine#173 (CM#705).
+// Driver-level coverage for issue #156.
 //
-// #156's shape: instance B's thread parked on an already-settled
-// `awaitValue` (tail queued in `store.settled`) while sibling instance A held
-// a host entry, which under the transient reentrance model's shared
-// per-instantiation root made B non-enterable — so B's tail was DEFERRED IN
-// PLACE and `driveAsync` had to park (not spin) until the lock released.
-//
-// Deferral can no longer occur: definitions.py @ 2f13265 has no
-// `may_enter`/`enter_from`/`leave_to`, polyengine#173 deleted the model here
-// too, and every non-stale tail dispatches on the spot. The pin below
-// is the merged behavior — the tail dispatches immediately, with an unrelated
-// outstanding host call in flight, and the driver still reaches quiescence
-// (the outstanding call must not be mistaken for a reason to wedge).
+// The shape: instance B's thread parked on an already-settled `awaitValue`
+// (tail queued in `store.settled`) while sibling instance A holds a host
+// entry. Nothing defers the tail — definitions.py @ 2f13265 has no
+// `may_enter`/`enter_from`/`leave_to` (CM#705), so every non-stale tail
+// dispatches on the spot. The pin below: the tail dispatches immediately,
+// with an unrelated outstanding host call in flight, and the driver still
+// reaches quiescence (the outstanding call must not be mistaken for a reason
+// to wedge).
 
 import { assertEq } from "./support/asserts.ts";
 import { driveStoreAsync } from "../src/exec/boundary.ts";
@@ -71,10 +67,10 @@ Deno.test("driveAsync: a sibling's tail dispatches immediately (CM#705)", async 
   await Promise.resolve();
   assertEq(store.settled.length, 1, "B's tail is queued");
 
-  // A is mid-host-entry. Post-CM#705 that constrains nothing about B.
+  // A is mid-host-entry; that constrains nothing about B (CM#705).
   void a;
 
-  // An outstanding host call, registered exactly as `callDtorGated` did
+  // An outstanding host call, registered as the dtor path registers one
   // (`.then` attached BEFORE insertion, so the driver's race sees an entry
   // that self-removes). Demonstrably a macrotask away: the driver must park,
   // not spin, while it is outstanding.

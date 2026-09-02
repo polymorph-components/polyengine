@@ -169,15 +169,10 @@ Deno.test({
   name: "suite resources/borrows.0: a trapped instance is poisoned",
   ignore: !ready,
   fn: async () => {
-    // definitions.py `Store.lift` (line 578):
-    //
-    //   trap_if(not inst.may_enter_from(caller))
-    //   inst.enter_from(caller)
-    //   on_cancel = canon_lift(...)   # a Trap propagates out of here ...
-    //   inst.leave_to(caller)         # ... so this never runs
-    //
-    // A trap therefore leaves every instance the call entered permanently
-    // un-enterable. `test/async/builtin-trap-poisons-instance.wast` asserts
+    // A trap leaves the instance it escaped from permanently un-enterable:
+    // polyengine's per-instance poisoning divergence (task/scheduler.ts
+    // `entryRefusal`), where wasmtime kills the whole store.
+    // `test/async/builtin-trap-poisons-instance.wast` asserts
     // this directly ("cannot enter component instance" on the second invoke),
     // and the whole suite relies on it — which is why files that test several
     // traps build a fresh component instance for each one.
@@ -411,8 +406,7 @@ async function commandsOf(dir: string): Promise<[string, WastCommand[]][]> {
  * Known acceptance gaps for the blanket verdict check below: wasmparser
  * 0.252 (pinned via wasmtime-environ 47.0.3, crates/translator-shim)
  * validates components that CM#703/#704 ("name rules") and CM#688
- * ("max-value-size") — pulled in by the CM#705 pin advance, polyengine#173
- * — newly require rejecting. Tracked https://github.com/polymorph-components/polyengine/issues/248.
+ * ("max-value-size") require rejecting at the current pin. Tracked https://github.com/polymorph-components/polyengine/issues/248.
  *
  * Authoritative source of truth for these rows is harness/src/xfail.ts (same
  * (file, line) keys): its stale-xfail detector (harness/tests/
@@ -547,11 +541,11 @@ Deno.test({
 // schema notes; polyengine#13). The
 // export surfaces as the already-compiled `WebAssembly.Module`, and it is
 // the *embedded* module: instantiating it works and its export list matches
-// the wast source (an empty module). Artifact index shifted 115->116 by the
-// CM#705 pin advance (polyengine#173): CM#698 (dff1181, "fix some spec and
-// test typos") added 12 lines earlier in binary.wast, renumbering this
-// component from wast line 1421 to 1433 and its testgen-assigned positional
-// artifact index from 115 to 116 (verified:
+// the wast source (an empty module). The artifact index is 116, not the 115
+// its wast position might suggest: CM#698 (dff1181, "fix some spec and test
+// typos") added 12 lines earlier in binary.wast, moving this component to
+// wast line 1433 and its testgen-assigned positional artifact index to 116
+// (verified:
 // `git -C third_party/component-model show 2f13265:test/binary/binary.wast`).
 Deno.test({
   name: "suite binary.116: a core-module export surfaces as WebAssembly.Module",

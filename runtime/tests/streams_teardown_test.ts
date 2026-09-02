@@ -535,14 +535,12 @@ Deno.test("#97: cancelRead resolves the read exactly like end-of-stream does", a
 // cross-component (FACT) call into instance B (callee). A DIFFERENT,
 // perfectly healthy task of A is parked on an end of a stream/future whose
 // peer end B holds. B traps; the poisoning walk runs over B's table and
-// reaches A's parked side. The old health test (non-enterability) read A
-// as a corpse — A was non-enterable merely because it was mid-call — and
-// retired it in silence: stranded, the outcome #66 exists to prevent. The
-// narrowed test (task/scheduler.ts's per-instance poison marker, recorded at
-// the `notifyInstancePoisoned` seam) gives A the spec-shaped outcome instead:
-// DROPPED for a stream, the #84 abandonment trap for an unwritten future.
-// CM#705 (polyengine#173) has since deleted `may_enter` outright, so the
-// marker is not merely the better predicate but the only one available.
+// reaches A's parked side. A must NOT be read as a corpse merely because it
+// is mid-call: any liveness proxy would retire it in silence — stranded, the
+// outcome #66 exists to prevent. The health test is task/scheduler.ts's
+// per-instance poison marker (recorded at the `notifyInstancePoisoned`
+// seam), which gives A the spec-shaped outcome instead: DROPPED for a
+// stream, the #84 abandonment trap for an unwritten future.
 //
 // Both directions are pinned here: the dead-guest discipline (a parked task of
 // the POISONED instance itself is still silently retired) has its own leg
@@ -588,11 +586,9 @@ function inTask<T>(inst: ComponentInstanceState, fn: () => T): T {
 }
 
 /**
- * `caller` is mid-cross-component-call into `callee`. Post-CM#705 that state
- * carries no instance-level flag at all (the pre-#705 host-entry chain, whose
- * cleared `may_enter` on BOTH instances is what the old health test tripped
- * over, no longer exists), so this is documentation: neither instance is
- * marked, and only the marker decides.
+ * `caller` is mid-cross-component-call into `callee`. That state carries no
+ * instance-level flag at all (CM#705), so this is documentation: neither
+ * instance is marked, and only the marker decides.
  */
 function enterMidFactCall(
   caller: ComponentInstanceState,

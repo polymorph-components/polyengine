@@ -219,13 +219,13 @@ In `cancel_copy`, when the pending event is a stream `COMPLETED`, deliver
 ## CM-4: `sync-streams.wast:145` overfits wasmtime's scheduler — entry-status timing is not normative
 
 **Status:** ADJUDICATED (operator, 2026-08-10) — upstream **test defect**,
-not a reference-semantics issue. **Filing kit READY** (2026-08-11, closes
-[polyengine#43](https://github.com/polymorph-components/polyengine/issues/43)):
-`upstream-issue-sync-streams-schedule-overfit.md` (ready-to-file draft) +
-`upstream-sync-streams-schedule-agnostic.patch` (applies at the spec repo
-root, verified against 73b7ad5; both arms exercised green through the
-polyengine pipeline, FIFO + seeds — see the kit PR for the recipe). Filing
-itself tracked by
+not a reference-semantics issue. **Filing kit DROPPED as stale** (verified
+only against 73b7ad5; the submodule pin has since advanced to 2f13265
+(CM#705), which rewrote the targeted assertion — `upstream-issue-
+sync-streams-schedule-overfit.md` and `upstream-sync-streams-schedule-
+agnostic.patch` were removed from the repo root; re-derive the patch against
+the current pin before filing). Filing
+itself remains tracked by
 [polyengine#15](https://github.com/polymorph-components/polyengine/issues/15).
 Archived evidence tree (mechanism docs, both experiment patches, trace,
 verify script): `4f3351f:exams/wasmtime-exclusivity/`.

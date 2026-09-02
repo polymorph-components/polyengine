@@ -863,11 +863,12 @@ async function driveAsync(
     // and clearing it before that activation runs re-opens the
     // mis-attribution window the entry exists to close.
     //
-    // PER-STORE (issue #210): this gate used to read a module-global slot, so
-    // an idle store's driver spun here — and died at the hop bound below in
-    // ~311ms — merely because ANOTHER store's guest was dwelling on a slow
-    // host import. Activations never cross stores; another store's pending
-    // resumption is none of this loop's business.
+    // PER-STORE (issue #210): read only THIS store's entries. Activations
+    // never cross stores, so another store's pending resumption is none of
+    // this loop's business — and a gate shared across stores would spin an
+    // idle store's driver here, to its death at the hop bound below in
+    // ~311ms, merely because ANOTHER store's guest was dwelling on a slow
+    // host import.
     if (store.hasPendingResumptions()) {
       traceDrive("driveAsync", store, done, "yield-pending");
       // Bounded: a pending entry that never dies is an internal bug (every
@@ -1078,18 +1079,12 @@ async function driveAsync(
         (t) => !queued.has(t),
       );
       if (parked.length === 0) {
-        // UNREACHABLE BY CONSTRUCTION since polyengine#173 deleted the
-        // reentrance model. `parked` is `store.awaiting` minus the threads
-        // whose tails are already queued in `store.settled`, and we only get
-        // here with `awaiting` non-empty and `hasServiceableSettled()` false
-        // — which now means the settled queue is EMPTY, so nothing was
-        // excluded. (Pre-CM#705 a queue of reentrance-deferred tails answered
-        // false while still excluding every parked thread; issue #156. The
-        // way out was the lock holder finishing, and the only await-spanning
-        // host-entry lock was the async-dtor bracket, which registers in
-        // `pendingHostCalls` — hence the park below, plus the driver-arrival
-        // one-shot every park in this loop races.) Retained as a wedge
-        // detector, not as expected behavior.
+        // UNREACHABLE BY CONSTRUCTION. `parked` is `store.awaiting` minus
+        // the threads whose tails are already queued in `store.settled`, and
+        // we only get here with `awaiting` non-empty and
+        // `hasServiceableSettled()` false — which means the settled queue is
+        // EMPTY, so nothing was excluded. Retained as a wedge detector, not
+        // as expected behavior.
         if (store.pendingHostCalls.size > 0) {
           await Promise.race([
             ...store.pendingHostCalls,
@@ -1122,11 +1117,11 @@ async function driveAsync(
       // `SuspensionPoint.resume`) is what carries it, and dropping an entry
       // that names a thread already gone from the set is a no-op.
       //
-      // ONLY ITS OWN ENTRY (issue #158): the `finally` used to blanket-clear
-      // the single global slot, so a guest-synchronous delivery during the
-      // await — which takes a fresh entry of its own — had that entry
-      // clobbered early, re-opening the window it exists to close. With a set
-      // we can name exactly what we added.
+      // ONLY ITS OWN ENTRY (issue #158): the `finally` must drop the entry
+      // THIS loop added and nothing else. A guest-synchronous delivery during
+      // the await takes a fresh entry of its own, and clearing that one here
+      // would re-open early the very window it exists to close — which is why
+      // the gate is a set of entries rather than a single slot.
       //
       // SOLE DRIVER ONLY, AND ONLY UNTIL ONE ARRIVES (issue #239). The entry
       // is a claim over a window this loop cannot bound: the race settles when
@@ -1146,7 +1141,8 @@ async function driveAsync(
       // can reach a store mid-race are another `driveAsync` loop and
       // `HostActivity.pump`'s synchronous drain (exec/host_streams.ts) — the
       // latter is not gated by driver depth, so scoping the entry to "sole
-      // driver" does hand it a window the entry used to close at depth >= 2.
+      // driver" does hand it a window an unscoped entry would close at
+      // depth >= 2.
       // What holds regardless is the invariant the `driverDepth` note names:
       // a genuine resumption is preceded by `SuspensionPoint.resume`'s OWN
       // entry (jspi/bridge.ts, minted before the settle), and every
@@ -1395,9 +1391,9 @@ export function createLiftedFunction(input: {
     // Depth of the sync-call scope stack on entry; see the `finally` below.
     const syncCallDepth = syncCallStack?.length ?? 0;
 
-    // Reference `Store.lift` (@ 2f13265) runs `canon_lift` with NO gate: the
-    // transient reentrance check went away with CM#705, so host entry into a
-    // live instance is valid. What survives is polyengine's per-instance
+    // Reference `Store.lift` (@ 2f13265) runs `canon_lift` with NO gate
+    // (CM#705), so host entry into a live instance is valid. What this adds
+    // is polyengine's per-instance
     // poisoning divergence — a poisoned instance is a corpse, and its refusal
     // names the original trap (polyengine#145 ask 1).
     {
@@ -1512,14 +1508,9 @@ export function createLiftedFunction(input: {
      * call reports `cannot enter component instance` with the recorded cause
      * appended (polyengine#145 ask 1).
      * `test/async/builtin-trap-poisons-instance.wast` asserts exactly this,
-     * twice; the marker (`notifyInstancePoisoned`) is the whole mechanism
-     * since #251's re-key, and since CM#705 removed `may_enter` it is also
-     * the only one there could be.
+     * twice; the marker (`notifyInstancePoisoned`) is the whole mechanism.
      *
-     * Only `inst` is affected; sibling instances stay usable. (Historically
-     * this walked the entry's `entering_set` and had to hand-release the
-     * synthetic per-instantiation root to avoid store-wide poisoning; with
-     * the gate gone there is no set and no root to release.)
+     * Only `inst` is affected; sibling instances stay usable.
      *
      * Poisoned instances can never rendezvous again, so their handle tables'
      * live stream/future ends are retired here (#66): parked host operations
@@ -1793,30 +1784,13 @@ function dtorOptions(instance: ComponentInstanceState): ResolvedOptions {
  *   callee = inst.store.lift(dtor, ft, opts, rt.impl)
  * ```
  *
- * Before #160 the host-initiated path (embedder `drop()`, the GC backstop,
- * `dropOwn`) hand-rolled the bracket in cabi/handles.ts `callDtorGated`: a
- * bare call to the dtor with the pre-CM#705 host-entry bracket HELD across
- * the returned promise. Three defects followed from having no Task/Thread behind the
- * activation:
- *
- *  - **#160 itself**: the held bracket left the impl instance non-enterable,
- *    so `Store.tick`'s enterability filter (#155) could never resume a
- *    suspension point belonging to the dtor's own activation. The completion
- *    promise sat in `pendingHostCalls` looking like external work, and every
- *    driver parked on it forever.
- *  - it was the runtime's only host-entry bracket spanning an await —
- *    the macro-scale reachability window of the #156 class, through which a
- *    sibling instance looked non-enterable (the shared per-instantiation
- *    root of the since-deleted reentrance model, polyengine#173).
- *  - built-ins reached inside the dtor had no ambient task (`currentTask()`
- *    → `PendingCapability`, or a foreign-task misattribution, the #24 class).
- *
- * Under the lift harness all three go away structurally: the activation has a
- * real `Task` + implicit `Thread`, and settled tails flow through
- * `serviceSettled` like any other lifted sync call. (CM#705 has since removed
- * the transient gate entirely, so the first two defects could no longer arise
- * at all; the history is kept because the Task/Thread shape it forced is
- * still what makes built-ins inside a dtor well-attributed.)
+ * The host-initiated paths (embedder `drop()`, the GC backstop, `dropOwn`)
+ * route through this harness rather than calling the dtor bare, because the
+ * activation then has a real `Task` + implicit `Thread`: built-ins reached
+ * inside the dtor are well-attributed (a bare call leaves `currentTask()`
+ * with no ambient task — `PendingCapability`, or a foreign-task
+ * misattribution, the #24 class), and settled tails flow through
+ * `serviceSettled` like any other lifted sync call.
  *
  * The returned function takes the rep and returns either `undefined` (the
  * activation completed synchronously — the overwhelmingly common case) or a

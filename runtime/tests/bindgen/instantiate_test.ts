@@ -3,7 +3,7 @@
 // contracts/embedder-api.md §"Module wiring and instantiation" +
 // contracts/digest.md: bindings embed the expected world digest and the
 // digest is recomputed from the loaded plan AT INSTANTIATE TIME, failing
-// fast with a structural diff on mismatch. `crates/bindgen` emits that
+// fast on mismatch (no structural diff). `crates/bindgen` emits that
 // path as `instantiate` in every generated module (the checked-in
 // snapshots under ./generated); this test drives it against real
 // translated components.

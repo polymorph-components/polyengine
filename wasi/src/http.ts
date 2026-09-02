@@ -23,11 +23,11 @@
 // VERSION KEYS: 0.3.x releases fold onto the `@0.3` compatibility track
 // (contracts/embedder-api.md §"Version canonicalization"), so the
 // default registration serves every released 0.3.x with one provider —
-// the same flagship track-key pattern as the rest of this package. The
-// pre-consolidation rc SNAPSHOTS (`0.3.0-rc-*`) are prereleases, which
-// resolve exact-only: a guest pinned to one names it via
-// `http({ version: "0.3.0-rc-..." })`, which re-keys the fragment at
-// that exact id instead.
+// the same flagship track-key pattern as the rest of this package. A
+// guest pinned to a pre-consolidation rc SNAPSHOT (`0.3.0-rc-*`, which
+// resolves exact-only) is out of scope for this fragment; an embedder
+// serving one re-keys the `imports` object it gets back from `http()`
+// manually (documented escape, unaffected by this fragment's surface).
 //
 // Body/trailers plumbing is the same stream+future choreography the TCP
 // provider proved: constructors return `[resource, transmission-future]`
@@ -212,13 +212,6 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 export interface HttpOptions {
-  /**
-   * Override the registration keys for a guest pinned to a PRERELEASE
-   * snapshot (`0.3.0-rc-*`), which the resolver matches exactly — no
-   * track exists for prereleases. Default: the `@0.3` track, serving
-   * every released 0.3.x.
-   */
-  version?: string;
   /** Observe every entry point the guest reaches (see sockets' onCall). */
   onCall?: (call: string) => void;
   /**
@@ -375,7 +368,6 @@ export interface ResponseClass {
  */
 export function http(options: HttpOptions = {}): HttpFragment {
   const onCall = options.onCall ?? ((): void => {});
-  const v = options.version ?? HTTP_TRACK;
   const allowRequest = options.allowRequest;
 
   // --- fields -----------------------------------------------------------------
@@ -1040,8 +1032,8 @@ export function http(options: HttpOptions = {}): HttpFragment {
 
   return {
     imports: {
-      [`wasi:http/types@${v}`]: { Fields, Request, RequestOptions, Response },
-      [`wasi:http/client@${v}`]: { send },
+      "wasi:http/types@0.3": { Fields, Request, RequestOptions, Response },
+      "wasi:http/client@0.3": { send },
     },
     Fields: Fields as unknown as FieldsClass,
     Request: Request as unknown as RequestClass,

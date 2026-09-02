@@ -2,7 +2,7 @@
 
 The digest is the skew-protection handshake of docs/architecture.md §9: bindings generated
 from WIT embed an expected digest; the generated typed `instantiate` recomputes
-it from the loaded plan and fails fast with a structural diff on mismatch,
+it from the loaded plan and fails fast on mismatch,
 before any guest code runs (contracts/embedder-api.md §"Module wiring and
 instantiation" — the runtime's untyped `instantiate` names no world, so it
 does not verify). A digest match must imply ABI-shape compatibility for

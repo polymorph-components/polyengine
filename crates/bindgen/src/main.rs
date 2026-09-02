@@ -56,41 +56,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Generate the typed TS facade for a world.
-    Generate {
-        wit_path: PathBuf,
-        #[arg(long)]
-        world: Option<String>,
-        #[arg(long)]
-        out: PathBuf,
-
-        /// Import base the generated bindings resolve the runtime through.
-        ///
-        /// Resolution rule, by what the base addresses: a path or URL
-        /// specifier addresses a *file* and yields `{base}/{module}/mod.ts`; a
-        /// bare or registry specifier addresses an entry in a package's
-        /// `exports` map — runtime/deno.json declares `./plan` / `./digest` /
-        /// `./embedder` — and yields `{base}/{module}`.
-        ///
-        /// Concretely, file-addressed when the base starts with `.`, `/`,
-        /// `file:`, `http://` or `https://`; export-addressed otherwise. An
-        /// unrecognized scheme falls back to export-addressed, so a future
-        /// registry scheme works by default while anything file-like must be
-        /// spelled as a path, a `file:` URL, or an `http(s)` URL.
-        ///
-        /// Useful non-default values: `../../../src` (in-repo fixture
-        /// regeneration), `@polyengine/runtime` (consumers using an import map
-        /// or npm rather than a `jsr:` specifier).
-        ///
-        /// The default's version is derived from runtime/deno.json at build
-        /// time. Caveat: this repo's manifests always carry the NEXT release,
-        /// so on a development checkout between releases the default pins a
-        /// version that is not published yet (semver ranges never resolve to
-        /// the `-pre.g<hash>` prereleases) — bindings from a dev checkout
-        /// belong to that unreleased line.
-        #[arg(long, value_name = "PREFIX", default_value = bindgen::codegen::DEFAULT_IMPORT_BASE)]
-        import_base: String,
-    },
     /// Print only the canonical digest (debugging / cross-language tests).
     Digest {
         wit_path: PathBuf,
@@ -105,12 +70,6 @@ enum Command {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.cmd {
-        Some(Command::Generate {
-            wit_path,
-            world,
-            out,
-            import_base,
-        }) => generate(&wit_path, world.as_deref(), &out, &import_base),
         Some(Command::Digest {
             wit_path,
             world,

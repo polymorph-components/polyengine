@@ -14,9 +14,9 @@
 //
 //   Then, from the repo root:
 //
-//     deno task -c harness/deno.json browser:chromium     # required lane
-//     deno task -c harness/deno.json browser:firefox      # findings lane
-//     deno task -c harness/deno.json browser:webkit       # findings lane
+//     just browser-lane chromium     # required lane
+//     just browser-lane firefox      # findings lane
+//     just browser-lane webkit       # findings lane
 //
 //   or directly:
 //

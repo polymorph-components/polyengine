@@ -7,15 +7,13 @@
 import { assertEq } from "../support/asserts.ts";
 import {
   asTrackKeySpelling,
-  camelCase,
   ImportRegistrationError,
   ImportResolutionError,
   ImportResolver,
-  parseLeafName,
-  pascalCase,
-  NameCollisionError,
   trackKey,
-} from "../../src/embedder/mod.ts";
+} from "../../src/embedder/version.ts";
+import { camelCase, parseLeafName, pascalCase } from "../../src/embedder/casing.ts";
+import { NameCollisionError } from "../../src/embedder/errors.ts";
 import { checkNoCollisions } from "../../src/embedder/values.ts";
 
 const P = "wasi:clocks/monotonic-clock";

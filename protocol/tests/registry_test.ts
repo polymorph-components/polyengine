@@ -10,9 +10,11 @@ import {
   copyCensus,
   PROTOCOL_GENERATION,
   registerRuntimeCopy,
-  RUNTIME_COPIES,
   runtimeCopies,
 } from "../src/mod.ts";
+// RUNTIME_COPIES is @internal (not part of the public surface); this test
+// reaches into the package's own module for the global-slot key.
+import { RUNTIME_COPIES } from "../src/brands.ts";
 
 function reset(): void {
   // deno-lint-ignore no-explicit-any

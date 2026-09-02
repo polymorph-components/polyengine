@@ -91,25 +91,23 @@ export interface DatagramConn {
   send(p: Uint8Array, addr?: NetAddr): Promise<number>;
   receive(): Promise<[Uint8Array, NetAddr]>;
   close(): void;
-  /** OS-level connected mode (kernel filters + default destination).
-   * Optional capability: absent = the provider answers `not-supported`. */
-  connect?(addr: NetAddr): Promise<void>;
-  disconnect?(): void;
-  /** IP_TTL / IPV6_UNICAST_HOPS. Optional capability. */
-  setTtl?(ttl: number): void;
-  /** SO_RCVBUF / SO_SNDBUF. Optional capabilities. */
-  getRecvBufferSize?(): number;
-  setRecvBufferSize?(size: number): void;
-  getSendBufferSize?(): number;
-  setSendBufferSize?(size: number): void;
+  /** OS-level connected mode (kernel filters + default destination). */
+  connect(addr: NetAddr): Promise<void>;
+  disconnect(): void;
+  /** IP_TTL / IPV6_UNICAST_HOPS. */
+  setTtl(ttl: number): void;
+  /** SO_RCVBUF / SO_SNDBUF. */
+  getRecvBufferSize(): number;
+  setRecvBufferSize(size: number): void;
+  getSendBufferSize(): number;
+  setSendBufferSize(size: number): void;
   /** Non-blocking queue access + readiness (the 0.2 datagram streams:
-   * poll-shaped receive instead of the promise-shaped one above).
-   * Optional capabilities. */
-  tryReceive?(): [Uint8Array, NetAddr] | undefined;
-  receiveReady?(): boolean;
+   * poll-shaped receive instead of the promise-shaped one above). */
+  tryReceive(): [Uint8Array, NetAddr] | undefined;
+  receiveReady(): boolean;
   /** The CURRENT epoch's wake promise (promise-swap: settles when a
    * datagram arrives, the socket errors, or it closes; re-armed per event). */
-  waitReceive?(): Promise<void>;
+  waitReceive(): Promise<void>;
 }
 
 export type ListenDatagram = (options: {
@@ -127,9 +125,8 @@ export interface TcpConn {
   write(p: Uint8Array): Promise<number>;
   closeWrite(): Promise<void>;
   close(): void;
-  /** SO_KEEPALIVE + TCP_KEEPIDLE (node exposes exactly this pair).
-   * Optional capability: absent = the provider answers `not-supported`. */
-  setKeepAlive?(enabled: boolean, idleMs: number): void;
+  /** SO_KEEPALIVE + TCP_KEEPIDLE (node exposes exactly this pair). */
+  setKeepAlive(enabled: boolean, idleMs: number): void;
 }
 
 export type TcpConnect = (options: {
@@ -151,11 +148,11 @@ export interface TcpListener {
   settled(): Promise<void>;
   accept(): Promise<TcpConn>;
   close(): void;
-  /** Non-blocking accept + readiness (the 0.2 poll-shaped accept).
-   * Optional capabilities; same promise-swap contract as `waitReceive`. */
-  tryAccept?(): TcpConn | undefined;
-  acceptReady?(): boolean;
-  waitAccept?(): Promise<void>;
+  /** Non-blocking accept + readiness (the 0.2 poll-shaped accept);
+   * same promise-swap contract as `waitReceive`. */
+  tryAccept(): TcpConn | undefined;
+  acceptReady(): boolean;
+  waitAccept(): Promise<void>;
 }
 
 export type TcpListen = (options: {

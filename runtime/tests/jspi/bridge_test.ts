@@ -105,14 +105,12 @@ Deno.test("bridge: a trap computed at resume time becomes a rejection", async ()
 });
 
 Deno.test("bridge: a suspension does not make the instance unusable", async () => {
-  // Was: "reentrance gates are ours and hold across a suspension". Empirical
-  // fact (d) is unchanged — the ENGINE freely permits reentering an instance
-  // while one of its activations is suspended — but the Component Model no
-  // longer forbids it either: CM#705 (definitions.py @ 2f13265) deleted
-  // `may_enter`/`enter_from`/`leave_to`, so there is no gate to hold
-  // (polyengine#173). What this pins now is that a suspended-and-resumed
-  // activation leaves the instance entirely usable: nothing is refused before,
-  // during or after.
+  // Empirical fact (d): the ENGINE freely permits reentering an instance
+  // while one of its activations is suspended — and the Component Model does
+  // not forbid it either (definitions.py @ 2f13265 has no
+  // `may_enter`/`enter_from`/`leave_to`, CM#705), so there is no gate to
+  // hold. What this pins: a suspended-and-resumed activation leaves the
+  // instance entirely usable — nothing is refused before, during or after.
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
   let flag = false;

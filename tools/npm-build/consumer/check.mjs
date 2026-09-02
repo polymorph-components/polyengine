@@ -104,7 +104,6 @@ for (
     "@polyengine/runtime/cache",
     "@polyengine/wasi/clocks",
     "@polyengine/wasi/filesystem-node",
-    "@polyengine/ct-runner/run",
   ]
 ) {
   const mod = await import(subpath);

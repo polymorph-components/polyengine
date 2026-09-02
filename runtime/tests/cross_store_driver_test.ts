@@ -3,19 +3,19 @@
 // The driver's speculative resume entry (exec/boundary.ts, `Promise.race`
 // over the parked threads) is held for the entire duration of a guest's wait
 // on a slow host import — the completely ordinary suspended-guest shape.
-// While that gate lived in a module-global slot, EVERY `driveAsync` loop
-// yielded at its top while ANY store held it, with a bounded hop counter:
+// The gate is `Store.pendingResumptions`, PER STORE: activations never cross
+// stores, so A's pending resumption is none of B's business. Were it shared,
+// every `driveAsync` loop would yield at its top while ANY store held an
+// entry, against a bounded hop counter:
 //
 //   assert_(claimHops < 10_000, "driveAsync: a resumed-activation claim was
 //   never released ...")
 //
-// so an idle, completely unrelated store B's `driveStoreAsync` died at 10,000
-// hops in ~311ms while store A merely dwelt on its import — an internal
-// AssertionError naming neither component (issue #210). The gate is now
-// `Store.pendingResumptions`, per store: activations never cross stores, so
-// A's pending resumption is none of B's business.
+// so an idle, completely unrelated store B's `driveStoreAsync` would die at
+// 10,000 hops in ~311ms while store A merely dwelt on its import — an
+// internal AssertionError naming neither component (issue #210).
 //
-// This test is the #210 probe INVERTED: B's driver must return promptly. The
+// This test pins the requirement: B's driver must return promptly. The
 // control below pins that the gate still gates — A's OWN driver refuses to
 // tick past A's own pending entry.
 //

@@ -70,19 +70,12 @@ export function createStream<T>(): { stream: ProtocolStream<T>; writer: Protocol
 
 export { GuestResource, HostResourceRegistry } from "./resources.ts";
 
-export { camelCase, type LeafName, parseLeafName, pascalCase } from "./casing.ts";
+export { camelCase, pascalCase } from "./casing.ts";
 
 export {
-  asTrackKeySpelling,
-  compareSemver,
   ImportRegistrationError,
   ImportResolutionError,
   ImportResolver,
-  type ParsedId,
-  parseInterfaceId,
-  parseSemver,
-  type Semver,
-  trackKey,
 } from "./version.ts";
 
 export {

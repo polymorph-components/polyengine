@@ -46,8 +46,6 @@ export interface CliOptions {
   cwd?: string;
   /** `get-stdin`'s buffer contents; default empty (matches contract: "stdin (empty)"). */
   stdinBuffer?: Uint8Array;
-  /** Also `console.log`/`console.error` captured stdout/stderr writes. Default false. */
-  passthrough?: boolean;
   /** `exit()` throws `ExitError` instead of merely recording. Default false. */
   throwOnExit?: boolean;
 }
@@ -96,18 +94,15 @@ function concat(chunks: Uint8Array[]): Uint8Array {
 export function cli(options: CliOptions = {}): CliResult {
   const stdoutChunks: Uint8Array[] = [];
   const stderrChunks: Uint8Array[] = [];
-  const passthrough = options.passthrough ?? false;
   let exited = false;
   let exitOk: boolean | undefined;
   let exitCode: number | undefined;
 
   const stdout = new OutputStream((chunk) => {
     stdoutChunks.push(chunk);
-    if (passthrough) console.log(new TextDecoder().decode(chunk));
   });
   const stderr = new OutputStream((chunk) => {
     stderrChunks.push(chunk);
-    if (passthrough) console.error(new TextDecoder().decode(chunk));
   });
 
   const captured: CliCaptured = {
@@ -123,13 +118,11 @@ export function cli(options: CliOptions = {}): CliResult {
   /** 0.3 write-via-stream into a capture buffer (the promise IS the future — embedder-api.md §"Streams and futures"). */
   const captureViaStream = (
     chunks: Uint8Array[],
-    mirror: ((text: string) => void) | undefined,
   ) =>
   async (data: CliByteSource): Promise<CliIoResult> => {
     for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
       const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
       chunks.push(bytes);
-      mirror?.(new TextDecoder().decode(bytes));
     }
     return { kind: "ok" };
   };
@@ -195,16 +188,10 @@ export function cli(options: CliOptions = {}): CliResult {
       ],
     },
     "wasi:cli/stdout@0.3": {
-      writeViaStream: captureViaStream(
-        stdoutChunks,
-        passthrough ? (t) => console.log(t) : undefined,
-      ),
+      writeViaStream: captureViaStream(stdoutChunks),
     },
     "wasi:cli/stderr@0.3": {
-      writeViaStream: captureViaStream(
-        stderrChunks,
-        passthrough ? (t) => console.error(t) : undefined,
-      ),
+      writeViaStream: captureViaStream(stderrChunks),
     },
     "wasi:cli/terminal-input@0.3": { TerminalInput },
     "wasi:cli/terminal-output@0.3": { TerminalOutput },

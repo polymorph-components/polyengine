@@ -320,9 +320,6 @@ export function containsBorrow(t: ValType | null): boolean {
   return contains(t, (u) => u.kind === "borrow");
 }
 
-export function containsAsyncValue(t: ValType | null): boolean {
-  return contains(t, (u) => u.kind === "stream" || u.kind === "future");
-}
 
 export function contains(
   t: ValType | null,

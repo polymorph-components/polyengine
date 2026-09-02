@@ -61,9 +61,9 @@
 //     `trampoline.rs:116-127` emits an unconditional
 //     `trap(Trap::CannotEnterComponent)` when the lower and lift instances are
 //     the same or are ancestors of one another. The runtime-side counterpart
-//     — "is the callee instance currently executing" — is GONE as of CM#705
-//     (definitions.py @ 2f13265 has no `may_enter`), so the only refusal left
-//     at these call sites is polyengine's per-instance poisoned-corpse check
+//     — "is the callee instance currently executing" — does not exist at the
+//     pinned reference (definitions.py @ 2f13265 has no `may_enter`, CM#705),
+//     so the only refusal at these sites is polyengine's poisoned-corpse check
 //     (`entryRefusal`). The flat-instance-tree gap recorded in task/mod.ts is
 //     doubly not load-bearing here.
 

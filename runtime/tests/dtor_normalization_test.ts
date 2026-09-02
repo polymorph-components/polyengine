@@ -3,26 +3,11 @@
 // Authority: definitions.py `canon_resource_drop` (line 2319) builds the dtor
 // into a function instance and calls it through `Store.lift` with
 // `CanonicalOptions(async_ = False)` / `FuncType([U32Type()], [], async_ =
-// False)`. Before #160 the host-initiated path called `rt.dtor` bare while
-// HOLDING a host-entry bracket across the returned promise, which produced two
-// observable defects pinned below:
-//
-//   1. the dtor's own suspension points were unresumable — `Store.tick`'s
-//      enterability filter (#155) skips a thread whose instance is not
-//      host-enterable, and the held bracket made the impl exactly that, so
-//      the completion promise (parked in `pendingHostCalls`, i.e. advertised
-//      as *external* work) never settled and every driver waited forever;
-//   2. the held bracket also locked the per-instantiation root for
-//      the whole activation, so a SIBLING instance of the same component
-//      looked non-enterable from the host — the macro-scale window of the
-//      #156 class.
-//
-// Both are structural consequences of the missing Task/Thread, and both are
-// gone now that the dtor runs through `createLiftedFunction`. CM#705
-// (polyengine#173) has since removed the gate itself, so neither shape is
-// even expressible any more; the pins below are restated in terms of what is
-// still observable — the dtor's own task, scheduler resumability, and the
-// fact that a dtor may re-enter a LIVE instance at all.
+// False)`. The host-initiated path runs the dtor through
+// `createLiftedFunction`, so the activation has a real Task/Thread. The pins
+// below cover what that buys: the dtor's own task, scheduler resumability of
+// its suspension points, its completion NOT being advertised as external
+// work, and the fact that a dtor may enter a LIVE instance at all.
 
 import { ResourceTypeInfo } from "../src/cabi/mod.ts";
 import {
@@ -67,9 +52,8 @@ Deno.test("#160: a dtor parked on a scheduler-resumable suspension point complet
 
   hostDtorCall(rt, 77);
 
-  // The park happened, and `tick` can resume the point below. Pre-#160 the
-  // held bracket made the impl non-enterable and the store wedged forever;
-  // post-#705 nothing can make it non-enterable except poisoning.
+  // The park happened, and `tick` can resume the point below: nothing can
+  // make the impl non-enterable except poisoning (CM#705).
   assertEq(finished, false);
   assertEq(entryRefusal(impl, null, "base"), null);
   assertEq(store.waiting.length >= 1, true);
@@ -87,9 +71,7 @@ Deno.test("#160: a dtor parked on a scheduler-resumable suspension point complet
 });
 
 Deno.test("#160/#173: a dtor may run while its own instance is LIVE", async () => {
-  // REPLACES the "#160/#156: a sibling instance stays enterable" pin, which
-  // is trivial now (nothing can be non-enterable). The stronger merged
-  // property: `canon_resource_drop` lifts the dtor with no gate at all
+  // `canon_resource_drop` lifts the dtor with no gate at all
   // (definitions.py @ 2f13265), so a dtor whose implementing instance is in
   // the middle of a host-initiated activation is valid and both complete.
   const store = new Store();
@@ -106,8 +88,7 @@ Deno.test("#160/#173: a dtor may run while its own instance is LIVE", async () =
   hostDtorCall(slow, 5);
 
   // A SECOND, synchronous dtor of the same instance, entered while the first
-  // is still in flight. Pre-#705 this was refused ("cannot enter component
-  // instance"); now it simply runs.
+  // is still in flight: it simply runs (CM#705).
   let ranNested = 0;
   const quick = new ResourceTypeInfo(impl, (() => {
     ranNested += 1;

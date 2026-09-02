@@ -64,8 +64,7 @@ Deno.test("hello: full pipeline shim -> plan -> executor -> greet()", async () =
   assertEq(component.stats.tasksResolved, 1);
 
   // The may_leave flag is released after the sync call resolved. (There is
-  // no may_enter counterpart any more: CM#705 / polyengine#173 deleted the
-  // transient reentrance model.)
+  // no may_enter counterpart: CM#705.)
   const inst = component.componentInstances[0];
   assert(inst.mayLeave, "may_leave must be restored after call");
   assertEq(inst.flags.value, 1);
@@ -136,11 +135,9 @@ Deno.test("task model: reentrance is permitted; a failed call poisons", async ()
   const greet = component.exports.greet as (name: string) => string;
   greet("warm-up");
 
-  // INVERTED by polyengine#173 (CM#705). This used to simulate an
-  // in-progress activation of the same instance and require the next host
-  // entry to trap. The merged reference (definitions.py @ 2f13265) has no
-  // `may_enter`, no `entering_set` and no bracket in `Store.lift`, so entry
-  // into a live instance is valid. The live host-mediated shape is pinned
+  // The reference (definitions.py @ 2f13265) has no `may_enter`, no
+  // `entering_set` and no bracket in `Store.lift` (CM#705), so entry into a
+  // live instance is valid. The live host-mediated shape is pinned
   // end-to-end in e2e_imports_test.ts ("a host import may synchronously
   // re-enter its own instance"); here we only pin that nothing refuses.
   const inst = component.componentInstances[0];
@@ -154,7 +151,7 @@ Deno.test("task model: reentrance is permitted; a failed call poisons", async ()
   // half-written its argument buffer — the instance is in exactly the
   // indeterminate state poisoning exists for. (Poisoning is polyengine's
   // named divergence — a per-instance corpse where wasmtime kills the whole
-  // store — and since CM#705 it is the ONLY reason an entry is refused.)
+  // store — and it is the ONLY reason an entry is refused, CM#705.)
   let threw = false;
   try {
     greet(123 as unknown as string);
