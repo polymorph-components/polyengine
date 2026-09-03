@@ -264,36 +264,95 @@ export type DespecializedValType = Exclude<
   TupleType | EnumType | OptionType | ResultType | MapType
 >;
 
+/**
+ * Despecialization memo, keyed on input identity.
+ *
+ * `ValType` objects are built once per plan by plan/loader.ts `loadValType`
+ * and never mutated, so their identity is stable for the plan's lifetime —
+ * the same justification embedder/values.ts `checkedLabels` relies on. Issue
+ * #261: `despecialize` sits at the top of `load`, `store`, `alignment`,
+ * `elemSize`, `lowerFlat` and `contains`, and allocated a fresh record or
+ * variant on every one of those calls, per element and per field.
+ *
+ * The memo hands every caller the SAME object where each previously got a
+ * fresh one, so it is sound only as long as no caller mutates the result.
+ * That invariant is enforced in HALF the cases and merely relied upon in the
+ * other half, and the difference is worth knowing:
+ *
+ *   - The five specialized kinds return an object built here, and everything
+ *     built here is frozen. These modules are strict-mode, so a later
+ *     mutation throws instead of silently corrupting every other holder.
+ *   - The default branch returns the plan-owned `t` unchanged — which for a
+ *     plan-declared record/variant/list is MOST types in practice — and
+ *     freezing plan types is out of scope. Nothing enforces immutability
+ *     there; it rests on plan/loader.ts `loadValType`, which builds every
+ *     node bottom-up and never writes to one afterwards.
+ *
+ * Violating that second half is now worse than it used to be. Mutating a plan
+ * record's `fields` was previously self-correcting, because every `load`/
+ * `store` recomputed the layout from the current array; with layout.ts's
+ * cache the mutation instead desynchronizes a `Layout` whose `fieldOffsets`
+ * were computed from the pre-mutation shape — wrong bytes at wrong offsets,
+ * no error anywhere. A `ValType` reachable from a plan is immutable; treat
+ * that as a hard invariant of this layer, not a convention.
+ */
+const despecializedCache = new WeakMap<ValType, DespecializedValType>();
+
 export function despecialize(t: ValType): DespecializedValType {
+  const hit = despecializedCache.get(t);
+  if (hit !== undefined) return hit;
+  const d = despecializeUncached(t);
+  // Cached only after the computation returns: a throwing path must leave no
+  // entry behind, or the failure would be reported exactly once.
+  despecializedCache.set(t, d);
+  return d;
+}
+
+/**
+ * definitions.py `despecialize` (line 1163), line for line. Only the objects
+ * built HERE are frozen; the default branch returns the plan-owned `t`
+ * unchanged, and freezing plan types is out of scope.
+ */
+function despecializeUncached(t: ValType): DespecializedValType {
   switch (t.kind) {
     case "tuple":
-      return {
-        kind: "record",
-        fields: t.elements.map((e, i) => ({ label: String(i), type: e })),
-      };
+      return Object.freeze({
+        kind: "record" as const,
+        fields: Object.freeze(
+          t.elements.map((e, i) => Object.freeze({ label: String(i), type: e })),
+        ) as FieldType[],
+      });
     case "enum":
-      return {
-        kind: "variant",
-        cases: t.labels.map((l) => ({ label: l, type: null })),
-      };
+      return Object.freeze({
+        kind: "variant" as const,
+        cases: Object.freeze(
+          t.labels.map((l) => Object.freeze({ label: l, type: null })),
+        ) as CaseType[],
+      });
     case "option":
-      return {
-        kind: "variant",
-        cases: [{ label: "none", type: null }, { label: "some", type: t.type }],
-      };
+      return Object.freeze({
+        kind: "variant" as const,
+        cases: Object.freeze([
+          Object.freeze({ label: "none", type: null }),
+          Object.freeze({ label: "some", type: t.type }),
+        ]) as CaseType[],
+      });
     case "result":
-      return {
-        kind: "variant",
-        cases: [{ label: "ok", type: t.ok }, { label: "error", type: t.error }],
-      };
+      return Object.freeze({
+        kind: "variant" as const,
+        cases: Object.freeze([
+          Object.freeze({ label: "ok", type: t.ok }),
+          Object.freeze({ label: "error", type: t.error }),
+        ]) as CaseType[],
+      });
     case "map":
-      return {
-        kind: "list",
+      return Object.freeze({
+        kind: "list" as const,
         element: despecialize({
           kind: "tuple",
           elements: [t.key, t.value],
         }),
-      };
+      });
     default:
       return t;
   }
@@ -303,13 +362,78 @@ export function despecialize(t: ValType): DespecializedValType {
 // Discriminants (definitions.py `discriminant_type`)
 // ---------------------------------------------------------------------------
 
-export function discriminantType(cases: CaseType[]): PrimType {
-  const n = cases.length;
+/**
+ * The discriminant WIDTH — the single mirror of definitions.py
+ * `discriminant_type`'s arithmetic (line 1234), including its `assert(0 < n <
+ * (1 << 32))`. `math.ceil(log2(n)/8)`: 0|1 -> u8, 2 -> u16, 3 -> u32.
+ *
+ * The width is what the layout code actually wanted: on every variant lifted
+ * or lowered it used to build a `PrimType` purely to hand it to
+ * `alignment`/`elemSize` (issue #261). u8/u16/u32 each have alignment equal to
+ * their size, so this one number is both the discriminant's size and its
+ * alignment — which is why the variant layout kernels need nothing else.
+ */
+export function discriminantSize(caseCount: number): 1 | 2 | 4 {
+  const n = caseCount;
   if (!(0 < n && n < 2 ** 32)) throw new Error("assertion failed: case count");
-  // mirrors math.ceil(log2(n)/8): 0|1 -> u8, 2 -> u16, 3 -> u32
-  if (n <= 256) return { kind: "u8" };
-  if (n <= 65536) return { kind: "u16" };
-  return { kind: "u32" };
+  if (n <= 256) return 1;
+  if (n <= 65536) return 2;
+  return 4;
+}
+
+/**
+ * Module-level singletons rather than fresh literals per call: `flatten.ts`
+ * calls `discriminantType` once per variant flattened and passes the result
+ * to `flattenType`, which despecializes it — a fresh object there is one
+ * `despecializedCache` insert on immediate garbage every time (the same
+ * defeat-the-identity-cache pattern `values.ts` `spillTupleType` avoids).
+ * Frozen for the reason the despecialized nodes are: they are now shared, and
+ * the engine is a better guarantor of "nobody mutates this" than an audit.
+ */
+const U8: PrimType = Object.freeze({ kind: "u8" });
+const U16: PrimType = Object.freeze({ kind: "u16" });
+const U32: PrimType = Object.freeze({ kind: "u32" });
+
+/**
+ * definitions.py `discriminant_type`. The table itself lives in
+ * `discriminantSize`; this is only the width -> type mapping, so the bound
+ * check, the thresholds and the error string exist once. Flattening
+ * (flatten.ts:157) and layout (layout.ts `alignmentVariant`,
+ * `elemSizeVariant`) therefore cannot drift apart on the discriminant width.
+ */
+export function discriminantType(cases: CaseType[]): PrimType {
+  switch (discriminantSize(cases.length)) {
+    case 1:
+      return U8;
+    case 2:
+      return U16;
+    case 4:
+      return U32;
+  }
+}
+
+/**
+ * Label -> case index for a variant's `cases`, memoized on the array's
+ * identity (plan-owned and stable, same argument as the despecialization
+ * memo). Replaces the linear scan `matchCase` ran on every variant stored
+ * (issue #261).
+ *
+ * A label bound to more than one case maps to -1, because the scan this
+ * replaces asserted on finding exactly ONE match: collapsing duplicates to
+ * "last wins" would silently accept a variant the old code rejected.
+ */
+const caseIndexCache = new WeakMap<CaseType[], ReadonlyMap<string, number>>();
+
+export function caseIndexOf(cases: CaseType[]): ReadonlyMap<string, number> {
+  const hit = caseIndexCache.get(cases);
+  if (hit !== undefined) return hit;
+  const m = new Map<string, number>();
+  for (let i = 0; i < cases.length; i++) {
+    const label = cases[i].label;
+    m.set(label, m.has(label) ? -1 : i);
+  }
+  caseIndexCache.set(cases, m);
+  return m;
 }
 
 // ---------------------------------------------------------------------------

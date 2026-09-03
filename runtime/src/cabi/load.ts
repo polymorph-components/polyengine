@@ -3,13 +3,7 @@
 import { assert_, NotImplemented, trapIf } from "./trap.ts";
 import { bytesOf, loadIntS, loadIntU, loadPtr } from "./memory.ts";
 import { decodeI32AsFloat, decodeI64AsFloat } from "./float.ts";
-import {
-  alignment,
-  alignTo,
-  elemSize,
-  elemSizeFlags,
-  maxCaseAlignment,
-} from "./layout.ts";
+import { elemSizeFlags, layoutOf } from "./layout.ts";
 import { convertI32ToChar, loadString } from "./strings.ts";
 import { type LiftLowerContext, requireMemory } from "./context.ts";
 import { tryLoadNumericList } from "./bulk_lists.ts";
@@ -17,8 +11,6 @@ import { liftBorrow, liftOwn } from "./handles.ts";
 import {
   type CaseType,
   type ComponentValue,
-  despecialize,
-  discriminantType,
   type FieldType,
   type ValType,
 } from "./types.ts";
@@ -36,9 +28,14 @@ export function load(
   t: ValType,
 ): ComponentValue {
   const mem = requireMemory(cx.opts);
-  assert_(ptr === alignTo(ptr, alignment(t, mem.ptrType())), "load misaligned");
-  assert_(ptr + elemSize(t, mem.ptrType()) <= mem.length, "load OOB");
-  const d = despecialize(t);
+  // One cached layout node per (type, pointer width) — issue #261; it carries
+  // the despecialized type too, so this is the only map lookup on the path.
+  const L = layoutOf(t, mem.ptrType());
+  // Alignments are always powers of two, so `ptr % align === 0` decides
+  // exactly what `ptr === alignTo(ptr, align)` did, without the float divide.
+  assert_(ptr % L.align === 0, "load misaligned");
+  assert_(ptr + L.size <= mem.length, "load OOB");
+  const d = L.d;
   switch (d.kind) {
     case "bool":
       return convertIntToBool(loadIntU(mem, ptr, 1));
@@ -71,9 +68,17 @@ export function load(
     case "list":
       return loadList(cx, ptr, d.element, d.length ?? null);
     case "record":
-      return loadRecord(cx, ptr, d.fields);
+      return loadRecord(cx, ptr, d.fields, L.fieldOffsets!);
     case "variant":
-      return loadVariant(cx, ptr, d.cases);
+      // discSize is 0 only on the kinds that have no discriminant; inside
+      // this arm `variantLayout` established it as 1|2|4.
+      return loadVariant(
+        cx,
+        ptr,
+        d.cases,
+        L.discSize as 1 | 2 | 4,
+        L.payloadOffset,
+      );
     case "flags":
       return loadFlags(cx, ptr, d.labels);
     case "own":
@@ -114,8 +119,7 @@ export function loadListFromRange(
   elemType: ValType,
 ): ComponentValue {
   const mem = requireMemory(cx.opts);
-  const size = elemSize(elemType, mem.ptrType());
-  const align = alignment(elemType, mem.ptrType());
+  const { size, align } = layoutOf(elemType, mem.ptrType());
   const byteLengthBig = BigInt(length) * BigInt(size);
   trapIf(byteLengthBig > BigInt(MAX_LIST_BYTE_LENGTH), "list too long");
   const ptrBig = BigInt(ptr);
@@ -131,7 +135,8 @@ export function loadListFromValidRange(
   elemType: ValType,
 ): ComponentValue {
   const mem = requireMemory(cx.opts);
-  const kind = despecialize(elemType).kind;
+  const L = layoutOf(elemType, mem.ptrType());
+  const kind = L.d.kind;
   // docs/architecture.md §7: list<u8> lifts to a Uint8Array copy.
   if (kind === "u8") {
     return bytesOf(mem, ptr, length).slice();
@@ -142,7 +147,7 @@ export function loadListFromValidRange(
   // validation is the point), and non-little-endian platforms.
   const bulk = tryLoadNumericList(mem, ptr, length, kind);
   if (bulk !== null) return bulk;
-  const size = elemSize(elemType, mem.ptrType());
+  const size = L.size;
   const a: ComponentValue[] = [];
   for (let i = 0; i < length; i++) {
     a.push(load(cx, ptr + i * size, elemType));
@@ -150,18 +155,24 @@ export function loadListFromValidRange(
   return a;
 }
 
+/**
+ * `offsets[i]` is field i's byte offset from `ptr`, precomputed on the layout
+ * node, so the loop is an indexed read rather than the per-field
+ * `alignTo`/`alignment`/`elemSize` recomputation it used to be (issue #261).
+ * Taking the offsets rather than the whole `Layout` keeps the function
+ * self-consistent: its two arguments are the ones the result depends on, and
+ * there is no unchecked "these came from the same type" invariant to violate.
+ */
 export function loadRecord(
   cx: LiftLowerContext,
   ptr: number,
   fields: FieldType[],
+  offsets: readonly number[],
 ): ComponentValue {
-  const mem = requireMemory(cx.opts);
   const record: { [label: string]: ComponentValue } = {};
-  let p = ptr;
-  for (const field of fields) {
-    p = alignTo(p, alignment(field.type, mem.ptrType()));
-    record[field.label] = load(cx, p, field.type);
-    p += elemSize(field.type, mem.ptrType());
+  for (let i = 0; i < fields.length; i++) {
+    const field = fields[i];
+    record[field.label] = load(cx, ptr + offsets[i], field.type);
   }
   return record;
 }
@@ -170,16 +181,15 @@ export function loadVariant(
   cx: LiftLowerContext,
   ptr: number,
   cases: CaseType[],
+  discSize: 1 | 2 | 4,
+  payloadOffset: number,
 ): ComponentValue {
   const mem = requireMemory(cx.opts);
-  const discSize = elemSize(discriminantType(cases), mem.ptrType());
-  const caseIndex = loadIntU(mem, ptr, discSize as 1 | 2 | 4);
-  let p = ptr + discSize;
+  const caseIndex = loadIntU(mem, ptr, discSize);
   trapIf(caseIndex >= cases.length, "invalid variant discriminant");
   const c = cases[caseIndex];
-  p = alignTo(p, maxCaseAlignment(cases, mem.ptrType()));
   if (c.type === null) return { [c.label]: null };
-  return { [c.label]: load(cx, p, c.type) };
+  return { [c.label]: load(cx, ptr + payloadOffset, c.type) };
 }
 
 export function loadFlags(
