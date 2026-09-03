@@ -13,6 +13,105 @@ interface host {
 
 world bench {
     import host;
+
+    /// A compound element type (issue #261): a 16-case variant over
+    /// records, mirroring the width and payload mix of the consumer
+    /// schema #261 reports (a DOM-mutation op stream: 17 cases, record
+    /// payloads carrying `string`, `option<u16>`, `list<u8>`, and a
+    /// nested variant), because two of the costs #261 identifies are
+    /// both O(case count) per element: `maxCaseAlignment`
+    /// (runtime/src/cabi/layout.ts) recurses through every case's fields
+    /// on every lift, and the embedder facade's variant case resolution
+    /// (runtime/src/embedder/values.ts `toHost`) is a linear scan over
+    /// cases.
+    record op-insert-element {
+        id: u32,
+        tag: string,
+        parent: option<u16>,
+    }
+
+    record op-set-attribute {
+        id: u32,
+        key: string,
+        value: string,
+    }
+
+    record op-remove-attribute {
+        id: u32,
+        key: string,
+    }
+
+    record op-set-text {
+        id: u32,
+        text: string,
+    }
+
+    record op-insert-text {
+        id: u32,
+        text: string,
+        parent: option<u16>,
+    }
+
+    record op-move-node {
+        id: u32,
+        new-parent: option<u16>,
+        index: u16,
+    }
+
+    record op-set-class-list {
+        id: u32,
+        classes: list<u8>,
+    }
+
+    record op-set-style {
+        id: u32,
+        style: list<u8>,
+    }
+
+    record op-add-event-listener {
+        id: u32,
+        event: string,
+    }
+
+    record op-remove-event-listener {
+        id: u32,
+        event: string,
+    }
+
+    /// The nested-variant payload (#261's reported schema has one): a
+    /// small payload-free variant inside a record field, forcing the
+    /// per-element path to recurse one level deeper.
+    variant node-update-kind {
+        inserted,
+        updated,
+        removed,
+        moved,
+    }
+
+    record op-checkpoint {
+        id: u32,
+        update-kind: node-update-kind,
+    }
+
+    variant op {
+        insert-element(op-insert-element),
+        remove-element(u32),
+        set-attribute(op-set-attribute),
+        remove-attribute(op-remove-attribute),
+        set-text(op-set-text),
+        insert-text(op-insert-text),
+        move-node(op-move-node),
+        clear-children(u32),
+        set-class-list(op-set-class-list),
+        set-style(op-set-style),
+        add-event-listener(op-add-event-listener),
+        remove-event-listener(op-remove-event-listener),
+        focus(u32),
+        blur,
+        scroll-into-view,
+        checkpoint(op-checkpoint),
+    }
+
     /// Each export loops its import `iters` times with a `size`-byte
     /// payload and folds the results (defeating dead-code elimination);
     /// the host times the whole export call.
@@ -37,4 +136,11 @@ world bench {
     /// the payload rendezvous is
     /// host<->host with no guest memory touched.
     export stream-pass: async func(s: stream<u8>) -> stream<u8>;
+
+    /// Compound-element LIFT (issue #261): the guest returns `n`
+    /// elements, the host lifts them.
+    export lift-ops: async func(n: u32) -> list<op>;
+    /// Compound-element LOWER (issue #261): the host passes `n`
+    /// elements, the guest folds them and returns a checksum.
+    export lower-ops: async func(ops: list<op>) -> u64;
 }

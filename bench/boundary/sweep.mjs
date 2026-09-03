@@ -57,6 +57,23 @@ for (const shape of STREAM_SHAPES) {
   }
 }
 
+// Compound-element lanes (issue #261): no bulk-copy path exists for these
+// (a variant over records — the interpreted per-element lift/lower loop is
+// exactly what's under test), so unlike the flat scalar shapes above,
+// there's no size dimension — just an element count `n`, calibrated
+// (10000) so a timed run lands in the tens-of-ms range on this box.
+// polyengine drivers only, same reason as the stream shapes: jco is not
+// under test here.
+const ELEMENT_SHAPES = ["lift-ops", "lower-ops"];
+const ELEMENT_N = 10000;
+const elementRows = [];
+
+for (const shape of ELEMENT_SHAPES) {
+  elementRows.push(run("node", ["driver-polyengine.mjs", bundle, translator, shape, "n/a", String(ELEMENT_N), "0", "5"]));
+  elementRows.push(run("node", ["--experimental-wasm-jspi", "driver-polyengine.mjs", bundle, translator, shape, "n/a", String(ELEMENT_N), "0", "5", "jspi"]));
+  elementRows.push(run("deno", ["run", "-A", "driver-polyengine.mjs", bundle, translator, shape, "n/a", String(ELEMENT_N), "0", "5"]));
+}
+
 const lanes = [...new Set(rows.map((r) => r.lane))];
 const pad = (s, n) => String(s).padEnd(n);
 console.log(pad("shape", 10) + pad("mode", 11) + pad("size", 6) + lanes.map((l) => String(l).padStart(22)).join(""));
@@ -84,4 +101,16 @@ for (const shape of STREAM_SHAPES) {
     });
     console.log(pad(shape, 14) + pad(size, 10) + cells.join(""));
   }
+}
+
+console.log();
+console.log(`compound-element lanes (ns/element; n=${ELEMENT_N}; jco lane skipped — see README.md):`);
+const elementLanes = [...new Set(elementRows.map((r) => r.lane))];
+console.log(pad("shape", 12) + elementLanes.map((l) => String(l).padStart(26)).join(""));
+for (const shape of ELEMENT_SHAPES) {
+  const cells = elementLanes.map((lane) => {
+    const r = elementRows.find((x) => x.lane === lane && x.shape === shape);
+    return (r ? r.nsPerElement.toLocaleString("en-US", { maximumFractionDigits: 1 }) : "-").padStart(26);
+  });
+  console.log(pad(shape, 12) + cells.join(""));
 }

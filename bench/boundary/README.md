@@ -58,6 +58,44 @@ smaller chunks need more of them to reach a measurable duration, larger
 chunks need fewer. **polyengine drivers only**: jco's p3 stream support is
 not under test here, so the jco lane is skipped for these rows.
 
+## Compound element shapes ([#261](https://github.com/polymorph-components/polyengine/issues/261))
+
+| export | what it measures |
+| --- | --- |
+| `lift-ops: async func(n: u32) -> list<op>` (guest returns `n` elements) | compound-element LIFT |
+| `lower-ops: async func(ops: list<op>) -> u64` (guest folds, returns a checksum) | compound-element LOWER |
+
+`op` is a 16-case variant over records — the width and payload mix
+mirror #261's reported 17-case consumer schema (a DOM-mutation op
+stream, records carrying `string`, `option<u16>`, `list<u8>`, and a
+nested payload-free variant `node-update-kind`), because two of the
+costs #261 identifies — `maxCaseAlignment` (`runtime/src/cabi/layout.ts`)
+and the embedder facade's variant case resolution
+(`runtime/src/embedder/values.ts` `toHost`) — are both O(case count) per
+element. Every other shape in this instrument — `list<u8>`, `u32`,
+`stream<u8>` — is a flat scalar and takes a bulk copy path (issues
+#63/#67); before this lane, NOTHING in `bench/boundary` exercised the
+per-element interpreted lift/lower loop that compound types (records,
+variants, options, strings) actually walk. Both directions are measured
+separately because `load.ts`'s per-element path and `store.ts`'s
+per-element path are separate code with the same defect.
+
+Reported as ns/element (`iters` reused as the element count `n`; `size`
+is unused, passed through as "n/a" like `mode` is for the stream shapes)
+— the unit that makes these numbers comparable to a whole variant-over-
+records lift/lower rather than a byte or a call. Medians of 5 timed runs
+after a warmup, same convention as the other tables. Element count
+10000, calibrated (`sweep.mjs`, `ELEMENT_N`) so a timed run lands in the
+tens-of-ms range. **polyengine drivers only**, same reason as the stream
+shapes: jco is not under test here.
+
+Methodology footnote: `lift-ops`'s guest caches its `Vec<Op>` in a
+`thread_local!` keyed on `n` — the warmup call builds it, every timed
+call clones the cached vector, measured in isolation at ~15 ns/element
+on this box (a temporary export cloned without crossing the boundary).
+`lower-ops`'s host array is built ONCE outside the timed loop, since
+that lane measures lowering, not host array construction.
+
 ## Baseline (2026-08-11, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60; post-#63/#67 bulk list copies)
 
 ```
@@ -87,6 +125,20 @@ stream-pass   1200                  756.5 MB/s            625.9 MB/s            
 stream-pass   16384               6,665.9 MB/s            5,847 MB/s          7,231.2 MB/s
 stream-pass   262144             13,716.5 MB/s         14,229.4 MB/s         22,863.2 MB/s
 ```
+
+### Compound element shapes baseline (2026-09-03, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60) — pre-#261 optimization
+
+```
+compound-element lanes (ns/element; n=10000; jco lane skipped — see README.md):
+shape         polyengine-node-callback      polyengine-node-jspi  polyengine-deno-callback
+lift-ops                       3,804.4                   3,909.3                   3,184.6
+lower-ops                      3,482.3                   3,646.8                   3,285.3
+```
+
+This is the "before" baseline for #261, recorded before any optimization
+of the per-element interpreted path lands. ~3.2-3.9 µs/element here vs.
+#261's reported ~5 µs/element on a similar box — same order of
+magnitude, within ~1.6x; the residual gap reads as box/config drift.
 
 Two methodology footnotes for the stream rows:
 
@@ -127,6 +179,11 @@ What the baseline says:
   guest's linear memory) at every chunk size, confirming the identity
   transfer is doing what it claims. All three scale up sharply with
   chunk size — per-rendezvous overhead amortizes over more bytes.
+- **#261 compound elements**: the first instrument for the interpreted
+  per-element lift/lower path — every prior shape here is flat and
+  bulk-copies. `lift-ops`/`lower-ops` land at ~3.2-3.9 µs/element
+  pre-optimization; same sentinel role #54/#67 played for flat types —
+  these rows are what an optimization to the compound path should move.
 
 The jco lane pins the family's own toolchain (the lann/jco all-fixes
 transpile + preview2-shim release tarballs, the vendored
