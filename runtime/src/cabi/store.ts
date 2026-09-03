@@ -4,13 +4,7 @@ import { assert_, NotImplemented, trapIf } from "./trap.ts";
 import { bytesOf, storeInt, storePtr } from "./memory.ts";
 import { tryStoreNumericList } from "./bulk_lists.ts";
 import { encodeFloatAsI32, encodeFloatAsI64 } from "./float.ts";
-import {
-  alignment,
-  alignTo,
-  elemSize,
-  elemSizeFlags,
-  maxCaseAlignment,
-} from "./layout.ts";
+import { alignTo, elemSizeFlags, layoutOf } from "./layout.ts";
 import {
   charToI32,
   REALLOC_I32_MAX,
@@ -21,10 +15,9 @@ import {
 import { type LiftLowerContext, requireMemory } from "./context.ts";
 import { lowerBorrow, lowerOwn } from "./handles.ts";
 import {
+  caseIndexOf,
   type CaseType,
   type ComponentValue,
-  despecialize,
-  discriminantType,
   type FieldType,
   type ValType,
 } from "./types.ts";
@@ -41,12 +34,14 @@ export function store(
   ptr: number,
 ): void {
   const mem = requireMemory(cx.opts);
-  assert_(
-    ptr === alignTo(ptr, alignment(t, mem.ptrType())),
-    "store misaligned",
-  );
-  assert_(ptr + elemSize(t, mem.ptrType()) <= mem.length, "store OOB");
-  const d = despecialize(t);
+  // The load-side mirror: one cached layout node carrying the despecialized
+  // type as well (issue #261), and `ptr % align === 0` in place of
+  // `ptr === alignTo(ptr, align)` — identical for power-of-two alignments,
+  // minus the float divide.
+  const L = layoutOf(t, mem.ptrType());
+  assert_(ptr % L.align === 0, "store misaligned");
+  assert_(ptr + L.size <= mem.length, "store OOB");
+  const d = L.d;
   switch (d.kind) {
     case "bool":
       storeInt(mem, Number(Boolean(v)), ptr, 1);
@@ -100,10 +95,24 @@ export function store(
       );
       return;
     case "record":
-      storeRecord(cx, v as Record<string, ComponentValue>, ptr, d.fields);
+      storeRecord(
+        cx,
+        v as Record<string, ComponentValue>,
+        ptr,
+        d.fields,
+        L.fieldOffsets!,
+      );
       return;
     case "variant":
-      storeVariant(cx, v as Record<string, ComponentValue>, ptr, d.cases);
+      storeVariant(
+        cx,
+        v as Record<string, ComponentValue>,
+        ptr,
+        d.cases,
+        // 0 only on the kinds without a discriminant; see loadVariant's note.
+        L.discSize as 1 | 2 | 4,
+        L.payloadOffset,
+      );
       return;
     case "flags":
       storeFlags(cx, v as Record<string, ComponentValue>, ptr, d.labels);
@@ -147,9 +156,9 @@ export function storeListIntoRange(
   elemType: ValType,
 ): [number, number] {
   const mem = requireMemory(cx.opts);
-  const byteLength = v.length * elemSize(elemType, mem.ptrType());
+  const { size, align } = layoutOf(elemType, mem.ptrType());
+  const byteLength = v.length * size;
   assert_(byteLength <= REALLOC_I32_MAX);
-  const align = alignment(elemType, mem.ptrType());
   const ptr = cx.allocate(align, byteLength);
   trapIf(ptr !== alignTo(ptr, align), REALLOC_MISALIGNED);
   trapIf(ptr + byteLength > mem.length, REALLOC_OOB);
@@ -164,7 +173,8 @@ export function storeListIntoValidRange(
   elemType: ValType,
 ): void {
   const mem = requireMemory(cx.opts);
-  const kind = despecialize(elemType).kind;
+  const L = layoutOf(elemType, mem.ptrType());
+  const kind = L.d.kind;
   // docs/architecture.md §7: list<u8> is Uint8Array-shaped on the host, and
   // both directions are bulk copies — this is the store-side mirror of
   // load.ts `loadListFromValidRange`'s u8 fast path (issue #54: the
@@ -191,24 +201,24 @@ export function storeListIntoValidRange(
   // floats); falls through for compound types, char, and non-little-endian
   // platforms.
   if (tryStoreNumericList(mem, v, ptr, kind)) return;
-  const size = elemSize(elemType, mem.ptrType());
+  const size = L.size;
   for (let i = 0; i < v.length; i++) {
     store(cx, v[i], elemType, ptr + i * size);
   }
 }
 
+/** The store-side mirror of `loadRecord`: indexed offset writes, no per-field
+ * layout recomputation (issue #261). */
 export function storeRecord(
   cx: LiftLowerContext,
   v: Record<string, ComponentValue>,
   ptr: number,
   fields: FieldType[],
+  offsets: readonly number[],
 ): void {
-  const mem = requireMemory(cx.opts);
-  let p = ptr;
-  for (const f of fields) {
-    p = alignTo(p, alignment(f.type, mem.ptrType()));
-    store(cx, v[f.label], f.type, p);
-    p += elemSize(f.type, mem.ptrType());
+  for (let i = 0; i < fields.length; i++) {
+    const f = fields[i];
+    store(cx, v[f.label], f.type, ptr + offsets[i]);
   }
 }
 
@@ -220,9 +230,12 @@ export function matchCase(
   const keys = Object.keys(v);
   assert_(keys.length === 1, "variant value must have exactly one case");
   const label = keys[0];
-  const matches = cases.flatMap((c, i) => (c.label === label ? [i] : []));
-  assert_(matches.length === 1, `variant case '${label}' not found`);
-  return [matches[0], v[label]];
+  // `caseIndexOf` is the memoized form of the linear scan this used to run on
+  // every variant stored (issue #261); it maps a duplicated label to -1, so
+  // the "exactly one match" condition below is unchanged.
+  const i = caseIndexOf(cases).get(label);
+  assert_(i !== undefined && i >= 0, `variant case '${label}' not found`);
+  return [i as number, v[label]];
 }
 
 export function storeVariant(
@@ -230,16 +243,15 @@ export function storeVariant(
   v: Record<string, ComponentValue>,
   ptr: number,
   cases: CaseType[],
+  discSize: 1 | 2 | 4,
+  payloadOffset: number,
 ): void {
   const mem = requireMemory(cx.opts);
   const [caseIndex, caseValue] = matchCase(v, cases);
-  const discSize = elemSize(discriminantType(cases), mem.ptrType());
-  storeInt(mem, caseIndex, ptr, discSize as 1 | 2 | 4);
-  let p = ptr + discSize;
-  p = alignTo(p, maxCaseAlignment(cases, mem.ptrType()));
+  storeInt(mem, caseIndex, ptr, discSize);
   const c = cases[caseIndex];
   if (c.type !== null) {
-    store(cx, caseValue, c.type, p);
+    store(cx, caseValue, c.type, ptr + payloadOffset);
   }
 }
 

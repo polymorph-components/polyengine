@@ -649,6 +649,14 @@ function requireWaitableSet(
 }
 
 /**
+ * The two event payload words. Hoisted out of `unpackEvent` because
+ * cabi/layout.ts and cabi/types.ts memoize on `ValType` identity (issue
+ * #261): a fresh literal per call is a guaranteed cache miss plus a
+ * `WeakMap.set` on immediate garbage, twice per event delivered.
+ */
+const EVENT_PAYLOAD_TYPE: ValType = Object.freeze({ kind: "u32" });
+
+/**
  * definitions.py `unpack_event` (line 2422): store the two payload words at
  * `ptr` and return the event code.
  */
@@ -660,8 +668,8 @@ function unpackEvent(
 ): number {
   const [event, p1, p2] = e;
   const cx = new LiftLowerContext(cabiOptions(opts), inst, null);
-  storeValue(cx, p1, { kind: "u32" }, ptr);
-  storeValue(cx, p2, { kind: "u32" }, ptr + 4);
+  storeValue(cx, p1, EVENT_PAYLOAD_TYPE, ptr);
+  storeValue(cx, p2, EVENT_PAYLOAD_TYPE, ptr + 4);
   return event;
 }
 
