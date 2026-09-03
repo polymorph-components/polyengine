@@ -8,7 +8,7 @@ import { load } from "./load.ts";
 import { store } from "./store.ts";
 import { type CoreValueIter, liftFlat, type ValueIter } from "./lift.ts";
 import { lowerFlat } from "./lower.ts";
-import { flattenTypes } from "./flatten.ts";
+import { flatCount } from "./flatten.ts";
 import { type LiftLowerContext, requireMemory } from "./context.ts";
 import { asIndex } from "./memory.ts";
 import type { ComponentValue, CoreValue, TupleType, ValType } from "./types.ts";
@@ -40,8 +40,7 @@ export function liftFlatValues(
   vi: CoreValueIter,
   ts: ValType[],
 ): ComponentValue[] {
-  const flatTypes = flattenTypes(ts, cx.opts);
-  if (flatTypes.length > maxFlat) {
+  if (flatCount(ts, cx.opts) > maxFlat) {
     const mem = requireMemory(cx.opts);
     const ptrRaw = vi.next(mem.ptrType());
     const tupleType = spillTupleType(ts);
@@ -67,8 +66,7 @@ export function lowerFlatValues(
   ts: ValType[],
   outParam: ValueIter | null = null,
 ): CoreValue[] {
-  const flatTypes = flattenTypes(ts, cx.opts);
-  if (flatTypes.length > maxFlat) {
+  if (flatCount(ts, cx.opts) > maxFlat) {
     const mem = requireMemory(cx.opts);
     const tupleType = spillTupleType(ts);
     const tupleValue: Record<string, ComponentValue> = {};
