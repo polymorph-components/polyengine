@@ -18,7 +18,14 @@
 // and a bindgen-typed one (the design ruling: runtime-driven facade,
 // compile-time-only bindgen).
 
-import type { ComponentValue, ValType } from "../cabi/types.ts";
+import type {
+  CaseType,
+  ComponentValue,
+  EnumType,
+  FlagsType,
+  RecordType,
+  ValType,
+} from "../cabi/types.ts";
 import { despecialize } from "../cabi/types.ts";
 import { ERROR_CONTEXT, hasBrand } from "@polyengine/protocol";
 import { describeCrossCopy } from "./copy.ts";
@@ -123,6 +130,96 @@ export function checkNoCollisions(
   checkedLabels.add(key);
 }
 
+// ---------------------------------------------------------------------------
+// Per-type adapter tables
+// ---------------------------------------------------------------------------
+//
+// Everything below is a pure function of the type, so paying for it per
+// element is paying for it once per element too many (issue #261). Same
+// argument as `checkedLabels` above: `ValType` objects are stable for the
+// lifetime of a loaded plan, so a `WeakMap` keyed on the type's identity turns
+// a per-call cost into a one-time cost per type, and the table dies with the
+// plan. Both directions read the same tables.
+
+interface RecordField {
+  /** The WIT label — the key of the internal record object. */
+  label: string;
+  /** The camelCased JS name — the key of the host object. */
+  js: string;
+  type: ValType;
+  isOption: boolean;
+  /** The option's payload type when `isOption`, else null. */
+  optionInner: ValType | null;
+}
+
+interface RecordTable {
+  /** The labels in source order, for `checkNoCollisions`. */
+  labels: string[];
+  fields: RecordField[];
+}
+
+const recordTables = new WeakMap<RecordType, RecordTable>();
+
+function recordTable(t: RecordType): RecordTable {
+  const hit = recordTables.get(t);
+  if (hit !== undefined) return hit;
+  const table: RecordTable = {
+    labels: t.fields.map((f) => f.label),
+    fields: t.fields.map((f) => ({
+      label: f.label,
+      js: camelCase(f.label),
+      type: f.type,
+      isOption: f.type.kind === "option",
+      optionInner: f.type.kind === "option" ? f.type.type : null,
+    })),
+  };
+  recordTables.set(t, table);
+  return table;
+}
+
+/**
+ * Label -> case, memoized on the `cases` array. Replaces the linear
+ * `t.cases.find(...)` both directions ran per element.
+ *
+ * **First wins on a duplicated label** — deliberately NOT `caseIndexOf` from
+ * cabi/types.ts, which maps a duplicate to -1. The two sites replace scans
+ * with different pre-existing behavior (`find` takes the first match; the cabi
+ * scan asserted on exactly one), so each keeps its own; merging them would be
+ * a behavior change, not a deduplication.
+ */
+const variantTables = new WeakMap<CaseType[], Map<string, CaseType>>();
+
+function variantTable(cases: CaseType[]): Map<string, CaseType> {
+  const hit = variantTables.get(cases);
+  if (hit !== undefined) return hit;
+  const m = new Map<string, CaseType>();
+  for (const c of cases) if (!m.has(c.label)) m.set(c.label, c);
+  variantTables.set(cases, m);
+  return m;
+}
+
+/** The enum's labels as a set, replacing `t.labels.includes(v)`. */
+const enumTables = new WeakMap<EnumType, Set<string>>();
+
+function enumTable(t: EnumType): Set<string> {
+  const hit = enumTables.get(t);
+  if (hit !== undefined) return hit;
+  const s = new Set(t.labels);
+  enumTables.set(t, s);
+  return s;
+}
+
+/** Flags labels paired with their JS names, in source order. */
+const flagsTables = new WeakMap<FlagsType, { label: string; js: string }[]>();
+
+function flagsTable(t: FlagsType): { label: string; js: string }[] {
+  const hit = flagsTables.get(t);
+  if (hit !== undefined) return hit;
+  const table = t.labels.map((label) => ({ label, js: camelCase(label) }));
+  flagsTables.set(t, table);
+  return table;
+}
+
 /** @internal — value-adapter wiring. */
 export interface AdapterOptions {
   bridge: ValueBridge;
@@ -180,26 +277,27 @@ export function toHost(
       return (v as ComponentValue[]).map((e) => toHost(e, t.element, o, scope));
     }
     case "record": {
-      checkNoCollisions(t, t.fields.map((f) => f.label), `${o.where}: record`);
+      const table = recordTable(t);
+      checkNoCollisions(t, table.labels, `${o.where}: record`);
       const src = v as Record<string, ComponentValue>;
       const out: Record<string, unknown> = {};
-      for (const f of t.fields) {
+      for (const f of table.fields) {
         // "fields of option type are optional properties (`field?: T`)": a
         // `none` field is *absent*, not `undefined`-valued, so the object has
         // one canonical shape rather than two indistinguishable ones.
-        if (f.type.kind === "option") {
+        if (f.isOption) {
           const inner = src[f.label] as Record<string, ComponentValue>;
           if ("none" in inner) continue;
-          out[camelCase(f.label)] = toHost(
+          out[f.js] = toHost(
             inner["some"],
-            f.type.type,
+            f.optionInner!,
             o,
             scope,
             true,
           );
           continue;
         }
-        out[camelCase(f.label)] = toHost(src[f.label], f.type, o, scope);
+        out[f.js] = toHost(src[f.label], f.type, o, scope);
       }
       return out;
     }
@@ -209,7 +307,7 @@ export function toHost(
     }
     case "variant": {
       const [label, payload] = single(v, o);
-      const c = t.cases.find((c) => c.label === label);
+      const c = variantTable(t.cases).get(label);
       if (c === undefined) {
         throw new TypeError(`${o.where}: unknown variant case '${label}'`);
       }
@@ -245,7 +343,7 @@ export function toHost(
       checkNoCollisions(t, t.labels, `${o.where}: flags`);
       const src = v as Record<string, ComponentValue>;
       const out: Record<string, boolean> = {};
-      for (const l of t.labels) out[camelCase(l)] = Boolean(src[l]);
+      for (const f of flagsTable(t)) out[f.js] = Boolean(src[f.label]);
       return out;
     }
     case "map": {
@@ -389,18 +487,19 @@ export function fromHost(
       if (v === null || typeof v !== "object") {
         throw new TypeError(`${o.where}: record expects an object`);
       }
-      checkNoCollisions(t, t.fields.map((f) => f.label), `${o.where}: record`);
+      const table = recordTable(t);
+      checkNoCollisions(t, table.labels, `${o.where}: record`);
       const src = v as Record<string, unknown>;
       const out: Record<string, ComponentValue> = {};
-      for (const f of t.fields) {
-        const key = camelCase(f.label);
-        if (f.type.kind === "option") {
+      for (const f of table.fields) {
+        const key = f.js;
+        if (f.isOption) {
           // Absent and `undefined` both mean `none` — the two spellings of an
           // optional property.
           const inner = src[key];
           out[f.label] = inner === undefined
             ? { none: null }
-            : { some: fromHost(inner, f.type.type, o, true) };
+            : { some: fromHost(inner, f.optionInner!, o, true) };
           continue;
         }
         if (!(key in src)) {
@@ -424,7 +523,7 @@ export function fromHost(
     }
     case "variant": {
       const { kind, value, has } = tagged(v, o);
-      const c = t.cases.find((c) => c.label === kind);
+      const c = variantTable(t.cases).get(kind);
       if (c === undefined) {
         throw new TypeError(`${o.where}: unknown variant case '${kind}'`);
       }
@@ -435,7 +534,7 @@ export function fromHost(
       return { [kind]: fromHost(value, c.type, o) };
     }
     case "enum": {
-      if (typeof v !== "string" || !t.labels.includes(v)) {
+      if (typeof v !== "string" || !enumTable(t).has(v)) {
         throw new TypeError(
           `${o.where}: enum expects one of ${t.labels.join(" | ")}, got ` +
             describe(v),
@@ -486,7 +585,7 @@ export function fromHost(
       const src = v as Record<string, unknown>;
       const out: Record<string, ComponentValue> = {};
       // "lower: absent = false" — an omitted flag is not an error.
-      for (const l of t.labels) out[l] = Boolean(src[camelCase(l)]);
+      for (const f of flagsTable(t)) out[f.label] = Boolean(src[f.js]);
       return out;
     }
     case "map":
