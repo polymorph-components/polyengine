@@ -1,5 +1,5 @@
 // Minimal assertion helpers (no external deps): deep equality tuned to the
-// cabi value shapes (bigint, NaN, Uint8Array, single-key variant objects).
+// cabi value shapes (bigint, NaN, Uint8Array, `{kind, value}` variant objects).
 
 import { Trap } from "../../src/cabi/mod.ts";
 

@@ -211,7 +211,7 @@ export interface FuncType {
  *   list<u8>     -> Uint8Array (copy; docs/architecture.md §7) — other lists -> Array
  *   record       -> { [fieldLabel]: value }
  *   tuple        -> despecialized record { "0": v0, "1": v1, ... }
- *   variant/enum/option/result -> single-key object { [caseLabel]: payload|null }
+ *   variant/enum/option/result -> VariantValue { kind: caseLabel, value: payload|null }
  *   flags        -> { [label]: boolean }
  *   own/borrow   -> number (the resource rep at this layer)
  * These mirror definitions.py's Python shapes; final host-facing bindings
@@ -240,6 +240,26 @@ export interface FuncType {
 export interface AsyncValue {
   readonly __asyncValue?: never;
 }
+
+/**
+ * The internal shape of the whole despecialized variant family — plain
+ * `variant`, `enum`, `option`, `result` (error case spelled `"error"`).
+ * `value` is always present, `null` for a payload-free case.
+ *
+ * **Not interchangeable with the host variant shape** despite the matching
+ * property names: `contracts/embedder-api.md` §"Implementation strategy"
+ * enumerates the three asymmetries (`result`, `enum`, `option`) plus the
+ * payload-free spelling. Translate deliberately; never pass one through as
+ * the other.
+ *
+ * Declared as a type alias, not an interface, deliberately: only an alias
+ * gets TypeScript's implicit index signature, which is what keeps it
+ * assignable to `ComponentValue`'s record arm.
+ */
+export type VariantValue = {
+  kind: string;
+  value: ComponentValue;
+};
 
 export type ComponentValue =
   | AsyncValue

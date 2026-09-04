@@ -109,14 +109,16 @@ check(
 const result = await pending;
 console.log(`\nrun() = ${JSON.stringify(result, (_k, v) =>
   typeof v === "bigint" ? `${v}n` : v)}`);
-// OBSERVED CONVENTION: `result<u32, string>` lifts to the
-// single-key object `{ ok: 42 }` / `{ err: "…" }` — not a `{tag, val}`
-// variant and not a bare payload. Recorded here because embedder-api.md
-// owns this shape and jco's bare-payload-throw is the footgun being replaced.
-const asRec = result as { ok?: unknown; err?: unknown };
-const isOk = asRec !== null && typeof asRec === "object" && "ok" in asRec;
-const payload = isOk ? asRec.ok : undefined;
-check(isOk, `result is the ok case (keys=${Object.keys(asRec ?? {}).join(",")})`);
+// OBSERVED CONVENTION: `result<u32, string>` lifts at the raw boundary to
+// `{ kind: "ok", value: 42 }` / `{ kind: "error", value: "…" }` — not a bare
+// payload. Recorded here because embedder-api.md owns the host shape (whose
+// error kind is "err", not "error") and jco's bare-payload-throw is the
+// footgun being replaced.
+const asRec = result as { kind?: unknown; value?: unknown };
+const isOk = asRec !== null && typeof asRec === "object" &&
+  asRec.kind === "ok";
+const payload = isOk ? asRec.value : undefined;
+check(isOk, `result is the ok case (kind=${String(asRec?.kind)})`);
 check(
   payload === 42 || payload === 42n,
   `run() -> ok(42) — plug/src/lib.rs WidgetRes(42).poke() through the fused ` +

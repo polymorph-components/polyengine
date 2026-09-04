@@ -72,6 +72,26 @@ Deno.test({
 });
 
 Deno.test({
+  name: "sync(): a fallible export returns the ok payload synchronously",
+  ignore: !readyValues,
+  fn: async () => {
+    // The ok side of the same `result<u32, string>` the err test above drives.
+    // Its own branch in the sync form's result unwrap, and a silent one: a
+    // reader that misses the internal `{kind, value}` shape returns
+    // `undefined` here rather than throwing (issue #261).
+    const { exports } = await instantiateFixture(guest("values"));
+    const syncEcho = sync(exports.echoResult);
+    const result = syncEcho({ kind: "ok", value: 42 });
+    assertEq(
+      result instanceof Promise,
+      false,
+      "the sync form must not return a thenable",
+    );
+    assertEq(result, 42, "the ok payload, unwrapped — not undefined");
+  },
+});
+
+Deno.test({
   name: "sync(): an async-typed export throws TypeError naming async",
   ignore: !readyAsync,
   fn: async () => {

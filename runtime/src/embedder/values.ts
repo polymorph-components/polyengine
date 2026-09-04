@@ -1,9 +1,11 @@
 // Bidirectional value-shape adaptation (contracts/embedder-api.md
 // §"Value mapping").
 //
-// FROM: the runtime's raw boundary, whose shapes are the definitions.py
-//       interpreter's — single-key variants (`{ "circle": 1.5 }`), `{some}` /
-//       `{none}`, tuple-as-record (`{ "0": …, "1": … }`), `{ok}` / `{error}`
+// FROM: the runtime's raw boundary, which mirrors the definitions.py
+//       interpreter's SEMANTICS in its own representation — `{kind, value}`
+//       variants (`{ kind: "circle", value: 1.5 }`; cabi/types.ts
+//       `VariantValue`), likewise option and result, tuple-as-record
+//       (`{ "0": …, "1": … }`)
 //       (note: the internal despecialization labels result's err case
 //       `"error"`, not `"err"` — cabi/types.ts `despecialize`), kebab-case
 //       record keys, resource handles as bare reps.
@@ -25,6 +27,7 @@ import type {
   FlagsType,
   RecordType,
   ValType,
+  VariantValue,
 } from "../cabi/types.ts";
 import { despecialize } from "../cabi/types.ts";
 import { ERROR_CONTEXT, hasBrand } from "@polyengine/protocol";
@@ -286,10 +289,10 @@ export function toHost(
         // `none` field is *absent*, not `undefined`-valued, so the object has
         // one canonical shape rather than two indistinguishable ones.
         if (f.isOption) {
-          const inner = src[f.label] as Record<string, ComponentValue>;
-          if ("none" in inner) continue;
+          const inner = src[f.label] as VariantValue;
+          if (inner.kind === "none") continue;
           out[f.js] = toHost(
-            inner["some"],
+            inner.value,
             f.optionInner!,
             o,
             scope,
@@ -306,7 +309,7 @@ export function toHost(
       return t.elements.map((et, i) => toHost(src[String(i)], et, o, scope));
     }
     case "variant": {
-      const [label, payload] = single(v, o);
+      const { kind: label, value: payload } = internalTag(v, o);
       const c = variantTable(t.cases).get(label);
       if (c === undefined) {
         throw new TypeError(`${o.where}: unknown variant case '${label}'`);
@@ -317,11 +320,12 @@ export function toHost(
     }
     case "enum": {
       // Enum values are data: kebab-case verbatim, never camelCased.
-      const [label] = single(v, o);
-      return label;
+      // Asymmetry (contracts/embedder-api.md §"Implementation strategy"):
+      // internal is a variant value, this layer's enum is a bare string.
+      return internalTag(v, o).kind;
     }
     case "option": {
-      const [label, payload] = single(v, o);
+      const { kind: label, value: payload } = internalTag(v, o);
       if (inOption) {
         return label === "none"
           ? { kind: "none" }
@@ -332,7 +336,7 @@ export function toHost(
         : toHost(payload, t.type, o, scope, true);
     }
     case "result": {
-      const [label, payload] = single(v, o);
+      const { kind: label, value: payload } = internalTag(v, o);
       // Internal despecialization names the err case "error"; the contract's
       // kind is "err" (cabi/types.ts `despecialize`).
       const kind = label === "error" ? "err" : "ok";
@@ -361,22 +365,25 @@ export function toHost(
   }
 }
 
-function single(
-  v: ComponentValue,
-  o: AdapterOptions,
-): [string, ComponentValue] {
+/**
+ * Read an INTERNAL variant-family value (cabi/types.ts `VariantValue`):
+ * `value` always present, result's err case spelled `"error"`, every option
+ * boxed. Its host-side counterpart is `hostTag` below — the two shapes are
+ * near-identical and not interchangeable, so the layer is in the name.
+ */
+function internalTag(v: ComponentValue, o: AdapterOptions): VariantValue {
   if (v === null || typeof v !== "object" || Array.isArray(v)) {
     throw new TypeError(
-      `${o.where}: expected a single-key case object, got ${describe(v)}`,
+      `${o.where}: expected a { kind, value } case object, got ${describe(v)}`,
     );
   }
-  const keys = Object.keys(v as Record<string, ComponentValue>);
-  if (keys.length !== 1) {
+  const rec = v as VariantValue;
+  if (typeof rec.kind !== "string") {
     throw new TypeError(
-      `${o.where}: expected exactly one case key, got ${keys.length}`,
+      `${o.where}: expected a { kind, value } case object, got ${describe(v)}`,
     );
   }
-  return [keys[0], (v as Record<string, ComponentValue>)[keys[0]]];
+  return rec;
 }
 
 // ---------------------------------------------------------------------------
@@ -498,8 +505,8 @@ export function fromHost(
           // optional property.
           const inner = src[key];
           out[f.label] = inner === undefined
-            ? { none: null }
-            : { some: fromHost(inner, f.optionInner!, o, true) };
+            ? { kind: "none", value: null }
+            : { kind: "some", value: fromHost(inner, f.optionInner!, o, true) };
           continue;
         }
         if (!(key in src)) {
@@ -522,16 +529,16 @@ export function fromHost(
       return out;
     }
     case "variant": {
-      const { kind, value, has } = tagged(v, o);
+      const { kind, value, has } = hostTag(v, o);
       const c = variantTable(t.cases).get(kind);
       if (c === undefined) {
         throw new TypeError(`${o.where}: unknown variant case '${kind}'`);
       }
-      if (c.type === null) return { [kind]: null };
+      if (c.type === null) return { kind, value: null };
       if (!has) {
         throw new TypeError(`${o.where}: variant case '${kind}' needs a 'value'`);
       }
-      return { [kind]: fromHost(value, c.type, o) };
+      return { kind, value: fromHost(value, c.type, o) };
     }
     case "enum": {
       if (typeof v !== "string" || !enumTable(t).has(v)) {
@@ -540,25 +547,28 @@ export function fromHost(
             describe(v),
         );
       }
-      return { [v]: null };
+      return { kind: v, value: null };
     }
     case "option": {
       if (inOption) {
-        const { kind, value, has } = tagged(v, o);
-        if (kind === "none") return { none: null };
+        const { kind, value, has } = hostTag(v, o);
+        if (kind === "none") return { kind: "none", value: null };
         if (kind !== "some") {
           throw new TypeError(
             `${o.where}: a nested option must be { kind: "some" | "none" }`,
           );
         }
-        return { some: has ? fromHost(value, t.type, o, true) : null };
+        return {
+          kind: "some",
+          value: has ? fromHost(value, t.type, o, true) : null,
+        };
       }
       return v === undefined
-        ? { none: null }
-        : { some: fromHost(v, t.type, o, true) };
+        ? { kind: "none", value: null }
+        : { kind: "some", value: fromHost(v, t.type, o, true) };
     }
     case "result": {
-      const { kind, value, has } = tagged(v, o);
+      const { kind, value, has } = hostTag(v, o);
       if (kind !== "ok" && kind !== "err") {
         throw new TypeError(
           `${o.where}: a result value must be { kind: "ok" | "err" }`,
@@ -566,7 +576,7 @@ export function fromHost(
       }
       const label = kind === "err" ? "error" : "ok";
       const ct = kind === "err" ? t.error : t.ok;
-      if (ct === null) return { [label]: null };
+      if (ct === null) return { kind: label, value: null };
       // Symmetric with the variant path above: a case that carries a payload
       // must be given one. Silently lowering `null` would put a zero where the
       // guest expects data.
@@ -575,7 +585,7 @@ export function fromHost(
           `${o.where}: result case '${kind}' carries a payload and needs a 'value'`,
         );
       }
-      return { [label]: fromHost(value, ct, o) };
+      return { kind: label, value: fromHost(value, ct, o) };
     }
     case "flags": {
       if (v === null || typeof v !== "object") {
@@ -603,7 +613,12 @@ export function fromHost(
   }
 }
 
-function tagged(
+/**
+ * Read a HOST variant-family value (contracts/embedder-api.md §"Value
+ * mapping"): `value` absent for payloadless cases — hence `has` — and result's
+ * err case spelled `"err"`. The internal-side counterpart is `internalTag`.
+ */
+function hostTag(
   v: unknown,
   o: AdapterOptions,
 ): { kind: string; value: unknown; has: boolean } {

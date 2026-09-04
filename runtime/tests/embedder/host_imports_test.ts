@@ -283,7 +283,8 @@ Deno.test({
   ignore: !payloadReady,
   fn: async () => {
     // The whole branded-throw path end to end: `throw new ComponentException("boom")`
-    // -> `{error: "boom"}` -> the err side of `result<u32, string>` ->
+    // -> `{kind: "error", value: "boom"}` -> the err side of
+    // `result<u32, string>` ->
     // the string lowered into the guest through ITS realloc. `1004` is
     // `1000 + "boom".length`, so it pins the case AND the payload.
     const c = await payloadFixture(() => {
