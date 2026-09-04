@@ -596,7 +596,7 @@ fn write_class_member(
 /// Resource method/static names come through as `[method]counter.increment`
 /// / `[static]counter.merge` in `Function.name` (the ABI export name);
 /// bindgen's obligation is exactly this mangled-name-to-class-member
-/// assembly (contracts/embedder-api.md §"Bindgen obligations"). The bare
+/// assembly (contracts/embedder-api.md §"Implementation strategy"). The bare
 /// member name is the text after the last `.`.
 trait LastSegment {
     fn name_after_last_dot_or_bracket(&self) -> String;
