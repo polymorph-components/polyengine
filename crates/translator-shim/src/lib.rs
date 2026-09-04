@@ -36,7 +36,7 @@ use anyhow::{bail, Result};
 use base64::Engine as _;
 use serde::Serialize;
 use wasmtime_environ::component::{ComponentTypesBuilder, Translator};
-use wasmtime_environ::{ScopeVec, Tunables};
+use wasmtime_environ::{ScopeVec, Tunables, wasmparser};
 
 pub mod error;
 pub mod plan;
