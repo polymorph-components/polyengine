@@ -20,6 +20,7 @@ import {
   type ComponentValue,
   type FieldType,
   type ValType,
+  type VariantValue,
 } from "./types.ts";
 import {
   lowerErrorContext,
@@ -106,7 +107,7 @@ export function store(
     case "variant":
       storeVariant(
         cx,
-        v as Record<string, ComponentValue>,
+        v as VariantValue,
         ptr,
         d.cases,
         // 0 only on the kinds without a discriminant; see loadVariant's note.
@@ -222,25 +223,25 @@ export function storeRecord(
   }
 }
 
-/** definitions.py match_case: the value is a single-key object. */
+/** definitions.py match_case, over the `{kind, value}` variant shape. */
 export function matchCase(
-  v: Record<string, ComponentValue>,
+  v: VariantValue,
   cases: CaseType[],
 ): [number, ComponentValue] {
-  const keys = Object.keys(v);
-  assert_(keys.length === 1, "variant value must have exactly one case");
-  const label = keys[0];
+  const label = v.kind;
   // `caseIndexOf` is the memoized form of the linear scan this used to run on
   // every variant stored (issue #261); it maps a duplicated label to -1, so
-  // the "exactly one match" condition below is unchanged.
+  // the "exactly one match" condition below is unchanged. A missing or
+  // non-string `kind` cannot be a key of that Map either, so this one assert
+  // covers a malformed value too.
   const i = caseIndexOf(cases).get(label);
   assert_(i !== undefined && i >= 0, `variant case '${label}' not found`);
-  return [i as number, v[label]];
+  return [i as number, v.value];
 }
 
 export function storeVariant(
   cx: LiftLowerContext,
-  v: Record<string, ComponentValue>,
+  v: VariantValue,
   ptr: number,
   cases: CaseType[],
   discSize: 1 | 2 | 4,

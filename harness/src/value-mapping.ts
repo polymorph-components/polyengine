@@ -1,7 +1,8 @@
 // Bidirectional mapping between wast-JSON `Value` (harness/src/schema.ts —
 // scalars as decimal strings, floats as bit patterns) and the runtime's
-// `ComponentValue` (runtime/src/cabi/types.ts — definitions.py host shapes:
-// variant/enum/option/result as single-key `{label: payload}` objects with
+// `ComponentValue` (runtime/src/cabi/types.ts — definitions.py's semantics in
+// our own representation, contracts/descriptor-ir.md §"Host value shapes":
+// variant/enum/option/result as `{kind: label, value: payload}` objects with
 // despecialized labels `none`/`some`/`ok`/`error`, tuple as despecialized
 // record `{"0": v, ...}`, flags as `{label: boolean}`).
 //
@@ -86,7 +87,7 @@ export function toComponentValue(v: Value): any {
     case "string":
       return v.value as string;
     case "enum":
-      return { [v.value as string]: null };
+      return { kind: v.value as string, value: null };
     case "list":
     case "tuple": {
       const items = (v.value as Value[]).map(toComponentValue);
@@ -108,17 +109,19 @@ export function toComponentValue(v: Value): any {
       const payload = v.value === null
         ? null
         : toComponentValue(v.value as unknown as Value);
-      return { [v.case as string]: payload };
+      return { kind: v.case as string, value: payload };
     }
     case "option":
       return v.value === null
-        ? { none: null }
-        : { some: toComponentValue(v.value as unknown as Value) };
+        ? { kind: "none", value: null }
+        : { kind: "some", value: toComponentValue(v.value as unknown as Value) };
     case "result": {
       const payload = v.value === null
         ? null
         : toComponentValue(v.value as unknown as Value);
-      return v.status === "ok" ? { ok: payload } : { error: payload };
+      // Internal spelling of the error case is "error", not "err"
+      // (contracts/descriptor-ir.md §"Host value shapes").
+      return { kind: v.status === "ok" ? "ok" : "error", value: payload };
     }
     case "flags": {
       const set = new Set(v.value as string[]);
@@ -240,8 +243,7 @@ export function compareValue(
       if (typeof actual !== "object" || actual === null) {
         return `${where}: expected enum object, got ${JSON.stringify(actual)}`;
       }
-      const keys = Object.keys(actual);
-      const label = keys[0];
+      const label = (actual as Record<string, unknown>).kind;
       return label === expected.value
         ? undefined
         : `${where}: expected enum '${expected.value}', got '${label}'`;
@@ -293,20 +295,19 @@ export function compareValue(
         return `${where}: expected variant object, got ${JSON.stringify(actual)}`;
       }
       const rec = actual as Record<string, unknown>;
-      const keys = Object.keys(rec);
-      if (keys.length !== 1) {
-        return `${where}: expected single-key variant object, got ${
+      const label = rec.kind;
+      if (typeof label !== "string") {
+        return `${where}: expected a { kind, value } variant object, got ${
           JSON.stringify(actual)
         }`;
       }
-      const [label] = keys;
       if (label !== expected.case) {
         return `${where}: expected variant case '${expected.case}', got '${label}'`;
       }
       if (expected.value === null) return undefined;
       return compareValue(
         expected.value as unknown as Value,
-        rec[label],
+        rec.value,
         `${where}.${label}`,
       );
     }
@@ -316,14 +317,14 @@ export function compareValue(
       }
       const rec = actual as Record<string, unknown>;
       if (expected.value === null) {
-        return "none" in rec
+        return rec.kind === "none"
           ? undefined
           : `${where}: expected none, got ${JSON.stringify(actual)}`;
       }
-      if (!("some" in rec)) {
+      if (rec.kind !== "some") {
         return `${where}: expected some(...), got ${JSON.stringify(actual)}`;
       }
-      return compareValue(expected.value as unknown as Value, rec.some, `${where}.some`);
+      return compareValue(expected.value as unknown as Value, rec.value, `${where}.some`);
     }
     case "result": {
       if (typeof actual !== "object" || actual === null) {
@@ -331,19 +332,19 @@ export function compareValue(
       }
       const rec = actual as Record<string, unknown>;
       if (expected.status === "ok") {
-        if (!("ok" in rec)) {
+        if (rec.kind !== "ok") {
           return `${where}: expected ok(...), got ${JSON.stringify(actual)}`;
         }
         if (expected.value === null) return undefined;
-        return compareValue(expected.value as unknown as Value, rec.ok, `${where}.ok`);
+        return compareValue(expected.value as unknown as Value, rec.value, `${where}.ok`);
       }
-      if (!("error" in rec)) {
+      if (rec.kind !== "error") {
         return `${where}: expected error(...), got ${JSON.stringify(actual)}`;
       }
       if (expected.value === null) return undefined;
       return compareValue(
         expected.value as unknown as Value,
-        rec.error,
+        rec.value,
         `${where}.error`,
       );
     }

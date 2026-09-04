@@ -192,8 +192,9 @@ consumed read-only — this is Track A's territory):
 ### Value comparison
 
 `src/value-mapping.ts` converts both directions against the runtime's
-`ComponentValue` (definitions.py host shapes — variant/enum/option/result as
-single-key `{label: payload}` objects, tuple as despecialized record,
+`ComponentValue` (definitions.py's semantics, our representation —
+variant/enum/option/result as
+`{kind: label, value: payload}` objects, tuple as despecialized record,
 flags as `{label: boolean}`, `list<u8>` as `Uint8Array`): `toComponentValue`
 for invoke arguments, `compareValue`/`compareValues` for `assert_return`
 (recursive, type-directed by the *expected* value's own tag — no separate

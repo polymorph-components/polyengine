@@ -188,8 +188,8 @@ export function loadVariant(
   const caseIndex = loadIntU(mem, ptr, discSize);
   trapIf(caseIndex >= cases.length, "invalid variant discriminant");
   const c = cases[caseIndex];
-  if (c.type === null) return { [c.label]: null };
-  return { [c.label]: load(cx, ptr + payloadOffset, c.type) };
+  if (c.type === null) return { kind: c.label, value: null };
+  return { kind: c.label, value: load(cx, ptr + payloadOffset, c.type) };
 }
 
 export function loadFlags(

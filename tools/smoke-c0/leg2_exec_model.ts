@@ -144,14 +144,17 @@ const overrides: Record<string, unknown> = {
   // --- p2 stdio ------------------------------------------------------------
   "wasi:cli/stdout/get-stdout": () => STDOUT,
   "wasi:cli/stderr/get-stderr": () => STDERR,
-  "wasi:io/streams/[method]output-stream.check-write": () => ({ ok: 65536n }),
+  "wasi:io/streams/[method]output-stream.check-write": () => ({
+    kind: "ok",
+    value: 65536n,
+  }),
   "wasi:io/streams/[method]output-stream.write": (
     rep: unknown,
     contents: unknown,
   ) => {
     const text = decodeBytes(contents);
     stdioLog.push(`[${streamKind.get(rep as number) ?? rep}] ${text}`);
-    return { ok: null };
+    return { kind: "ok", value: null };
   },
   "wasi:io/streams/[method]output-stream.blocking-write-and-flush": (
     rep: unknown,
@@ -160,9 +163,12 @@ const overrides: Record<string, unknown> = {
     stdioLog.push(`[${streamKind.get(rep as number) ?? rep}] ${
       decodeBytes(contents)
     }`);
-    return { ok: null };
+    return { kind: "ok", value: null };
   },
-  "wasi:io/streams/[method]output-stream.blocking-flush": () => ({ ok: null }),
+  "wasi:io/streams/[method]output-stream.blocking-flush": () => ({
+    kind: "ok",
+    value: null,
+  }),
 
   // --- polymorph:webcrypto/key-agreement -----------------------------------
   "polymorph:webcrypto/key-agreement/[constructor]agreement-key-options":
@@ -193,7 +199,7 @@ const overrides: Record<string, unknown> = {
     async (rep: unknown) => {
       const key = pubTable.get(rep as number)!;
       const raw = new Uint8Array(await crypto.subtle.exportKey("raw", key));
-      return { ok: raw };
+      return { kind: "ok", value: raw };
     },
 
   // --- polymorph:webcrypto/x25519 ------------------------------------------
@@ -209,7 +215,7 @@ const overrides: Record<string, unknown> = {
     const pub = nextRep++;
     secTable.set(sec, pair.privateKey);
     pubTable.set(pub, pair.publicKey);
-    return { ok: [sec, pub] };
+    return { kind: "ok", value: [sec, pub] };
   },
 };
 
@@ -238,13 +244,16 @@ type AnyFn = (...a: unknown[]) => unknown;
 const fn = (n: string) => probe[n] as AnyFn;
 
 function unwrapOk(v: unknown, where: string): unknown {
-  const r = v as { ok?: unknown; err?: unknown };
-  if (r && typeof r === "object" && "err" in r) {
-    failures.push(`${where} returned err: ${JSON.stringify(r.err)}`);
-    console.log(`  FAIL  ${where} -> err ${JSON.stringify(r.err)}`);
+  // Raw boundary: `result` is `{kind: "ok" | "error", value}` — the internal
+  // spelling is "error", not the host layer's "err"
+  // (contracts/descriptor-ir.md §"Host value shapes").
+  const r = v as { kind?: unknown; value?: unknown };
+  if (r && typeof r === "object" && r.kind === "error") {
+    failures.push(`${where} returned err: ${JSON.stringify(r.value)}`);
+    console.log(`  FAIL  ${where} -> err ${JSON.stringify(r.value)}`);
     return undefined;
   }
-  return r?.ok;
+  return r?.value;
 }
 
 // ---------------------------------------------------------------------------

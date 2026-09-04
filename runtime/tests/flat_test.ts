@@ -69,18 +69,18 @@ Deno.test("variants, options, results", () => {
       { label: "z", type: null },
     ],
   };
-  runTest(t, [0, 42], { x: 42 });
-  runTest(t, [0, 256], { x: 0 });
-  runTest(t, [1, 0x4048f5c3], { y: 3.140000104904175 });
-  runTest(t, [2, 0xffffffff], { z: null });
+  runTest(t, [0, 42], { kind: "x", value: 42 });
+  runTest(t, [0, 256], { kind: "x", value: 0 });
+  runTest(t, [1, 0x4048f5c3], { kind: "y", value: 3.140000104904175 });
+  runTest(t, [2, 0xffffffff], { kind: "z", value: null });
 
   const opt: ValType = { kind: "option", type: f32 };
-  runTest(opt, [0, 3.14], { none: null });
-  runTest(opt, [1, 3.14], { some: 3.14 });
+  runTest(opt, [0, 3.14], { kind: "none", value: null });
+  runTest(opt, [1, 3.14], { kind: "some", value: 3.14 });
 
   const res: ValType = { kind: "result", ok: u8, error: u32 };
-  runTest(res, [0, 42], { ok: 42 });
-  runTest(res, [1, 1000], { error: 1000 });
+  runTest(res, [0, 42], { kind: "ok", value: 42 });
+  runTest(res, [1, 1000], { kind: "error", value: 1000 });
 });
 
 Deno.test("variant lowered to supertype", () => {
@@ -88,10 +88,18 @@ Deno.test("variant lowered to supertype", () => {
     kind: "variant",
     cases: [{ label: "w", type: u8 }, { label: "y", type: u8 }],
   };
-  runTest(t, [0, 42], { w: 42 });
-  runTest(t, [1, 42], { y: 42 });
+  runTest(t, [0, 42], { kind: "w", value: 42 });
+  runTest(t, [1, 42], { kind: "y", value: 42 });
   const t2: ValType = { kind: "variant", cases: [{ label: "w", type: u8 }] };
-  runTest(t, [0, 42], { w: 42 }, undefined, null, t2, { w: 42 });
+  runTest(
+    t,
+    [0, 42],
+    { kind: "w", value: 42 },
+    undefined,
+    null,
+    t2,
+    { kind: "w", value: 42 },
+  );
 });
 
 Deno.test("bool and integer lane wrapping (test_pairs)", () => {
@@ -183,8 +191,8 @@ Deno.test("char validation (test_pairs)", () => {
 
 Deno.test("enum (test_pairs)", () => {
   runTestPairs({ kind: "enum", labels: ["a", "b"] }, [
-    [0, { a: null }],
-    [1, { b: null }],
+    [0, { kind: "a", value: null }],
+    [1, { kind: "b", value: null }],
     [2, EXPECT_TRAP],
   ]);
 });
@@ -200,9 +208,9 @@ Deno.test("variant lane coercion i64<->f64/f32/i32", () => {
     cases: [{ label: "a", type: { kind: "u64" } }, { label: "b", type: f64 }],
   };
   // python: lift [1, 0x3ff0000000000000] -> {'b': 1.0}
-  runTest(vU64F64, [1, 0x3ff0000000000000n], { b: 1.0 });
+  runTest(vU64F64, [1, 0x3ff0000000000000n], { kind: "b", value: 1.0 });
   // python: lift [0, 5] -> {'a': 5}; lower -> [0, 5]
-  runTest(vU64F64, [0, 5n], { a: 5n });
+  runTest(vU64F64, [0, 5n], { kind: "a", value: 5n });
 
   // variant{a: u64, b: f32}: flat [i32, i64]
   const vU64F32: ValType = {
@@ -210,7 +218,7 @@ Deno.test("variant lane coercion i64<->f64/f32/i32", () => {
     cases: [{ label: "a", type: { kind: "u64" } }, { label: "b", type: f32 }],
   };
   // python: lift [1, 0x40490fdb] -> {'b': 3.1415927410125732}
-  runTest(vU64F32, [1, 0x40490fdbn], { b: 3.1415927410125732 });
+  runTest(vU64F32, [1, 0x40490fdbn], { kind: "b", value: 3.1415927410125732 });
 
   // variant{a: u32, b: f32}: flat [i32, i32] (join i32/f32 -> i32)
   const vU32F32: ValType = {
@@ -218,7 +226,7 @@ Deno.test("variant lane coercion i64<->f64/f32/i32", () => {
     cases: [{ label: "a", type: u32 }, { label: "b", type: f32 }],
   };
   // python: lift [1, 0x40490fdb] -> {'b': 3.1415927410125732}
-  runTest(vU32F32, [1, 0x40490fdb], { b: 3.1415927410125732 });
+  runTest(vU32F32, [1, 0x40490fdb], { kind: "b", value: 3.1415927410125732 });
 
   // variant{a: f32, b: u64}: flat [i32, i64]; f32 read via wrap_i64_to_i32
   const vF32U64: ValType = {
@@ -226,10 +234,11 @@ Deno.test("variant lane coercion i64<->f64/f32/i32", () => {
     cases: [{ label: "a", type: f32 }, { label: "b", type: { kind: "u64" } }],
   };
   // python: lift [0, 0x40490fdb] -> {'a': 3.1415927410125732}
-  runTest(vF32U64, [0, 0x40490fdbn], { a: 3.1415927410125732 });
+  runTest(vF32U64, [0, 0x40490fdbn], { kind: "a", value: 3.1415927410125732 });
   // python: high bits ignored by wrap: [0, (7<<32)|0x40490fdb] -> same
   runTest(vF32U64, [0, (7n << 32n) | 0x40490fdbn], {
-    a: 3.1415927410125732,
+    kind: "a",
+    value: 3.1415927410125732,
   });
 
   // variant{a: f64, b: u64}: flat [i32, i64]; f64 via i64 reinterpret
@@ -238,11 +247,12 @@ Deno.test("variant lane coercion i64<->f64/f32/i32", () => {
     cases: [{ label: "a", type: f64 }, { label: "b", type: { kind: "u64" } }],
   };
   // python: lift [0, 0x3ff0000000000000] -> {'a': 1.0}; lower roundtrips
-  runTest(vF64U64, [0, 0x3ff0000000000000n], { a: 1.0 });
+  runTest(vF64U64, [0, 0x3ff0000000000000n], { kind: "a", value: 1.0 });
 
   // variant{a: tuple<u64,u64>, b: u8}: flat [i32, i64, i64]; the u8 payload
   // widens to an i64 lane and the second lane pads with zero.
   // python: lower {'b': 9} -> [1, 9, 0]; lift [1, 9, 0] -> {'b': 9}
+  // (definitions.py's dict spelling; ours is {kind: "b", value: 9})
   const vTupU8: ValType = {
     kind: "variant",
     cases: [
@@ -253,6 +263,6 @@ Deno.test("variant lane coercion i64<->f64/f32/i32", () => {
       { label: "b", type: u8 },
     ],
   };
-  runTest(vTupU8, [1, 9n, 0n], { b: 9 });
-  runTest(vTupU8, [0, 3n, 4n], { a: mkTup(3n, 4n) });
+  runTest(vTupU8, [1, 9n, 0n], { kind: "b", value: 9 });
+  runTest(vTupU8, [0, 3n, 4n], { kind: "a", value: mkTup(3n, 4n) });
 });

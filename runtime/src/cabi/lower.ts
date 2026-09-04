@@ -20,6 +20,7 @@ import {
   despecialize,
   type FieldType,
   type ValType,
+  type VariantValue,
 } from "./types.ts";
 import {
   lowerErrorContext,
@@ -68,7 +69,7 @@ export function lowerFlat(
     case "record":
       return lowerFlatRecord(cx, v as Record<string, ComponentValue>, d.fields);
     case "variant":
-      return lowerFlatVariant(cx, v as Record<string, ComponentValue>, d.cases);
+      return lowerFlatVariant(cx, v as VariantValue, d.cases);
     case "flags":
       return lowerFlatFlags(v as Record<string, ComponentValue>, d.labels);
     case "own":
@@ -144,7 +145,7 @@ export function lowerFlatRecord(
 
 export function lowerFlatVariant(
   cx: LiftLowerContext,
-  v: Record<string, ComponentValue>,
+  v: VariantValue,
   cases: CaseType[],
 ): CoreValue[] {
   const [caseIndex, caseValue] = matchCase(v, cases);

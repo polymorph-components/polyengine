@@ -14,7 +14,7 @@ import type { WireExport, WirePlan } from "../plan/format.ts";
 import type { LoadedPlan } from "../plan/loader.ts";
 import { loadEnvelope, loadPlan, PlanError } from "../plan/loader.ts";
 import type { FuncType, ResourceTypeInfo, ValType } from "../cabi/types.ts";
-import type { ComponentValue } from "../cabi/types.ts";
+import type { ComponentValue, VariantValue } from "../cabi/types.ts";
 import { Trap } from "../cabi/trap.ts";
 import {
   type ComponentHandle,
@@ -777,7 +777,10 @@ class Facade {
       if (resultType === null) return undefined;
       if (isResult) {
         const rt = resultType as ValType & { kind: "result" };
-        return { ok: rt.ok === null ? null : fromHost(v, rt.ok, o) };
+        return {
+          kind: "ok",
+          value: rt.ok === null ? null : fromHost(v, rt.ok, o),
+        };
       }
       return fromHost(v, resultType, o);
     };
@@ -788,7 +791,8 @@ class Facade {
       if (isComponentException(e) && isResult) {
         const rt = resultType as ValType & { kind: "result" };
         return {
-          error: rt.error === null ? null : fromHost(e.payload, rt.error, o),
+          kind: "error",
+          value: rt.error === null ? null : fromHost(e.payload, rt.error, o),
         };
       }
       // Every remaining branch traps the component. The import's lifted
@@ -1159,17 +1163,20 @@ class Facade {
         }
         if (resultType === null) return undefined;
         if (resultType.kind === "result") {
-          const v = raw as Record<string, ComponentValue>;
-          if ("error" in v) {
+          // Internal result: `{kind: "ok"|"error", value}` (cabi/types.ts
+          // `VariantValue`) — the error case is spelled "error" here, not
+          // the host layer's "err".
+          const v = raw as VariantValue;
+          if (v.kind === "error") {
             throw new ComponentException(
               resultType.error === null
                 ? undefined
-                : toHost(v["error"], resultType.error, o),
+                : toHost(v.value, resultType.error, o),
             );
           }
           return resultType.ok === null
             ? undefined
-            : toHost(v["ok"], resultType.ok, o);
+            : toHost(v.value, resultType.ok, o);
         }
         return toHost(raw as ComponentValue, resultType, o);
       };
@@ -1262,17 +1269,19 @@ class Facade {
       if (isThenable(raw)) unreachableThenable(raw);
       if (resultType === null) return undefined;
       if (resultType.kind === "result") {
-        const v = raw as Record<string, ComponentValue>;
-        if ("error" in v) {
+        // See the note on the async wrapper above: internal spelling is
+        // "error", the host layer's is "err".
+        const v = raw as VariantValue;
+        if (v.kind === "error") {
           throw new ComponentException(
             resultType.error === null
               ? undefined
-              : toHost(v["error"], resultType.error, o),
+              : toHost(v.value, resultType.error, o),
           );
         }
         return resultType.ok === null
           ? undefined
-          : toHost(v["ok"], resultType.ok, o);
+          : toHost(v.value, resultType.ok, o);
       }
       return toHost(raw as ComponentValue, resultType, o);
     };

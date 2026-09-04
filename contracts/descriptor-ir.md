@@ -65,16 +65,37 @@ optimization without changing this contract's semantics.)
 
 Host-facing value conventions are `contracts/embedder-api.md`'s territory
 (implemented by the bindgen-generated layer). The raw executor boundary
-produces the `definitions.py` interpreter shapes — variant as single-key
-`{label: payload}`, enum as `{label: null}`, option as
-`{none: null} / {some: v}`, result error key `"error"`, tuple as
-despecialized record — and is an internal surface with no stability
-promise. Integer lanes wrap mod 2⁶⁴ at the raw boundary, matching
+mirrors `definitions.py`'s value *semantics*; its *representation* is this
+implementation's to choose, and diverges deliberately where measurement
+justifies it (docs/architecture.md §1 sanctions exactly this — "parity
+means functional parity, not behavioral identity", and lists JS-native
+host value shapes among the divergences). The shapes are: variant as
+`{kind: label, value: payload}`, enum as `{kind: label, value: null}`,
+option as `{kind: "none", value: null} / {kind: "some", value: v}`, result
+error kind `"error"`, tuple as despecialized record. It is an internal
+surface with no stability promise.
+
+Integer lanes wrap mod 2⁶⁴ at the raw boundary, matching
 definitions.py's `% 2**64`; host-side range *asserts* (host-precondition
 errors, not traps) exist only on the scalar `storeInt` path. NaN handling,
 lane widening/padding (i64 lanes as `bigint`, `0n` padding), and
 latin1(windows-1252) details follow the decisions recorded in
 `runtime/README.md` and docs/architecture.md §7.
+
+The variant family carries its case in a `kind` property rather than as the
+object's sole key — the one place the representation departs from the
+reference's dicts. `definitions.py` uses a single-key mapping; that form
+cost a computed-key literal here (a distinct hidden class per case label,
+so every variant-reading site went megamorphic) plus an `Object.keys()`
+allocation at each end to read one key. `value` is always present, `null`
+for a payload-free case: omitting it to match the host layer exactly was
+measured slower, because the producer site then emits two shapes instead
+of one. Both findings are measured on `bench/boundary`'s compound-element
+lanes; see issue #261 and the PR that landed this for the numbers and
+method. The property names deliberately match `contracts/embedder-api.md`'s
+host variant shape, but **the two are not interchangeable** — that
+document's "Implementation strategy" enumerates every way they still
+differ.
 
 ## Trap discipline
 

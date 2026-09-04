@@ -2,8 +2,9 @@
 // the same shim -> plan -> executor path as hello. Exercises the descriptor
 // IR + cabi interpreter across every WIT type shape in the fixture corpus.
 //
-// Host value shapes are the cabi v1 interpreter's (definitions.py shapes:
-// single-key variant/option/result objects, despecialized tuple records,
+// Host value shapes are the cabi v1 interpreter's (definitions.py's semantics,
+// our representation:
+// `{kind, value}` variant/option/result objects, despecialized tuple records,
 // label->bool flags) — NOT the ergonomic mapping table of descriptor-ir.md
 // §"Host value mapping", which the interpreter does not implement yet.
 
@@ -76,24 +77,34 @@ roundtrips("echo-record", [
   { a: 4294967295, b: "record string", c: -2.5, d: true },
 ]);
 roundtrips("echo-variant", [
-  { point: null },
-  { circle: 2.5 },
-  { label: "hi" },
-  { rect: { w: 3, h: 4 } },
+  { kind: "point", value: null },
+  { kind: "circle", value: 2.5 },
+  { kind: "label", value: "hi" },
+  { kind: "rect", value: { w: 3, h: 4 } },
 ]);
-roundtrips("echo-enum", [{ red: null }, { green: null }, { blue: null }]);
+roundtrips("echo-enum", [
+  { kind: "red", value: null },
+  { kind: "green", value: null },
+  { kind: "blue", value: null },
+]);
 roundtrips("echo-flags", [
   { read: true, write: false, exec: true, admin: false },
   { read: false, write: false, exec: false, admin: false },
   { read: true, write: true, exec: true, admin: true },
 ]);
-roundtrips("echo-option", [{ none: null }, { some: "present" }]);
-roundtrips("echo-option-nested", [
-  { none: null },
-  { some: { none: null } },
-  { some: { some: 7 } },
+roundtrips("echo-option", [
+  { kind: "none", value: null },
+  { kind: "some", value: "present" },
 ]);
-roundtrips("echo-result", [{ ok: 42 }, { error: "went wrong" }]);
+roundtrips("echo-option-nested", [
+  { kind: "none", value: null },
+  { kind: "some", value: { kind: "none", value: null } },
+  { kind: "some", value: { kind: "some", value: 7 } },
+]);
+roundtrips("echo-result", [
+  { kind: "ok", value: 42 },
+  { kind: "error", value: "went wrong" },
+]);
 roundtrips("echo-list-u8", [
   new Uint8Array(0),
   new Uint8Array([0, 1, 2, 254, 255]),

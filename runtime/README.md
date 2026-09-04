@@ -115,8 +115,9 @@ distinctions); flagged for plan review:
    loss could matter.
 6. **`String.prototype.toWellFormed()`** (ES2024) implements the USVString
    conversion; present in all JSPI-capable engines (the compatibility floor).
-7. **Variant/record/flags value shapes** mirror definitions.py (single-key
-   objects, despecialized tuple records, label→bool maps); `list<u8>` is
+7. **Variant/record/flags value shapes** mirror definitions.py's semantics
+   (variants as `{kind, value}` objects — contracts/descriptor-ir.md §"Host
+   value shapes" — despecialized tuple records, label→bool maps); `list<u8>` is
    `Uint8Array` per docs/architecture.md §7. Final host-facing representations for bindgen
    remain open (below).
 

@@ -132,7 +132,7 @@ property, but `v.case` reads like syntax. The value of `kind` is always
 the case name, kebab-case verbatim.
 
 **Why a discriminant property rather than `{ [case]: value }`** (the
-single-key form the internal definitions.py-shaped boundary uses):
+single-key form the internal boundary used until issue #261):
 (1) exhaustiveness — `switch (v.kind)` + `assertNever` is compiler-checked
 case coverage; `in`-chains are not switchable and lose it; (2) payloadless
 cases get one uniform shape (`value` absent) instead of a null/undefined
@@ -144,6 +144,12 @@ data (kebab-case verbatim) rather than entering the identifier-casing
 regime as keys. Conceded cost: literal construction is wordier —
 bindgen may emit per-variant constructor helpers (`Message.binary(bytes)`)
 as an optional nicety; the value shape is unaffected.
+
+Reason (3) turned out to be measurable rather than merely tidy, and the
+internal boundary has since adopted the same `kind` discriminant for it
+(issue #261, `contracts/descriptor-ir.md` §"Host value shapes"). It keeps
+`value: null` for payloadless cases where this layer omits the property —
+one shape per producer site measured faster than exact convergence.
 
 **Option rule.** The *outermost* option in a chain maps to
 `T | undefined`; every option nested **directly inside another option**
@@ -1320,14 +1326,33 @@ raw (definitions.py-shaped) boundary — see below.
 ## Implementation strategy
 
 The ergonomic layer is generated code **on top of** the raw boundary; the
-interpreter's internal shapes (single-key variants, `{some}/{none}`,
-tuple-as-record) are pinned by the reference-test ports and the
-conformance harness's value mapping — converging the interpreter itself
-is a perf-track concern (the descriptor-driven codegen executor can emit
-convention shapes directly, skipping the adapter). Consequence:
-`instance.exports` stays internal-shaped and documented as such;
-embedders use the bindgen layer (or accept the internal surface with no
-stability promise).
+interpreter's internal shapes are pinned by the reference-test ports and
+the conformance harness's value mapping. Issue #261 converged one of them
+for measured reasons: the interpreter's variant family now carries its
+case in a `kind` property with a `value` alongside, the same property
+names this layer uses.
+
+**The convergence is partial, and the residue is a trap.** An internal
+value and a host value can now be structurally identical and still mean
+different things, so four differences that a mismatched shape used to make
+obvious are no longer visible at a glance, and every site handling them
+must translate deliberately:
+
+- **`result`** — internal despecialization names the error case `"error"`
+  (definitions.py); this layer's kind is `"err"`.
+- **`enum`** — internal is a variant value; here an enum is a bare string,
+  kebab-case verbatim.
+- **`option`** — internal is always `{kind: "none" | "some", value}`; here
+  the outermost option in a chain is `T | undefined`, and only an option
+  nested directly inside another option boxes.
+- **payload-free cases** — internal keeps `value: null`; this layer omits
+  the property.
+
+Fully converging the interpreter remains a perf-track concern (the
+descriptor-driven codegen executor can emit convention shapes directly,
+skipping the adapter). Consequence: `instance.exports` stays
+internal-shaped and documented as such; embedders use the bindgen layer
+(or accept the internal surface with no stability promise).
 
 ## The WASI parking kernel
 

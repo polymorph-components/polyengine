@@ -2,13 +2,14 @@
 // through the conventions facade (contracts/embedder-api.md §"Value mapping").
 //
 // Every assertion here is a statement about the *contract's* shapes, not the
-// interpreter's: single-key variants, `{some}`/`{none}`, tuple-as-record and
+// interpreter's: `{kind, value}` variants with internal labels, tuple-as-record and
 // kebab record keys all live on the far side of the adapter and must never
 // appear.
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 import { ComponentException } from "@polyengine/protocol";
+import { toHost } from "../../src/embedder/values.ts";
 
 const ready = await haveFixture(guest("values"));
 
@@ -249,5 +250,42 @@ Deno.test({
     assertEq(String(e).includes("echo-char"), true, `it names the site: ${e}`);
     // A well-formed astral character is fine.
     assertEq(await v.echoChar("𝄞"), "𝄞");
+  },
+});
+
+Deno.test({
+  name: "values: a record field of option type — present, and absent for none",
+  // No `ignore`: this drives the adapter directly rather than a fixture,
+  // because no gated guest WIT has a record with an option field and the
+  // `values` fixture is shared with the conventions goldens (which must stay
+  // byte-identical). Direct-call precedent: cross_copy_test.ts.
+  fn: () => {
+    const t = {
+      kind: "record",
+      fields: [
+        { label: "a", type: { kind: "u32" } },
+        { label: "note", type: { kind: "option", type: { kind: "string" } } },
+      ],
+    } as unknown as Parameters<typeof toHost>[1];
+    const o = { where: "export 'f'" } as unknown as Parameters<typeof toHost>[2];
+
+    // "fields of option type are optional properties": some -> present and
+    // UNWRAPPED (not the `{kind, value}` box), none -> the property is absent,
+    // not `undefined`-valued.
+    const some = toHost(
+      { a: 1, note: { kind: "some", value: "hi" } },
+      t,
+      o,
+    ) as Record<string, unknown>;
+    assertEq(some.note, "hi", "some -> the unwrapped payload");
+    assertEq("note" in some, true);
+
+    const none = toHost(
+      { a: 1, note: { kind: "none", value: null } },
+      t,
+      o,
+    ) as Record<string, unknown>;
+    assertEq("note" in none, false, "none -> the property is ABSENT");
+    assertEq(none.a, 1, "the non-option field is unaffected");
   },
 });

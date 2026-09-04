@@ -243,7 +243,7 @@ export function liftFlatVariant(
   for (const have of flatTypes) {
     vi.next(have);
   }
-  return { [c.label]: v };
+  return { kind: c.label, value: v };
 }
 
 export function wrapI64ToI32(i: bigint): number {
