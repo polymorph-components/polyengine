@@ -62,6 +62,12 @@ jobs:
         with:
           ref: ${{ steps.rel.outputs.tag }}
           submodules: true
+          # Full history: the publish step below decides "already published,
+          # same content" by asking whether a published tarball's `gitHead` is
+          # an ancestor of this tag and whether the package changed since. A
+          # shallow clone has neither the ancestor nor the old tree, and would
+          # fail every such check as if the name were burned.
+          fetch-depth: 0
 
       - uses: denoland/setup-deno@v2
         with:
@@ -132,14 +138,28 @@ jobs:
         # dependency — see build.ts) already exists on the registry the first
         # time it is needed. An already-published version is skipped rather
         # than failed — a re-run after a partial failure completes the set
-        # instead of stranding it — but only when the published tarball's
-        # `gitHead` equals the sha being published: the job is checked out at
-        # the release tag, so a legitimate re-run matches. Anything else means
-        # the version name is occupied by a different tree (an unverifiable
-        # occupant — missing `gitHead` — counts): npm versions are immutable,
-        # so that name can never carry this content, and publishing the
-        # dependents would ship a graph whose caret range resolves to a
-        # foreign protocol. Hard failure, before any dependent publishes.
+        # instead of stranding it — but only when the published tarball
+        # provably carries THIS content. Two ways it can:
+        #
+        #   - its `gitHead` is the sha being published (a straight re-run:
+        #     the job is checked out at the release tag), or
+        #   - its `gitHead` is an ancestor of ours AND the package's source
+        #     has not changed since. That is protocol's normal steady state:
+        #     it is not part of the lockstep (A10), so at every cut where it
+        #     does not move, the live tarball is necessarily stamped with an
+        #     EARLIER cut's sha. Requiring an exact sha match called that a
+        #     burned name and failed the whole publish — the v0.6.2 cut, whose
+        #     protocol was the untouched 0.3.1 from v0.6.1.
+        #
+        # Anything else means the name is occupied by a different tree — a
+        # foreign `gitHead` not in our history, an unverifiable occupant
+        # (missing `gitHead`), or our own sha with the package changed since.
+        # npm versions are immutable, so that name can never carry this
+        # content, and publishing the dependents would ship a graph whose
+        # caret range resolves to a foreign protocol. Hard failure, before any
+        # dependent publishes. (The case that motivated the check — #268's
+        # `protocol@0.3.0`, stamped `7df6ec2` with protocol's source since
+        # rewritten — still fails here, on the source-changed arm.)
         #
         # Every version reaching this loop is a bare cut version (the step
         # above refuses anything else), so `latest` is the only dist-tag in
@@ -160,8 +180,16 @@ jobs:
                 echo "$name@$V already published from $HEAD_SHA — skipping"
                 continue
               fi
+              if [ -n "$published_head" ] &&
+                 git merge-base --is-ancestor "$published_head" "$HEAD_SHA" 2>/dev/null &&
+                 git diff --quiet "$published_head" "$HEAD_SHA" -- "$p"; then
+                echo "$name@$V already published from $published_head;" \
+                     "$p/ unchanged since — skipping"
+                continue
+              fi
               echo "FATAL: $name@$V exists on npm but was published from" \
-                   "'${published_head:-<no gitHead>}', not $HEAD_SHA." >&2
+                   "'${published_head:-<no gitHead>}', which is not $HEAD_SHA" \
+                   "and does not carry this $p/ content." >&2
               echo "That version name is burned: npm versions are immutable." \
                    "Bump $name's manifest version and re-cut." >&2
               exit 1
