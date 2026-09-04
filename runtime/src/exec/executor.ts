@@ -1376,6 +1376,3 @@ function describe(v: unknown): string {
   if (typeof v === "object") return `a ${v.constructor?.name ?? "object"}`;
   return `a ${typeof v}`;
 }
-
-/** Convenience for callers: typed view of a lifted export. */
-export type LiftedFunction = (...args: ComponentValue[]) => unknown;
