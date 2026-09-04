@@ -88,12 +88,6 @@ const FLOAT_CTORS: Record<
   f64: Float64Array,
 };
 
-/** Kinds these helpers handle (besides them, u8 has its own path). */
-export function isBulkListKind(kind: string): boolean {
-  return kind === "bool" || kind in INT_CTORS || kind in BIG_CTORS ||
-    kind in FLOAT_CTORS;
-}
-
 function viewOf<
   C extends { new (b: ArrayBufferLike, o: number, n: number): InstanceType<C>; readonly BYTES_PER_ELEMENT: number },
 >(ctor: C, mem: MemInst, ptr: number, length: number): InstanceType<C> | null {

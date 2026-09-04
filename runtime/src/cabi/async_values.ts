@@ -25,7 +25,7 @@
 import { copyCensus, ERROR_CONTEXT, hasBrand } from "@deltic/protocol";
 import { assert_, trapIf } from "./trap.ts";
 import type { LiftLowerContext } from "./context.ts";
-import type { BorrowType, OwnType, ValType } from "./types.ts";
+import type { ValType } from "./types.ts";
 import { contains, fmtValType } from "./types.ts";
 import {
   CopyState,
@@ -233,6 +233,3 @@ export function lowerErrorContext(
   assert_(inst !== null, "error-context lower requires a component instance");
   return inst!.handles.add(v);
 }
-
-/** Unused-import guards for the type-only imports above. */
-export type _AsyncValueTypes = OwnType | BorrowType;

@@ -20,8 +20,6 @@ export enum EventCode {
 /** definitions.py `EventTuple` = `(EventCode, int, int)`. */
 export type EventTuple = [code: EventCode, p1: number, p2: number];
 
-export const NO_EVENT: EventTuple = [EventCode.NONE, 0, 0];
-
 /**
  * definitions.py `class Waitable` (line 767).
  *
