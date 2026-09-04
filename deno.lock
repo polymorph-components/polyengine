@@ -10,7 +10,6 @@
     "jsr:@std/path@^1.1.5": "1.1.6",
     "jsr:@ts-morph/bootstrap@0.29": "0.29.0",
     "jsr:@ts-morph/common@0.29": "0.29.0",
-    "npm:playwright@1.49.1": "1.49.1",
     "npm:playwright@1.62.1": "1.62.1"
   },
   "jsr": {
@@ -66,22 +65,8 @@
       "os": ["darwin"],
       "scripts": true
     },
-    "playwright-core@1.49.1": {
-      "integrity": "sha512-BzmpVcs4kE2CH15rWfzpjzVGhWERJfmnXmniSyKeRZUs9Ws65m+RGIi7mjJK/euCegfn3i7jvqWeWyHe9y3Vgg==",
-      "bin": true
-    },
     "playwright-core@1.62.1": {
       "integrity": "sha512-wPYSwEBJY9GHraISXqyqtx0na0LpO3XEX7jNDhntbex7tzUS7kLnZsOlFruFJB4Hi/rhDMjXGqHewDZ68nYZVw==",
-      "bin": true
-    },
-    "playwright@1.49.1": {
-      "integrity": "sha512-VYL8zLoNTBxVOrJBbDuRgDWa3i+mfQgDTrL8Ah9QXZ7ax4Dsj0MSq5bYgytRnDVVe+njoKnfsYkH3HzqVj5UZA==",
-      "dependencies": [
-        "playwright-core@1.49.1"
-      ],
-      "optionalDependencies": [
-        "fsevents"
-      ],
       "bin": true
     },
     "playwright@1.62.1": {
