@@ -76,13 +76,13 @@ for (const shape of ELEMENT_SHAPES) {
 
 const lanes = [...new Set(rows.map((r) => r.lane))];
 const pad = (s, n) => String(s).padEnd(n);
-console.log(pad("shape", 10) + pad("mode", 11) + pad("size", 6) + lanes.map((l) => String(l).padStart(22)).join(""));
+console.log(pad("shape", 10) + pad("mode", 11) + pad("size", 6) + lanes.map((l) => String(l).padStart(26)).join(""));
 for (const shape of SHAPES) {
   for (const mode of MODES) {
     for (const size of SIZES) {
       const cells = lanes.map((lane) => {
         const r = rows.find((x) => x.lane === lane && x.shape === shape && x.mode === mode && x.size === size);
-        return (r ? `${r.callsPerSec.toLocaleString("en-US")}/s` : "-").padStart(22);
+        return (r ? `${r.callsPerSec.toLocaleString("en-US")}/s` : "-").padStart(26);
       });
       console.log(pad(shape, 10) + pad(mode, 11) + pad(size, 6) + cells.join(""));
     }
@@ -92,12 +92,12 @@ for (const shape of SHAPES) {
 console.log();
 console.log("stream lanes (bytes/s; jco lane skipped — see README.md):");
 const streamLanes = [...new Set(streamRows.map((r) => r.lane))];
-console.log(pad("shape", 14) + pad("size", 10) + streamLanes.map((l) => String(l).padStart(22)).join(""));
+console.log(pad("shape", 14) + pad("size", 10) + streamLanes.map((l) => String(l).padStart(26)).join(""));
 for (const shape of STREAM_SHAPES) {
   for (const { size } of STREAM_CONFIGS) {
     const cells = streamLanes.map((lane) => {
       const r = streamRows.find((x) => x.lane === lane && x.shape === shape && x.size === size);
-      return (r ? `${r.mbPerSec.toLocaleString("en-US", { maximumFractionDigits: 1 })} MB/s` : "-").padStart(22);
+      return (r ? `${r.mbPerSec.toLocaleString("en-US", { maximumFractionDigits: 1 })} MB/s` : "-").padStart(26);
     });
     console.log(pad(shape, 14) + pad(size, 10) + cells.join(""));
   }

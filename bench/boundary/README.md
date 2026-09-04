@@ -126,20 +126,6 @@ stream-pass   16384               6,665.9 MB/s            5,847 MB/s          7,
 stream-pass   262144             13,716.5 MB/s         14,229.4 MB/s         22,863.2 MB/s
 ```
 
-### Compound element shapes baseline (2026-09-03, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60) — pre-#261 optimization
-
-```
-compound-element lanes (ns/element; n=10000; jco lane skipped — see README.md):
-shape         polyengine-node-callback      polyengine-node-jspi  polyengine-deno-callback
-lift-ops                       3,804.4                   3,909.3                   3,184.6
-lower-ops                      3,482.3                   3,646.8                   3,285.3
-```
-
-This is the "before" baseline for #261, recorded before any optimization
-of the per-element interpreted path lands. ~3.2-3.9 µs/element here vs.
-#261's reported ~5 µs/element on a similar box — same order of
-magnitude, within ~1.6x; the residual gap reads as box/config drift.
-
 Two methodology footnotes for the stream rows:
 
 - `stream-source` allocates and fills its whole payload inside the guest
@@ -154,7 +140,50 @@ Two methodology footnotes for the stream rows:
   chunking). One dimension, two meanings — split it if a finding ever
   hinges on the distinction.
 
-What the baseline says:
+### Compound element shapes baseline (2026-09-03, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60) — before #261's optimization PRs (#263/#264/#265 landed after this was recorded)
+
+```
+compound-element lanes (ns/element; n=10000; jco lane skipped — see README.md):
+shape         polyengine-node-callback      polyengine-node-jspi  polyengine-deno-callback
+lift-ops                       3,804.4                   3,909.3                   3,184.6
+lower-ops                      3,482.3                   3,646.8                   3,285.3
+```
+
+This is the "before" baseline for #261, recorded before any optimization
+of the per-element interpreted path lands. ~3.2-3.9 µs/element here vs.
+#261's reported ~5 µs/element on a similar box — same order of
+magnitude, within ~1.6x; the residual gap reads as box/config drift.
+See the 2026-09-04 block below for the "after" numbers.
+
+## Baseline (2026-09-04 — post-#261, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60; #263 layout-node cache + #264 adapter tables + #265 flatten-count memoization)
+
+```
+compound-element lanes (ns/element; n=10000; jco lane skipped — see README.md):
+shape         polyengine-node-callback      polyengine-node-jspi  polyengine-deno-callback
+lift-ops                         677.8                     704.2                     867.1
+lower-ops                        630.4                     661.4                     694.6
+```
+
+The compound-element drop against the 2026-09-03 "before" table is
+3.7x-5.6x fewer ns/element depending on lane (#263's layout-node cache
+plus #264's adapter tables). The calls-per-second table is NOT refreshed
+here: this box cannot currently reproduce it — `send immediate 0` /
+`polyengine-node-jspi` alone read 780,785/s (2026-08-11), 1,023,625/s
+(an interleaved run today), and 521,044/s (this sweep), a 2x spread on
+identical code, so a fresh table would be noise with a date on it. What
+is known instead, from interleaved before/after pairs (medians of paired
+differences, `immediate`, size 0, attributable to #265's per-call
+flatten-count memoization, reproduced across two passes): `send-sync`
++27%/+32%, `send` +22%/+28%, `recv` +34%/+31% calls/sec — a delta, not a
+new absolute baseline. The 2026-08-11 table remains the recorded
+calls-per-second baseline, known to understate the current tree, until a
+quiet box allows a real re-measurement. Stream rows are also NOT
+re-measured: `stream-sink` at 256 KiB spans 2,900-10,800 MB/s across four
+interleaved runs with no consistent before/after sign, and none of
+#263/#264/#265 touch the `stream<u8>` bulk-copy path, so the 2026-08-11
+stream rows above still stand as the current record.
+
+## What the baselines say
 
 - **Async import round-trips**: polyengine's callback ABI sustains 0.3–1.1 M
   crossings/s; jco's async path costs ~3 ms per call flat
@@ -181,9 +210,9 @@ What the baseline says:
   chunk size — per-rendezvous overhead amortizes over more bytes.
 - **#261 compound elements**: the first instrument for the interpreted
   per-element lift/lower path — every prior shape here is flat and
-  bulk-copies. `lift-ops`/`lower-ops` land at ~3.2-3.9 µs/element
-  pre-optimization; same sentinel role #54/#67 played for flat types —
-  these rows are what an optimization to the compound path should move.
+  bulk-copies. #263 (layout-node cache) + #264 (adapter tables) moved
+  `lift-ops`/`lower-ops` from ~3.2-3.9 µs/element to ~0.6-0.9 µs/element
+  — same sentinel role #54/#67 played for flat types, now proven out.
 
 The jco lane pins the family's own toolchain (the lann/jco all-fixes
 transpile + preview2-shim release tarballs, the vendored
