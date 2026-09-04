@@ -130,9 +130,16 @@ jobs:
         # parity with release.yml's JSR step). Publishing it before its
         # dependents guarantees the version they reference (via a caret
         # dependency — see build.ts) already exists on the registry the first
-        # time it is needed. Already-published versions are skipped rather
-        # than failed for every package — a re-run after a partial failure
-        # completes the set instead of stranding it.
+        # time it is needed. An already-published version is skipped rather
+        # than failed — a re-run after a partial failure completes the set
+        # instead of stranding it — but only when the published tarball's
+        # `gitHead` equals the sha being published: the job is checked out at
+        # the release tag, so a legitimate re-run matches. Anything else means
+        # the version name is occupied by a different tree (an unverifiable
+        # occupant — missing `gitHead` — counts): npm versions are immutable,
+        # so that name can never carry this content, and publishing the
+        # dependents would ship a graph whose caret range resolves to a
+        # foreign protocol. Hard failure, before any dependent publishes.
         #
         # Every version reaching this loop is a bare cut version (the step
         # above refuses anything else), so `latest` is the only dist-tag in
@@ -143,12 +150,21 @@ jobs:
         # publishing from a public repository; no --provenance flag needed.
         run: |
           set -euo pipefail
+          HEAD_SHA=$(git rev-parse HEAD)
           for p in protocol runtime translator wasi ct-runner; do
             name="@polyengine/$p"
             V=$(jq -r '.version' "./npm/$p/package.json")
             if npm view "$name@$V" version >/dev/null 2>&1; then
-              echo "$name@$V already published — skipping"
-              continue
+              published_head=$(npm view "$name@$V" gitHead 2>/dev/null || true)
+              if [ "$published_head" = "$HEAD_SHA" ]; then
+                echo "$name@$V already published from $HEAD_SHA — skipping"
+                continue
+              fi
+              echo "FATAL: $name@$V exists on npm but was published from" \
+                   "'${published_head:-<no gitHead>}', not $HEAD_SHA." >&2
+              echo "That version name is burned: npm versions are immutable." \
+                   "Bump $name's manifest version and re-cut." >&2
+              exit 1
             fi
             echo "publishing $name@$V (dist-tag latest)"
             npm publish --tag latest --workspaces=false ./npm/"$p"
