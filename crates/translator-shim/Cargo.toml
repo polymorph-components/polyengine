@@ -9,8 +9,8 @@ crate-type = ["lib", "cdylib"]
 
 [dependencies]
 # Pinned exactly (docs/architecture.md §4.1): the same major (47) as the installed wasmtime
-# CLI (47.0.1), so native behavior can be compared against `wasmtime compile`.
-wasmtime-environ = { version = "=47.0.3", features = ["component-model", "compile", "anyhow"] }
+# CLI (47.0.1). Version lives in the root workspace table.
+wasmtime-environ = { workspace = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

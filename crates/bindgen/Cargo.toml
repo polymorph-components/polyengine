@@ -13,11 +13,8 @@ name = "bindgen"
 path = "src/lib.rs"
 
 [dependencies]
-# wit-parser is pinned to match crates/translator-shim's wasmparser pin
-# exactly (docs/architecture.md §9): both ride the wasm-tools workspace's
-# lockstep release train, so a single version number covers both crates.
-# Bump this pin together with translator-shim's wasmtime-environ pin.
-wit-parser = { version = "=0.252.0", features = ["serde"] }
+# Version pinned in the root workspace table, alongside translator-shim's wasmtime-environ pin (docs/architecture.md §9).
+wit-parser = { workspace = true }
 anyhow = "1"
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
 serde = { version = "1", features = ["derive"] }

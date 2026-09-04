@@ -77,6 +77,16 @@ corpus:
 
 test-rust:
     cargo test -p translator-shim -p bindgen -p testgen
+    # Drift check: wasmtime-environ and wit-parser must stay on the same
+    # wasm-tools release train (docs/architecture.md §4.1, §9). testgen is
+    # excluded — it uses wast 255 on purpose (docs/architecture.md risk table).
+    dupes=$(cargo tree -e normal -p translator-shim -p bindgen --prefix none \
+        | grep -E '^(wasmparser|wit-parser|wasm-encoder) v' | awk '{print $1, $2}' | sort -u \
+        | awk '{print $1}' | sort | uniq -d); \
+    if [ -n "$dupes" ]; then \
+        echo "drift: multiple versions found for: $dupes" >&2; \
+        exit 1; \
+    fi
 
 test-runtime: shim fixtures corpus
     cd runtime && deno task check && deno task test
