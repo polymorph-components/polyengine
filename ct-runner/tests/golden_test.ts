@@ -33,7 +33,15 @@ Deno.test({
       suiteName: "test-suite",
       emit: (l) => lines.push(l),
     });
-    assertEq(counts, { passed: 4, failed: 1, skipped: 1, na: 0, total: 6 });
+    assertEq(counts, {
+      passed: 4,
+      failed: 1,
+      skipped: 1,
+      na: 0,
+      deselected: 0,
+      selected: 6,
+      total: 6,
+    });
 
     const got = lines.map(normalize).join("\n") + "\n";
     const want = await Deno.readTextFile(

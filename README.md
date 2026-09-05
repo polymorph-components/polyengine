@@ -21,7 +21,7 @@ Pre-1.0, but densely gated:
   across all directories (remaining: named xfail classes — deferred threads
   ([#12](https://github.com/polymorph-components/polyengine/issues/12)),
   cm705-sync-sched ([#249](https://github.com/polymorph-components/polyengine/issues/249)),
-  cm705-reentrance ([#279](https://github.com/polymorph-components/polyengine/issues/279)),
+  cm707-cancel ([#250](https://github.com/polymorph-components/polyengine/issues/250)),
   upstream-nyi ([#248](https://github.com/polymorph-components/polyengine/issues/248))),
   identical on Deno, Chromium, and Firefox
   (behind its JSPI pref); WebKit reaches the same totals on trunk builds
