@@ -60,23 +60,15 @@ entry where a rule was decided.
 
 ## Version canonicalization
 
-Authorities: Explainer §"Canonical interface names" (`canonversion`, 🔗)
-and wasmtime `component::names::{NameMap, alternate_lookup_key}`.
-
-Every version belongs to a **compatibility track**:
-
-| version | track | |
-|---|---|---|
-| `1.2.3`, `2.1.2+abc` | `@1`, `@2` | major > 0: the major |
-| `0.2.6`, `0.2.12` | `@0.2` | major 0: the minor |
-| `0.0.1` | none | patch-only versions are compatible with nothing |
-| any prerelease | none | exact-match only, as in wasmtime |
+A version's **track key** is the spec's `canonversion` (Explainer
+§"Canonical interface names", 🔗; wasmtime `alternate_lookup_key`): `@1`
+for `1.2.3`, `@0.2` for `0.2.6`, none for `0.0.x` and prereleases.
 
 **Resolution** (normative for `instantiate` and the wasi package): an
 import name matches (1) an exact provided key, else (2) the provider
 holding its track, where a track is held by the **highest-versioned** key
-registered on it. Structural type-checking of the resolved instance
-supplies the safety: the guest only uses functions the provider has.
+registered on it (wasmtime's linker rule). Structural type-checking of
+the resolved instance supplies the safety.
 
 **Registration**: providers register full-versioned keys (the track
 alternate is derived) or the **track key itself** (`…@0.2`) as an
@@ -236,19 +228,16 @@ marked import pays the engine's continuation hop even when it returns
 synchronously (contracts/intrinsics.md pin (j)); a marked import reached
 from a `start` function traps, even on a synchronous return (pin (c));
 on a non-JSPI engine a returned Promise is refused at the call site
-(`NeedsJspi`), never degraded. The park is the reference's
-`thread.wait_until(subtask.resolved)` (`canon_lower`): non-cancellable,
-the instance-entry gate held, result lowering at resume time under the
-suspension point's attribution.
+(`NeedsJspi`), never degraded. The park is a plain sync-lower wait
+(`canon_lower`, `definitions.py`).
 
 **Cancellation and discard** (#241). A guest may cancel an in-flight
-async-typed import (`subtask.cancel`; wit-bindgen reaches it by dropping
-the import's future). A JS function has no cancellation channel, so the
-runtime answers as the reference's prompt-cancel host
-(`on_cancel = () => on_resolve(None)`, `Store.invoke`): the subtask
-resolves `CANCELLED_BEFORE_RETURNED` immediately, both cancel forms
-return without blocking, and the settlement is **discarded** — never
-lowered, never reported, no longer guest-wakeable for deadlock detection.
+async-typed import. A JS function has no cancellation channel, so the
+runtime answers on its behalf, choosing the prompt-cancel host response
+(`on_cancel = () => on_resolve(None)`): the subtask resolves
+`CANCELLED_BEFORE_RETURNED` immediately, both cancel forms return without
+blocking, and the settlement is **discarded** — never lowered, never
+reported, no longer guest-wakeable for deadlock detection.
 The host operation is not interrupted; discard is about delivery, not
 execution.
 
@@ -296,12 +285,9 @@ across runtime copies. Dispatch by target:
 - `sync()` on an async-typed export, or on anything unbranded, throws
   `TypeError` at adapter time.
 
-**Call semantics.** Arguments lower synchronously; the call enters a plain
-(non-`promising`) entry; the reference's synchronous driving loop
-(`canon_lift`) runs the task to resolution; results lift synchronously.
-`result<T, E>` throws `ComponentException<E>` synchronously; handle-valued
-results return handles; call-scoped borrows release on completion or
-unwind.
+**Call semantics.** A synchronous `canon_lift` through a plain
+(non-`promising`) entry. `result<T, E>` throws `ComponentException<E>`
+synchronously; handle-valued results return handles.
 
 **Failure ladder** (ordered; 1–3 are non-poisoning):
 
@@ -358,7 +344,7 @@ factory is the escape hatch, deferred until demanded.
 | host receives `own<R>` | new instance; host owns it (drop/`using`) | the host's own instance; the guest's handle is gone; no dispose call |
 | host receives `borrow<R>` | valid only during the call (retention throws) | the host's own instance; scoping is guest-side bookkeeping |
 | host passes `own<R>` | wrapper invalidated (transferred) | instance registered; guest owns the handle |
-| host passes `borrow<R>` | wrapper stays valid | guest may not retain past the call (CABI-enforced); an unregistered instance gets a rep for the call's duration |
+| host passes `borrow<R>` | wrapper stays valid | an unregistered instance gets a rep for the call's duration |
 
 ### Pattern (non-normative): binding platform classes directly
 
@@ -547,14 +533,13 @@ host end and never acting) hangs.
 (the host spelling of the `CopyEnd` busy trap). Reading while a write is
 parked on the same stream is legal.
 
-**Dropping an unwritten future is abandonment, not DROPPED** (#90). The
-CABI forbids a writable future end dropping before delivery
-(definitions.py:1183). Host-side: `Future.drop()` on a lowered,
-never-written future never throws and is idempotent; the guest's readable
-end observes a **trap at its rendezvous** ("the host dropped the writable
-end without writing a value"), never a DROPPED event or a hang. An
-unlowered future just releases state. Producer rejections keep the loud
-site-named fault path.
+**Dropping an unwritten future is abandonment, not DROPPED** (#90).
+`Future.drop()` on a lowered, never-written future never throws and is
+idempotent; the guest's readable end observes a **trap at its rendezvous**
+("the host dropped the writable end without writing a value") — the
+host-side spelling of the guest's own drop-before-write trap — never a
+DROPPED event or a hang. An unlowered future just releases state.
+Producer rejections keep the loud site-named fault path.
 
 **`cancelRead` is indistinguishable from end-of-stream** (#97): it
 settles the in-flight `read` with an empty chunk, presented as clean EOS
@@ -588,12 +573,12 @@ ABI copy, so external buffer movers pay no second copy.
   peer stays parked, no event is delivered (the speculative-park
   pattern). `"more"` with zero marked rejects `TypeError`. A throwing
   callback rejects the session and discards its marks. In every outcome
-  the peer's operation survives and the stream stays alive; the runtime
-  never emits a zero-progress COMPLETED copy (unreachable in
-  definitions.py for nonzero capacity; a guest may misread it as EOS).
-- **Zero-length-read readiness** (Concurrency.md "Stream Readiness"): a
-  parked session answers a zero-length probe with immediate COMPLETED
-  without invoking the callback; retraction corrects a speculative claim.
+  the peer's operation survives and the stream stays alive; a
+  zero-progress COMPLETED copy is never emitted (a guest may read it as
+  EOS).
+- **Zero-length-read readiness**: a parked session is the readiness
+  claim — a zero-length probe completes immediately without invoking the
+  callback; retraction corrects a speculative claim.
 - **Host↔host**: a direct session against a peer *chunk* end costs one
   copy (`produce` fills a fresh scratch that becomes the chunk; `consume`
   gets a scoped view of the offered chunk). Two direct sessions cannot
