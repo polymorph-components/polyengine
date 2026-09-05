@@ -385,7 +385,12 @@ export function createWaitableJoin(inst: ComponentInstanceState): CoreFn {
     trapIf(!(w instanceof Waitable), "waitable.join: handle is not a waitable");
     trapIf(
       (w as Waitable).hasSyncWaiter,
-      "waitable.join on a waitable with a synchronous waiter",
+      // Wording per the suite's assertions
+      // (test/async/trap-if-sync-and-waitable-set.wast:301-307,
+      // test/async/reentrance.wast:837): a waitable claimed synchronously and
+      // a waitable in a set are the two halves of one rule, spelled the same.
+      "waitable cannot be used synchronously while added to a waitable set " +
+        "(waitable.join)",
     );
     if ((si ?? 0) === 0) {
       (w as Waitable).join(null);
@@ -478,9 +483,17 @@ export function createSubtaskCancel(
       st.cancellationRequested,
       "subtask.cancel on a subtask that was already cancelled",
     );
+    // definitions.py `canon_subtask_cancel`: `trap_if(subtask.in_waitable_set())`
+    // is unconditional — BOTH forms trap, because either form may claim the
+    // subtask synchronously (`has_sync_waiter`, below) and a subtask in a set
+    // is not the claimer's to take. Corroborated by
+    // test/async/trap-if-sync-and-waitable-set.wast:325-327, which asserts the
+    // trap for `subtask-cancel-sync-when-in-set` AND
+    // `subtask-cancel-async-when-in-set`, with the wording used here.
     trapIf(
-      st.inWaitableSet() && !async_,
-      "synchronous subtask.cancel on a subtask that is in a waitable set",
+      st.inWaitableSet(),
+      "waitable cannot be used synchronously while added to a waitable set " +
+        "(subtask.cancel)",
     );
     if (st.resolved()) {
       assert_(
@@ -493,91 +506,101 @@ export function createSubtaskCancel(
         st.onCancel !== null,
         "subtask.cancel on a subtask with no cancellation handler",
       );
-      st.onCancel!(inst);
-      if (!st.resolved()) {
-        if (!async_) {
-          if (mode === "jspi") {
-            // SITE 5 (lit): a sync `subtask.cancel` blocks until the callee
-            // actually resolves (definitions.py `canon_subtask_cancel`), then
-            // reports the resolved state through the same tail as the
-            // non-blocking path. Mirrors SITE 4 (stream_builtins.ts:305-323)
-            // and `Waitable.waitForPendingEvent` (definitions.py:786-790,
-            // reached from canon_subtask_cancel's `subtask.wait_for_pending_event()`
-            // call, :2484): `hasSyncWaiter` must
-            // be set for the duration so a concurrent `waitable.join` on
-            // this subtask traps (async_builtins.ts:362-365) instead of
-            // racing the SUBTASK event away from this resume (#87).
-            st.hasSyncWaiter = true;
-            return blockCurrentActivation({
-              store: inst.store,
-              task: currentTask(),
-              readyFunc: () => st.hasPendingEvent(),
-              cancellable: false,
-              produce: () => {
-                st.hasSyncWaiter = false;
-                return finish();
-              },
-              // #106: `abandon` never runs `produce`; without the backstop
-              // the flag stayed set forever and a later `waitable.join` on
-              // this subtask trapped spuriously. Idempotent, so the success
-              // path's clear-inside-`produce` ordering is untouched.
-              onSettled: () => {
-                st.hasSyncWaiter = false;
-              },
-            }) as unknown as number;
-          }
-          needsJspi(
-            "synchronous subtask.cancel whose callee did not resolve " +
-              "immediately (the calling wasm frame must block)",
-          );
-        }
-        // The ASYNC form answers "did the cancellation resolve the callee
-        // promptly?" — BLOCKED only when it genuinely did not
-        // (definitions.py line 2486). Under jspi "promptly" is invisible at
-        // this instant: `request_cancellation` delivered TASK_CANCELLED by
-        // settling the callee's suspension, and the engine runs the resumed
-        // activation (whose `task.cancel` resolves this subtask) on a LATER
-        // microtask (pin (j)). Deciding now reports BLOCKED for a callee the
-        // reference resolves synchronously (cancellable.wast tests 1-2). So:
-        // wait until the callee is DETERMINATE — resolved, finished, or
-        // re-parked on a scheduler condition — exactly `async-start-call`'s
-        // rule (fact_calls.ts). A callee with a pending (undeliverable)
-        // cancel sits parked non-cancellably, which is determinate, so the
-        // genuine BLOCKED answer is still immediate. Host-import subtasks
-        // carry no callee task, and their state cannot be mid-hop: the
-        // default onCancel resolves them before this branch is ever
-        // reached, and a `deferCancel` import's no-op onCancel leaves them
-        // simply unresolved — either way the pre-jspi immediate answer
-        // stands.
+      // definitions.py `canon_subtask_cancel` sets `has_sync_waiter` BEFORE
+      // `on_cancel()` and clears it once the claim ends — for BOTH forms, and
+      // whether or not the call goes on to block. The window matters because
+      // `on_cancel()` can run the cancelled callee synchronously, and that
+      // callee may reenter this instance: the reentrant frame must see the
+      // subtask as claimed and trap in `canon_waitable_join`
+      // (`trap_if(w.has_sync_waiter)`) — test/async/reentrance.wast:837.
+      // `parked` hands the clear over to the park's `produce`/`onSettled`
+      // (#106: `abandon` never runs `produce`, so the flag needs the
+      // `onSettled` backstop or it stays set forever and a later
+      // `waitable.join` traps spuriously).
+      st.hasSyncWaiter = true;
+      let parked = false;
+      try {
+        st.onCancel!(inst);
+
+        // Is the callee's state safe to READ yet? Under jspi it may not be.
+        // `request_cancellation` delivers TASK_CANCELLED by settling the
+        // callee's suspension, and the engine runs the resumed activation on
+        // a LATER microtask (pin (j)); the reference has no such hop —
+        // `Task.request_cancellation` -> `Thread.resume` runs the resumed
+        // thread to its next block point or exit synchronously, so when
+        // `on_cancel()` returns the callee is never mid-hop.
+        //
+        // DETERMINATE = every callee thread finished, or the callee is parked
+        // on a scheduler condition — exactly `async-start-call`'s rule
+        // (fact_calls.ts). Deliberately NOT "or `st.resolved()`":
+        // resolved-but-mid-hop is precisely the stale state this park exists
+        // to avoid. A callee whose callback already ran `task.cancel` and
+        // returned EXIT is resolved while its `Thread` is still parked on
+        // `awaitValue` holding `inst.exclusiveThread`; answering from here
+        // then makes the NEXT `subtask.cancel` see the instance excluded and
+        // report BLOCKED, and the guest's `subtask.drop` traps "not yet
+        // resolved" (test/async/reentrance.wast:517).
+        //
+        // A callee with a pending (undeliverable) cancel sits parked
+        // non-cancellably, which is determinate, so the genuine BLOCKED
+        // answer is still immediate. Host-import subtasks carry no callee
+        // task and cannot be mid-hop: the default onCancel resolves them
+        // before this point, and a `deferCancel` import's no-op onCancel
+        // leaves them simply unresolved — either way the answer is immediate.
         //
         // NAMED DIVERGENCE (docs/architecture.md §6, #92): this park makes
         // the async built-in non-atomic — other ready threads may run while
         // it waits, a reordering within the reference's Store.tick freedom
         // taken one built-in early.
-        if (mode === "jspi" && st.calleeTask !== null) {
-          const t = st.calleeTask as {
-            threads: { done(): boolean }[];
-          };
-          const store = inst.store as unknown as {
-            waiting: { task?: unknown }[];
-          };
-          const determinate = (): boolean =>
-            st.resolved() ||
-            t.threads.every((th) => th.done()) ||
-            store.waiting.some((w) => w.task === st.calleeTask);
-          if (!determinate()) {
-            return blockCurrentActivation({
-              store: inst.store,
-              task: currentTask(),
-              readyFunc: determinate,
-              cancellable: false,
-              produce: () => (st.resolved() ? finish() : BLOCKED),
-            }) as unknown as number;
+        const callee = st.calleeTask as
+          | { threads: { done(): boolean }[] }
+          | null;
+        const store = inst.store as unknown as {
+          waiting: { task?: unknown }[];
+        };
+        const determinate = (): boolean =>
+          callee === null ||
+          callee.threads.every((th) => th.done()) ||
+          store.waiting.some((w) => w.task === st.calleeTask);
+        // The SYNC form additionally blocks until the callee actually
+        // resolves (definitions.py `canon_subtask_cancel`:
+        // `thread.wait_until(subtask.resolved)`), then reports the resolved
+        // state through the same tail as the non-blocking path — SITE 5
+        // (lit), mirroring SITE 4 (stream_builtins.ts) and
+        // `Waitable.waitForPendingEvent`. The ASYNC form answers BLOCKED as
+        // soon as the callee is determinate and still unresolved.
+        const ready = (): boolean =>
+          determinate() && (async_ || st.hasPendingEvent());
+
+        if (mode !== "jspi") {
+          if (st.resolved()) return finish();
+          if (!async_) {
+            needsJspi(
+              "synchronous subtask.cancel whose callee did not resolve " +
+                "immediately (the calling wasm frame must block)",
+            );
           }
-          if (!st.resolved()) return BLOCKED;
-          return finish();
+          return BLOCKED;
         }
-        return BLOCKED;
+        if (!ready()) {
+          parked = true;
+          return blockCurrentActivation({
+            store: inst.store,
+            task: currentTask(),
+            readyFunc: ready,
+            cancellable: false,
+            produce: () => {
+              st.hasSyncWaiter = false;
+              return st.resolved() ? finish() : BLOCKED;
+            },
+            onSettled: () => {
+              st.hasSyncWaiter = false;
+            },
+          }) as unknown as number;
+        }
+        return st.resolved() ? finish() : BLOCKED;
+      } finally {
+        if (!parked) st.hasSyncWaiter = false;
       }
     }
     return finish();

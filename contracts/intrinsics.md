@@ -202,8 +202,15 @@ components.
   entry *decision*: an async-lowered call reports STARTING only if the
   callee is still unstarted after the callee instance's runnable work is
   drained to quiescence (`Store.hasRunnableWork`, consumed by
-  `createAsyncStartCall`'s determinacy park). `async-start-call` is
-  `Suspending`-wrapped for the determinacy park; plain mode provably never
+  `createAsyncStartCall`'s determinacy park). `async-start-call` (and
+  `subtask.cancel`, for its own post-`on_cancel` determinacy park) is
+  `Suspending`-wrapped for the park, and **wrapped implies marked**: pin (c)
+  traps a Suspending import reached from a non-promising activation even
+  when it returns a plain value, so a guest importing one gets
+  promising-wrapped entries — as a separate evidence tier that neither
+  selects jspi mode nor promotes a FACT adapter's pass-through exports
+  (which would promising-wrap eagerly-completing lift callees). Plain mode
+  provably never
   needs the drain (without JSPI a frame cannot park mid-invocation, so a
   held gate always belongs to the currently-running activation — the one
   obstacle a drain cannot remove), so the plain path stays zero-cost for

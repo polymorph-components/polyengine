@@ -138,15 +138,15 @@ export function trampolineNeedsSuspension(
  *     (async_builtins.ts; cancellable.wast asserts the reference's
  *     synchronous-delivery answers).
  *
- * Neither is a *reason* to choose jspi mode, and neither marks its importer
- * suspendable (`Executor.suspendableFuncs`): their parks only ever trigger
- * when the nested callee is itself promising-wrapped, i.e. when a genuine
- * blocker has already contaminated the adapter through the transitive import
- * rule. Marking on these kinds is not only unnecessary — it is wrong: the
- * FACT adapter's `[adapter-callee]*` pass-through exports are what get
- * passed to `*-start-call` as lift callees, and marking the whole adapter
- * instance promoted every eagerly-completing callee to promising, recreating
- * the STARTED-vs-RETURNED divergence one level up.
+ * Neither is a *reason* to choose jspi mode. Both DO mark a GUEST importer
+ * suspendable — wrapped implies marked, because jspi pin (c) traps a
+ * Suspending import called from a non-promising activation even on the
+ * plain-value path (reentrance.wast:429) — but as a separate evidence tier
+ * that does not promote a FACT adapter's `[adapter-callee]*` pass-through
+ * exports: those are what `*-start-call` receives as lift callees, and
+ * promising-wrapping an eagerly-completing callee is the STARTED-vs-RETURNED
+ * divergence (drop-subtask.wast:140 under a seed). See
+ * `Executor.suspendableFuncs` / `wrapFuncs`.
  */
 export function trampolineCanBlock(
   t: { kind: string; async?: unknown; options?: unknown },
