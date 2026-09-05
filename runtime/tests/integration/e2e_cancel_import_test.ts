@@ -444,3 +444,92 @@ Deno.test(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// Issue #280: an activation this driver put in flight, abandoned mid-hop.
+//
+// The export driver's exit predicate was "the task resolved AND no thread OF
+// THIS TASK is mid-wasm-call". A BACKGROUND task's callback activation —
+// resumed by this driver's own `tick`, hop-parked in `store.awaiting` while
+// the promising entry settles — is not a thread of this task, so `done()`
+// went true and the driver walked away from work it had just started.
+// Nothing else owned it: the settlement pump arms only on outstanding real
+// host calls (`hasRealHostCall`), and the host call whose settlement caused
+// the resumption is gone from `pendingHostCalls` by then. The activation sat
+// in `store.awaiting` until some unrelated later call happened to drive the
+// store — issue #280's trace `#25 EXIT-done awaiting=1`, reproduced verbatim
+// by the pre-fix runtime here.
+// ---------------------------------------------------------------------------
+
+Deno.test(
+  "cancel-import #280: an export driver may not exit leaving a hop-parked activation of another task",
+  async () => {
+    // Every `sleep` call hands back a promise this test settles by hand, so
+    // the settlement lands exactly where the issue puts it: on a microtask
+    // inside a LATER export call's driver.
+    const gates: Array<() => void> = [];
+    const imports = {
+      sleep: (_ms: bigint) => new Promise<void>((r) => gates.push(() => r())),
+      block: suspending((ms: bigint) => delay(Number(ms))),
+      "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
+      timers: { "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))) },
+      "sleep-abort": abortable((ms: bigint, _signal: AbortSignal) =>
+        delay(Number(ms))
+      ),
+    };
+    const component = await instantiateComponent({
+      plan,
+      componentBytes: guestWasm,
+      adapters,
+      imports,
+    });
+    const e = component.exports as Exports;
+    const store = component.componentInstances[0].store;
+
+    // `start-poll-drop` returns as soon as its detached task parks, so from
+    // here on the guest task is BACKGROUND: resolved, no driver of its own.
+    // Per src/lib.rs it issues S1 (polled once, in flight), then awaits S2.
+    await e["start-poll-drop"](1n, 1n);
+    assertEq(gates.length, 2, "S1 and S2 should both be in flight");
+
+    // Retire S1 so no real host call is left to arm the settlement pump for
+    // the window under test (the guest's own drop of S1 is a discard, which
+    // is about delivery, not about the host promise).
+    gates[0]();
+    await delay(20);
+
+    // S2 settles with no export call outstanding: the pump drives it, the
+    // detached task drops S1 and issues S3. S3 is now the ONLY host call.
+    gates[1]();
+    await delay(20);
+    assertEq(gates.length, 3, "the detached task should be parked on S3");
+
+    // THE WINDOW. `ping()` starts the second export call; resolving S3
+    // synchronously right after makes it settle on a microtask while that
+    // driver is live. The driver resumes the background task's callback
+    // activation — a promising entry, so it hop-parks — and the activation's
+    // tail (which retires the resumed task) is the driver's to see land.
+    const pong = e.ping() as Promise<number>;
+    gates[2]();
+    assertEq(await pong, 42, "ping must still answer");
+
+    // Nothing else drives the store from here: no host call is outstanding,
+    // so the settlement pump does not arm. A hop still in `store.awaiting`
+    // after this point is owned by nobody.
+    await delay(50);
+    assertTrue(
+      store.awaiting.size === 0,
+      `issue #280 regression: ping()'s driver exited leaving ` +
+        `${store.awaiting.size} hop-parked activation(s) of a background ` +
+        `task in store.awaiting, with no host call outstanding to arm the ` +
+        `settlement pump — the trace's "EXIT-done ... awaiting=1". The ` +
+        `driver must not report done while any thread, of any task, is ` +
+        `hop-parked.`,
+    );
+
+    // Leak hygiene: nothing is waiting on the remaining gate, but settle it
+    // so no promise is left dangling behind the test.
+    for (const g of gates) g();
+    await delay(20);
+  },
+);

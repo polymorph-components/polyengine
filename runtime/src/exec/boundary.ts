@@ -1624,10 +1624,36 @@ export function createLiftedFunction(input: {
       // satisfy — that is a **background activation**: we return to the host
       // and leave the thread live, and later `drive`/`pump` calls (host stream
       // writes, the next export call) go on servicing it.
+      //
+      // AND THE PARK NEED NOT BE THIS TASK'S (issue #280). Scoping the
+      // wasm-call test to `task.threads` under-approximates the reference
+      // embedding, whose loop drains the whole store (`while store.waiting:
+      // store.tick()`, run_tests.py `lift_and_run`). What it missed is an
+      // activation THIS DRIVER PUT IN FLIGHT: a background task's host import
+      // settles on a microtask while this driver is live, this driver's
+      // `tick` resumes that task's callback activation, the promising entry
+      // hop-parks it (jspi pin (j) — contracts/intrinsics.md §"JSPI
+      // integration constraints" 4), and then this predicate — blind to
+      // another task's threads — declared the driver done. Nobody else owned
+      // that hop: the settlement pump arms only on outstanding real host
+      // calls, and the call that caused the resumption had already settled
+      // and left `pendingHostCalls`. Trace: `EXIT-done ... awaiting=1`, then
+      // an activation nothing services until an unrelated later call happens
+      // to drive the store.
+      //
+      // So the rule: a driver is not done while ANY thread of ANY task is
+      // hop-parked. A hop settles on the engine's own schedule, so waiting
+      // for it is bounded — the driver that caused it must see it land. The
+      // two tests are complementary and both stay: `hopParked` deliberately
+      // EXCLUDES genuinely JSPI-suspended activations (SuspensionPoint-owned
+      // parks, which only the embedder can satisfy and which are exactly the
+      // "background activation" case above), and `midWasmCall` is what still
+      // covers this task's own suspended thread.
       const midWasmCall = () => task.threads.some((t) => store.awaiting.has(t));
+      const hopParked = () => entryHopThreads(store).length > 0;
       pending = drive(
         store,
-        () => resolvedSeen && !midWasmCall(),
+        () => resolvedSeen && !midWasmCall() && !hopParked(),
         `export '${name}'`,
       );
     } catch (e) {
@@ -1690,14 +1716,20 @@ export function createLiftedFunction(input: {
 }
 
 /**
- * Threads of `inst` parked on a promising-entry hop: in `store.awaiting`
- * with no `SuspensionPoint` owner in `store.waiting` (that would be a
- * genuine JSPI suspension). Mirrors `Store.hasRunnableWork`'s (b)/(c)
- * split.
+ * Threads parked on a promising-entry hop: in `store.awaiting` with no
+ * `SuspensionPoint` owner in `store.waiting` (that would be a genuine JSPI
+ * suspension). Mirrors `Store.hasRunnableWork`'s (b)/(c) split.
+ *
+ * `inst` narrows the result to one component instance — what the
+ * hop-quiescence gate needs, since the memory a pending lift will read
+ * belongs to that instance. Omitted, the result is store-wide: what the
+ * export driver's `done` predicate needs (issue #280), where the question is
+ * not whose memory is at risk but whether any activation this driver put in
+ * flight is still mid-hop.
  */
 function entryHopThreads(
   store: Store,
-  inst: unknown,
+  inst?: unknown,
 ): { awaiting: Promise<unknown> | null }[] {
   if (store.awaiting.size === 0) return [];
   const suspended = new Set<unknown>();
@@ -1711,7 +1743,8 @@ function entryHopThreads(
       task: { inst: unknown };
       awaiting: Promise<unknown> | null;
     };
-    if (tt.task.inst === inst && !suspended.has(t)) out.push(tt);
+    if (inst !== undefined && tt.task.inst !== inst) continue;
+    if (!suspended.has(t)) out.push(tt);
   }
   return out;
 }
