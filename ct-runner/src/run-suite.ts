@@ -52,8 +52,15 @@ export interface RunSuiteOptions {
    * does the same normalization (`replaceAll("-", "_")`).
    */
   suiteName: string;
-  /** Substring filter: non-matching cases are skipped entirely (no emit),
-   * per js/viewer/harness.mjs `runCases`'s `only` handling. */
+  /** Substring selection: census cases outside it are reported `deselected`
+   * (never executed) rather than omitted, so subset runs keep full
+   * coverage with the subsetting visible as selection policy
+   * (js/viewer/harness.mjs `runCases`'s `only` doc comment;
+   * docs/runner-policy.md "Selection is not capability"). Capability wins:
+   * a tags-excluded case stays `not-applicable` even outside the
+   * selection. A filter matching no census case throws (empty selection is
+   * a run error) when the loop sees the whole census — unsharded; pooled
+   * coordinators apply the same guard over merged counts. */
   only?: string;
   /**
    * Feature-tag scheduling (issue #25): the features this target LACKS —
@@ -98,7 +105,9 @@ export interface RunSuiteOptions {
    * nor emitted, exactly as if it never existed for this shard) — this is
    * the interpretation that keeps the invariant "the union of every shard's
    * rows, in suite order, equals the unsharded run's rows" (pinned by
-   * shard_test.ts's partition-identity test).
+   * shard_test.ts's partition-identity test). Cases IN the stripe that are
+   * then filtered out by `only` still get their `deselected` row, same as
+   * an unsharded run.
    *
    * Sharded envelope/terminator contract: a sharded call still emits its
    * own envelope line and its own `{"segment-end":true}` terminator —
@@ -133,6 +142,12 @@ export interface RunCounts {
   skipped: number;
   /** Cases scheduled out as `not-applicable` (tag gating; harness.mjs `na`). */
   na: number;
+  /** Cases outside `only` (harness.mjs `deselected`): never executed, but
+   * emitted as a `deselected` row (capability outranks selection). */
+  deselected: number;
+  /** Census cases matching the selection (all of them without `only`),
+   * regardless of applicability (harness.mjs `runCases` doc comment). */
+  selected: number;
   total: number;
 }
 
@@ -170,9 +185,10 @@ function describeThrow(e: unknown): string {
  * emit the complete results-JSONL stream (envelope, one line per case,
  * terminator) through `opts.emit`. Throws `MissingImportsError` up front
  * (contracts/embedder-api.md's `requiredImports`) if the caller's imports
- * cannot satisfy the suite, and a plain `Error` if the census is empty (an
- * empty selection is a run error, per component-test-results/src/lib.rs's
- * `fold_jsonl` and harness.mjs's `runSuiteJsonl` — both refuse it).
+ * cannot satisfy the suite, and a plain `Error` if the census is empty or
+ * an unsharded `only` selects nothing (an empty selection is a run error,
+ * per component-test-results/src/lib.rs's `fold_jsonl` and harness.mjs's
+ * `runSuiteJsonl`/`runCases` — all refuse it).
  */
 export async function runSuite(
   artifacts: ComponentArtifacts,
@@ -256,7 +272,15 @@ export async function runSuite(
     );
   }
 
-  const counts: RunCounts = { passed: 0, failed: 0, skipped: 0, na: 0, total: 0 };
+  const counts: RunCounts = {
+    passed: 0,
+    failed: 0,
+    skipped: 0,
+    na: 0,
+    deselected: 0,
+    selected: 0,
+    total: 0,
+  };
 
   for (const [i, testCase] of census.entries()) {
     // Stripe membership (issue #110) is decided on the census index `i`,
@@ -267,13 +291,17 @@ export async function runSuite(
 
     const name = String(await testCase.name());
     counts.total++;
-    // js/viewer/harness.mjs `runCases`: "if (only && !name.includes(only))
-    // continue" — a filtered-out case is skipped entirely, no emit.
-    if (opts.only && !name.includes(opts.only)) continue;
+    // harness.mjs `runCases`: `isSelected` is computed up front (before tag
+    // gating) and counted in `selected` regardless of applicability — a
+    // case can be both selected and N/A.
+    const isSelected = !opts.only || name.includes(opts.only);
+    if (isSelected) counts.selected++;
 
-    // harness.mjs `runCases` mark scheduling, in its exact order: `only`
-    // first (above), then drift, then applicability. The N/A row's shape is
-    // the embed runner's (expected/verify-pipeline-fixture.jsonl):
+    // harness.mjs `runCases` mark scheduling, in its exact order:
+    // applicability first, THEN selection — "capability wins over
+    // selection" (docs/runner-policy.md "Selection is not capability"): a
+    // tags-excluded case is N/A regardless of `only`. The N/A row's shape
+    // is the embed runner's (expected/verify-pipeline-fixture.jsonl):
     // status, first excluding mark as detail, diagnostics-complete true.
     if (inventory !== null) {
       const tags = tagsOf(inventory, name);
@@ -291,6 +319,23 @@ export async function runSuite(
         opts.log?.(`${name} … not-applicable`);
         continue;
       }
+    }
+
+    // A case that applies but sits outside `only`: reported `deselected`
+    // (never executed) rather than omitted, so subset runs keep full
+    // coverage with the subsetting visible as selection policy
+    // (harness.mjs `runCases`; docs/runner-policy.md "Selection is not
+    // capability"). Exact row shape (harness.mjs:197): case, status,
+    // `only <filter>` detail — no other fields.
+    if (!isSelected) {
+      counts.deselected++;
+      opts.emit(JSON.stringify({
+        case: name,
+        status: "deselected",
+        detail: `only ${opts.only}`,
+      }), i);
+      opts.log?.(`${name} … deselected`);
+      continue;
     }
 
     // js/viewer/harness.mjs `runCases`' `freshCases` branch: re-enumerate
@@ -417,6 +462,17 @@ export async function runSuite(
     if (diags.length > 0) event.diagnostics = diags;
     opts.emit(JSON.stringify(event), i);
     opts.log?.(`${name} … ${event.status}`);
+  }
+
+  // The reference runner's empty-selection rule (a typo'd filter must not
+  // exit green with the whole census deselected), applied where the whole
+  // census is visible — unsharded (harness.mjs `runCases`: "sharded stripes
+  // may legitimately match nothing; their coordinator guards over merged
+  // counts").
+  if (opts.only && opts.shard === undefined && counts.selected === 0) {
+    throw new Error(
+      `only \`${opts.only}\` matches no cases (empty selection is a run error)`,
+    );
   }
 
   opts.emit('{"segment-end":true}');

@@ -158,7 +158,15 @@ Deno.test({
     });
     // hw missing: diag/slow (hw) is N/A; basic/skip (!hw) APPLIES and runs
     // to its usual skipped verdict.
-    assertEq(counts, { passed: 3, failed: 1, skipped: 1, na: 1, total: 6 });
+    assertEq(counts, {
+      passed: 3,
+      failed: 1,
+      skipped: 1,
+      na: 1,
+      deselected: 0,
+      selected: 6,
+      total: 6,
+    });
 
     const envelope = JSON.parse(lines[0]);
     assertEq(envelope.run.scheduling, "tags");
@@ -190,11 +198,66 @@ Deno.test({
       // fully-featured target (tags.rs polarity).
       emit: (l) => lines.push(l),
     });
-    assertEq(counts, { passed: 4, failed: 1, skipped: 0, na: 1, total: 6 });
+    assertEq(counts, {
+      passed: 4,
+      failed: 1,
+      skipped: 0,
+      na: 1,
+      deselected: 0,
+      selected: 6,
+      total: 6,
+    });
     const na = lines.slice(1, -1).map((l) => JSON.parse(l))
       .find((r) => r.status === "not-applicable");
     assertEq(na?.case, "suite/basic/skip");
     assertEq(na?.detail, "!hw");
+  },
+});
+
+Deno.test({
+  name: "tags e2e: capability wins over selection (N/A outranks deselected)",
+  ignore: !ready,
+  fn: async () => {
+    const bytes = withTags((await readArtifact(TEST_SUITE_WASM))!, RECORDS);
+    const lines: string[] = [];
+    const counts = await runSuite(artifactsOfBytes(bytes), {
+      target: "polyengine/test",
+      suiteName: "test-suite",
+      missing: ["hw"],
+      only: "basic/",
+      emit: (l) => lines.push(l),
+    });
+    const rows = lines.slice(1, -1).map((l) => JSON.parse(l));
+    const byCase = Object.fromEntries(rows.map((r) => [r.case, r]));
+    // diag/slow (hw) is N/A even though it's outside `only: "basic/"` —
+    // capability outranks selection (docs/runner-policy.md "Selection is
+    // not capability").
+    assertEq(byCase["suite/diag/slow"].status, "not-applicable");
+    // basic/ cases execute per their usual verdicts; basic/skip (!hw)
+    // APPLIES with hw missing and runs to its usual skipped verdict.
+    assertEq(byCase["suite/basic/pass"].status, "pass");
+    assertEq(byCase["suite/basic/fail"].status, "fail");
+    assertEq(byCase["suite/basic/skip"].status, "skipped");
+    // The remaining non-basic, non-excluded cases are deselected.
+    assertEq(byCase["suite/diag/chatty"], {
+      case: "suite/diag/chatty",
+      status: "deselected",
+      detail: "only basic/",
+    });
+    assertEq(byCase["suite/nested/deep/leaf"], {
+      case: "suite/nested/deep/leaf",
+      status: "deselected",
+      detail: "only basic/",
+    });
+    assertEq(counts, {
+      passed: 1,
+      failed: 1,
+      skipped: 1,
+      na: 1,
+      deselected: 2,
+      selected: 3,
+      total: 6,
+    });
   },
 });
 

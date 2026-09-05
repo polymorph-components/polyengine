@@ -212,7 +212,7 @@ async function main() {
     await Deno.writeTextFile(cli.out, lines.join("\n") + "\n");
     console.error(
       `${counts.passed} passed | ${counts.failed} failed | ${counts.skipped} skipped | ` +
-        `${counts.na} n/a (${counts.total} total) -> ${cli.out}`,
+        `${counts.na} n/a | ${counts.deselected} deselected (${counts.total} total) -> ${cli.out}`,
     );
     if (counts.failed > 0) Deno.exit(1);
   } catch (e) {

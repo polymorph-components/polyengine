@@ -1,7 +1,8 @@
 // Integration: the fixture suite end to end through `runSuite`, asserting
 // the case-loop policy mirrored from js/viewer/harness.mjs `runCases`/
 // `runSuiteJsonl`: fresh instance per case (default), diagnostics attached
-// to the right case, `only` filtering skips without emitting, and counts.
+// to the right case, `only` reports the unselected remainder as
+// `deselected` rows (never omitted), and counts.
 
 import { assertEq } from "../../runtime/tests/support/asserts.ts";
 import { runSuite } from "../src/mod.ts";
@@ -20,7 +21,15 @@ Deno.test({
       suiteName: "test-suite",
       emit: (l) => lines.push(l),
     });
-    assertEq(counts, { passed: 4, failed: 1, skipped: 1, na: 0, total: 6 });
+    assertEq(counts, {
+      passed: 4,
+      failed: 1,
+      skipped: 1,
+      na: 0,
+      deselected: 0,
+      selected: 6,
+      total: 6,
+    });
     assertEq(lines.length, 1 + 6 + 1); // envelope + 6 cases + terminator
 
     const events = lines.slice(1, -1).map((l) => JSON.parse(l));
@@ -64,7 +73,7 @@ Deno.test({
 });
 
 Deno.test({
-  name: "e2e: `only` filters cases out of the run entirely (no emit)",
+  name: "e2e: `only` reports the unselected remainder as `deselected` rows",
   ignore: !ready,
   fn: async () => {
     const artifacts = await artifactsOf(TEST_SUITE_WASM);
@@ -75,10 +84,65 @@ Deno.test({
       only: "diag/",
       emit: (l) => lines.push(l),
     });
-    const cases = lines.slice(1, -1).map((l) => JSON.parse(l).case);
-    assertEq(cases, ["suite/diag/chatty", "suite/diag/slow"]);
-    assertEq(counts.total, 6, "total counts every enumerated case, filtered or not");
-    assertEq(counts.passed, 2);
+    const rows = lines.slice(1, -1).map((l) => JSON.parse(l));
+    assertEq(rows.length, 6, "every census case still gets a row");
+    assertEq(rows.map((r) => r.case), [
+      "suite/basic/pass",
+      "suite/basic/fail",
+      "suite/basic/skip",
+      "suite/diag/chatty",
+      "suite/diag/slow",
+      "suite/nested/deep/leaf",
+    ]);
+    // The two `diag/` cases execute normally; the rest are exactly the
+    // `deselected` row shape (harness.mjs:197): case, status, detail — no
+    // other fields.
+    const byCase = Object.fromEntries(rows.map((r) => [r.case, r]));
+    for (
+      const name of [
+        "suite/basic/pass",
+        "suite/basic/fail",
+        "suite/basic/skip",
+        "suite/nested/deep/leaf",
+      ]
+    ) {
+      assertEq(byCase[name], {
+        case: name,
+        status: "deselected",
+        detail: "only diag/",
+      });
+    }
+    assertEq(byCase["suite/diag/chatty"].status, "pass");
+    assertEq(byCase["suite/diag/slow"].status, "pass");
+    assertEq(counts, {
+      passed: 2,
+      failed: 0,
+      skipped: 0,
+      na: 0,
+      deselected: 4,
+      selected: 2,
+      total: 6,
+    });
+  },
+});
+
+Deno.test({
+  name: "e2e: `only` matching nothing is a run error (unsharded)",
+  ignore: !ready,
+  fn: async () => {
+    const artifacts = await artifactsOf(TEST_SUITE_WASM);
+    let threw = "";
+    try {
+      await runSuite(artifacts, {
+        target: "t",
+        suiteName: "test-suite",
+        only: "no-such-case",
+        emit: () => {},
+      });
+    } catch (e) {
+      threw = String(e);
+    }
+    assertEq(threw.includes("matches no cases"), true);
   },
 });
 
@@ -94,6 +158,14 @@ Deno.test({
       freshCases: false,
       emit: (l) => lines.push(l),
     });
-    assertEq(counts, { passed: 4, failed: 1, skipped: 1, na: 0, total: 6 });
+    assertEq(counts, {
+      passed: 4,
+      failed: 1,
+      skipped: 1,
+      na: 0,
+      deselected: 0,
+      selected: 6,
+      total: 6,
+    });
   },
 });
