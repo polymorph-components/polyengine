@@ -92,7 +92,15 @@ Deno.test({
       missing: ["hw"],
       emit: (l: string) => lines.push(l),
     });
-    assertEq(counts, { passed: 3, failed: 1, skipped: 1, na: 1, total: 6 });
+    assertEq(counts, {
+      passed: 3,
+      failed: 1,
+      skipped: 1,
+      na: 1,
+      deselected: 0,
+      selected: 6,
+      total: 6,
+    });
     assertEq(JSON.parse(lines[0]).run.scheduling, "tags");
 
     // The wasi surface came along too (polymorph consumers wire it).
