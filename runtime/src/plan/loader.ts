@@ -65,6 +65,16 @@ export class TranslateError extends Error {
 /**
  * The single formatVersion this executor understands.
  *
+ * v5 (wasmtime `main` bump, polyengine translator-shim update): CoreDef lost
+ * `"task-may-block"` (wasmtime #14146 dropped the FACT-visible may-block
+ * global; sync-blocking is now enforced lazily by the scheduler). The `trap`
+ * trampoline gained a `code` field (now one nullary import per trap code,
+ * `runtime.trap<N>`, rather than a call argument). The thread trampoline set
+ * was renamed/expanded: `thread-suspend-to-suspended`, `thread-suspend-to`,
+ * `thread-unsuspend`, `thread-yield-to-suspended` are gone; `thread-index`
+ * gained an `instance` field; `thread-resume-later`,
+ * `thread-suspend-then-resume`, `thread-yield-then-resume`,
+ * `thread-suspend-then-promote`, `thread-yield-then-promote` are new.
  * v4 (2026-08-17, polyengine#13): `exports[]` gained the `"module"` kind — a
  * component exporting one of its own embedded core modules, surfaced as the
  * already-compiled `WebAssembly.Module`.
@@ -83,7 +93,7 @@ export class TranslateError extends Error {
  * failure, not a subtly different execution.
  * @internal
  */
-export const SUPPORTED_FORMAT_VERSION = 4;
+export const SUPPORTED_FORMAT_VERSION = 5;
 
 /**
  * A types-table entry after conversion.
@@ -464,8 +474,6 @@ function validateCoreDef(def: unknown, where: string): void {
     case "unsafe-intrinsic":
       expectString(d, "intrinsic", where);
       return;
-    case "task-may-block":
-      return;
     default:
       throw new PlanError(`${where}: unknown CoreDef kind ${describeValue(d.kind)}`);
   }
@@ -563,6 +571,8 @@ function validateTrampoline(t: unknown, where: string): void {
       expectNumber(tr, "type", where);
       return;
     case "trap":
+      expectNonNegativeInt(tr, "code", where);
+      return;
     case "enter-sync-call":
     case "exit-sync-call":
       return;

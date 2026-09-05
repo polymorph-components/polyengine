@@ -29,7 +29,7 @@ function assertPlanError(fn: () => unknown, includes: string) {
 function minimalPlan(overrides: Partial<WirePlan> = {}): WirePlan {
   return {
     formatVersion: SUPPORTED_FORMAT_VERSION,
-    producer: { shimVersion: "0", wasmtimeEnviron: "47.0.3", features: [] },
+    producer: { shimVersion: "0", wasmtimeEnviron: "49.0.0-dev+4675ee1", features: [] },
     component: { sha256: "0".repeat(64), len: 0 },
     modules: [],
     initializers: [],
@@ -377,13 +377,12 @@ Deno.test("loader: valid plans with well-formed initializers/trampolines/canonic
         module: 0,
         instance: null,
         args: [
-          { kind: "task-may-block" },
           { kind: "unsafe-intrinsic", intrinsic: "context.get-0" },
         ],
       },
     ],
     trampolines: [
-      { kind: "trap", index: 0 },
+      { kind: "trap", index: 0, code: 0 },
       { kind: "resource-drop", index: 1, instance: 0, resource: 0 },
     ],
     canonicalOptions: [

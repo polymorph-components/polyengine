@@ -5,7 +5,8 @@
 //! internals and our stable plan format); everything wasmtime-specific is
 //! confined here per docs/architecture.md §4.1.
 //!
-//! wasmtime-environ 47.0.3 API reality this maps from (recorded for the
+//! wasmtime-environ API reality this maps from (pinned rev, see root
+//! Cargo.toml; recorded for the
 //! contract-v0.1 review; see crate README):
 //!
 //! - `Component::exports: NameMap<TryString, (ExportIndex, ComponentExternData)>`
@@ -71,7 +72,18 @@ use wasmtime_environ::{EntityIndex, ModuleInternedTypeIndex, PrimaryMap, WasmVal
 /// kind (`Export::ModuleStatic`, a component exporting one of its own
 /// embedded core modules; previously a hard `unsupported` rejection).
 /// `Export::ModuleImport` remains rejected, now with a precise message.
-pub const FORMAT_VERSION: u32 = 4;
+///
+/// v5: tracks the wasmtime-environ rev bump (see root Cargo.toml). Breaking,
+/// not additive: `CoreDef::TaskMayBlock` was removed upstream (the
+/// `"task-may-block"` core-def kind is gone); `Trampoline::Trap` gained a
+/// `Trap` payload (`"trap"` trampolines now carry a `code` byte); the thread
+/// trampoline set was renamed/expanded (`thread-suspend-to-suspended`,
+/// `thread-suspend-to`, `thread-unsuspend`, `thread-yield-to-suspended` are
+/// gone; `thread-resume-later`, `thread-suspend-then-resume`,
+/// `thread-yield-then-resume`, `thread-suspend-then-promote`,
+/// `thread-yield-then-promote` are new; `thread-index` gained an `instance`
+/// field).
+pub const FORMAT_VERSION: u32 = 5;
 
 // ---------------------------------------------------------------------------
 // Plan schema (serde structs; field order == emission order == contract order)
@@ -115,7 +127,7 @@ pub struct Plan {
     /// (entry `i` is `ResourceIndex(i)`). Defined resources follow:
     /// `ResourceIndex = importedResources.len() + DefinedResourceIndex`,
     /// exactly wasmtime's `Component::resource_index`
-    /// (wasmtime-environ 47.0.3, `component/info.rs:222`).
+    /// (the pinned wasmtime-environ rev, see root Cargo.toml; `component/info.rs`).
     ///
     /// The `importedResources` field (contracts/plan-format.md schema)
     /// closes this gap; the field
@@ -249,8 +261,8 @@ pub enum CoreDefJson {
     },
     /// `CoreDef::UnsafeIntrinsic` (plan v1). Carried by *symbol name*, not by
     /// the enum's discriminant: `UnsafeIntrinsic` is `#[repr(u32)]` over a
-    /// macro-generated variant list (wasmtime-environ 47.0.3
-    /// `component/intrinsic.rs:9` `for_each_unsafe_intrinsic!`) whose ordinals
+    /// macro-generated variant list (the pinned wasmtime-environ rev, see root
+    /// Cargo.toml; `component/intrinsic.rs` `for_each_unsafe_intrinsic!`) whose ordinals
     /// are an unstable internal detail, while `name()` yields the stable
     /// spec-facing symbol (`"context-get-i32-0"`, `"u32-native-load"`, …).
     ///
@@ -263,7 +275,6 @@ pub enum CoreDefJson {
     UnsafeIntrinsic {
         intrinsic: &'static str,
     },
-    TaskMayBlock,
 }
 
 /// A core-instance export reference. `ExportItem::Index` is resolved to the
@@ -351,16 +362,17 @@ pub enum TrampolineDecl {
     FutureTransfer { index: u32 },
     StreamTransfer { index: u32 },
     ErrorContextTransfer { index: u32 },
-    Trap { index: u32 },
+    Trap { index: u32, code: u8 },
     EnterSyncCall { index: u32 },
     ExitSyncCall { index: u32 },
-    ThreadIndex { index: u32 },
+    ThreadIndex { index: u32, instance: u32 },
     ThreadNewIndirect { index: u32, instance: u32, start_func_type: u32, start_func_table: u32 },
-    ThreadSuspendToSuspended { index: u32, instance: u32, cancellable: bool },
-    ThreadSuspendTo { index: u32, instance: u32, cancellable: bool },
+    ThreadResumeLater { index: u32, instance: u32 },
     ThreadSuspend { index: u32, instance: u32, cancellable: bool },
-    ThreadUnsuspend { index: u32, instance: u32 },
-    ThreadYieldToSuspended { index: u32, instance: u32, cancellable: bool },
+    ThreadSuspendThenResume { index: u32, instance: u32, cancellable: bool },
+    ThreadYieldThenResume { index: u32, instance: u32, cancellable: bool },
+    ThreadSuspendThenPromote { index: u32, instance: u32, cancellable: bool },
+    ThreadYieldThenPromote { index: u32, instance: u32, cancellable: bool },
 }
 
 /// Stable kind string for a wasmtime `Trampoline` (matches the serde tags of
@@ -410,16 +422,17 @@ pub fn trampoline_kind(t: &Trampoline) -> &'static str {
         T::FutureTransfer => "future-transfer",
         T::StreamTransfer => "stream-transfer",
         T::ErrorContextTransfer => "error-context-transfer",
-        T::Trap => "trap",
+        T::Trap(_) => "trap",
         T::EnterSyncCall => "enter-sync-call",
         T::ExitSyncCall => "exit-sync-call",
-        T::ThreadIndex => "thread-index",
+        T::ThreadIndex { .. } => "thread-index",
         T::ThreadNewIndirect { .. } => "thread-new-indirect",
-        T::ThreadSuspendToSuspended { .. } => "thread-suspend-to-suspended",
-        T::ThreadSuspendTo { .. } => "thread-suspend-to",
+        T::ThreadResumeLater { .. } => "thread-resume-later",
         T::ThreadSuspend { .. } => "thread-suspend",
-        T::ThreadUnsuspend { .. } => "thread-unsuspend",
-        T::ThreadYieldToSuspended { .. } => "thread-yield-to-suspended",
+        T::ThreadSuspendThenResume { .. } => "thread-suspend-then-resume",
+        T::ThreadYieldThenResume { .. } => "thread-yield-then-resume",
+        T::ThreadSuspendThenPromote { .. } => "thread-suspend-then-promote",
+        T::ThreadYieldThenPromote { .. } => "thread-yield-then-promote",
     }
 }
 
@@ -916,7 +929,6 @@ impl<'a> PlanBuilder<'a> {
             },
             CoreDef::Trampoline(i) => CoreDefJson::Trampoline { index: i.as_u32() },
             CoreDef::UnsafeIntrinsic(i) => CoreDefJson::UnsafeIntrinsic { intrinsic: i.name() },
-            CoreDef::TaskMayBlock => CoreDefJson::TaskMayBlock,
         })
     }
 
@@ -961,7 +973,6 @@ impl<'a> PlanBuilder<'a> {
         match def {
             CoreDefJson::Export { .. } => "core-def".to_string(),
             CoreDefJson::InstanceFlags { .. } => "instance-flags".to_string(),
-            CoreDefJson::TaskMayBlock => "task-may-block".to_string(),
             CoreDefJson::UnsafeIntrinsic { intrinsic } => {
                 format!("unsafe-intrinsic:{intrinsic}")
             }
@@ -1236,10 +1247,13 @@ impl<'a> PlanBuilder<'a> {
             T::FutureTransfer => TrampolineDecl::FutureTransfer { index },
             T::StreamTransfer => TrampolineDecl::StreamTransfer { index },
             T::ErrorContextTransfer => TrampolineDecl::ErrorContextTransfer { index },
-            T::Trap => TrampolineDecl::Trap { index },
+            T::Trap(trap) => TrampolineDecl::Trap { index, code: *trap as u8 },
             T::EnterSyncCall => TrampolineDecl::EnterSyncCall { index },
             T::ExitSyncCall => TrampolineDecl::ExitSyncCall { index },
-            T::ThreadIndex => TrampolineDecl::ThreadIndex { index },
+            T::ThreadIndex { instance } => TrampolineDecl::ThreadIndex {
+                index,
+                instance: instance.as_u32(),
+            },
             T::ThreadNewIndirect {
                 instance,
                 start_func_ty_idx,
@@ -1250,21 +1264,9 @@ impl<'a> PlanBuilder<'a> {
                 start_func_type: start_func_ty_idx.as_u32(),
                 start_func_table: start_func_table_idx.as_u32(),
             },
-            T::ThreadSuspendToSuspended {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadSuspendToSuspended {
+            T::ThreadResumeLater { instance } => TrampolineDecl::ThreadResumeLater {
                 index,
                 instance: instance.as_u32(),
-                cancellable: *cancellable,
-            },
-            T::ThreadSuspendTo {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadSuspendTo {
-                index,
-                instance: instance.as_u32(),
-                cancellable: *cancellable,
             },
             T::ThreadSuspend {
                 instance,
@@ -1274,14 +1276,34 @@ impl<'a> PlanBuilder<'a> {
                 instance: instance.as_u32(),
                 cancellable: *cancellable,
             },
-            T::ThreadUnsuspend { instance } => TrampolineDecl::ThreadUnsuspend {
-                index,
-                instance: instance.as_u32(),
-            },
-            T::ThreadYieldToSuspended {
+            T::ThreadSuspendThenResume {
                 instance,
                 cancellable,
-            } => TrampolineDecl::ThreadYieldToSuspended {
+            } => TrampolineDecl::ThreadSuspendThenResume {
+                index,
+                instance: instance.as_u32(),
+                cancellable: *cancellable,
+            },
+            T::ThreadYieldThenResume {
+                instance,
+                cancellable,
+            } => TrampolineDecl::ThreadYieldThenResume {
+                index,
+                instance: instance.as_u32(),
+                cancellable: *cancellable,
+            },
+            T::ThreadSuspendThenPromote {
+                instance,
+                cancellable,
+            } => TrampolineDecl::ThreadSuspendThenPromote {
+                index,
+                instance: instance.as_u32(),
+                cancellable: *cancellable,
+            },
+            T::ThreadYieldThenPromote {
+                instance,
+                cancellable,
+            } => TrampolineDecl::ThreadYieldThenPromote {
                 index,
                 instance: instance.as_u32(),
                 cancellable: *cancellable,

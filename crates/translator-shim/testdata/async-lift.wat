@@ -4,7 +4,8 @@
 ;; Exercises: async function types, `canon lift ... async (callback ...)`,
 ;; `canon task.return`.
 ;;
-;; NOTE: wasmparser 0.252 (used by wasmtime-environ 47) requires the lifted
+;; NOTE: wasmparser 0.258 (used by the pinned wasmtime-environ git rev)
+;; requires the lifted
 ;; function's component-level type to be an ASYNC function type
 ;; (`(func async ...)`); wasm-tools CLI 1.247's validator predates that rule
 ;; but its text format already supports the syntax.

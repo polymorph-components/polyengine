@@ -37,18 +37,16 @@ the dependency.
 - Stack-switching proposal (JSPI's core-wasm sibling, context only):
   https://github.com/WebAssembly/stack-switching
 
-## wasmtime internals (pinned: wasmtime-environ **47.0.3**)
+## wasmtime internals (pinned: wasmtime-environ **49.0.0-dev+4675ee1**, a git rev of `main`)
 
-- API docs: https://docs.rs/wasmtime-environ/47.0.3/wasmtime_environ/
+- Source at the pinned rev:
+  https://github.com/bytecodealliance/wasmtime/tree/4675ee16b703b33948073a5ff6b961367371e7a1/crates/environ/src
   — notably `component::{Translator, Component, GlobalInitializer, CoreDef,
-  Trampoline, CanonicalOptions}` and `fact::Import`
-- Source at the pinned tag:
-  https://github.com/bytecodealliance/wasmtime/tree/v47.0.3/crates/environ/src
-  — FACT: `src/fact.rs` (+ `src/fact/`), component translation:
-  `src/component/`
+  Trampoline, CanonicalOptions}` and `fact::Import`. FACT: `src/fact.rs`
+  (+ `src/fact/`), component translation: `src/component/`
 - FACT design note ("polyfill for the component model in JS environments" is
   an intended consumer):
-  https://github.com/bytecodealliance/wasmtime/blob/v47.0.3/crates/environ/src/component/translate/adapt.rs
+  https://github.com/bytecodealliance/wasmtime/blob/4675ee16b703b33948073a5ff6b961367371e7a1/crates/environ/src/component/translate/adapt.rs
 - Wasmtime component wast tests (supplementary corpus):
   https://github.com/bytecodealliance/wasmtime/tree/main/tests/misc_testsuite/component-model
 
@@ -57,7 +55,7 @@ the dependency.
 - wasm-tools repo (CLI + crates): https://github.com/bytecodealliance/wasm-tools
 - `wast` crate (component-aware wast parsing, used by testgen):
   https://docs.rs/wast/
-- `wasmparser` (0.252.x — must match wasmtime-environ): https://docs.rs/wasmparser/
+- `wasmparser` (0.258.x — must match wasmtime-environ): https://docs.rs/wasmparser/
 - `wasm-encoder`: https://docs.rs/wasm-encoder/
 - `wit-parser` (bindgen input): https://docs.rs/wit-parser/
 - wit-bindgen (guest toolchain, pinned **0.60.0**):

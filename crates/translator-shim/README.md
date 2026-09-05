@@ -7,7 +7,8 @@ translator-spike (an earlier prototype crate); docs/architecture.md §4.1/§4.2.
 
 This crate is the only code in the repository that sees wasmtime's unstable
 internal shapes; everything it emits is our own schema. Pinned:
-`wasmtime-environ =47.0.3`, `wasmparser 0.252`.
+`wasmtime-environ` (pinned git rev, see root Cargo.toml; crate version
+49.0.0-dev), `wasmparser` 0.258 (wasm-tools).
 
 ## Artifact set vs C-ABI envelope
 
@@ -106,7 +107,7 @@ cargo build -p translator-shim --release --target wasm32-unknown-unknown \
   --config 'profile.release.strip=true'
 ```
 
-## wasmtime-environ 47.0.3 API notes (feeds contract v0.1)
+## wasmtime-environ API notes (feeds contract v0.1; pinned rev, see root Cargo.toml)
 
 Recorded here because plan-format.md left these underspecified; the mapping
 code is `src/plan.rs`.
@@ -131,18 +132,19 @@ code is `src/plan.rs`.
 - **FACT adapter imports** are already folded to `CoreDef`s by
   `translate/adapt.rs` (`fact_import_to_core_def`): every §A intrinsic
   arrives as `CoreDef::Trampoline` (Trap, EnterSyncCall, Transcoder, ...) or
-  a plain CoreDef (callee funcs, memories, instance-flags globals,
-  task-may-block). The per-adapter `intrinsics` manifest is those args zipped
-  with the adapter's import names, categorized by trampoline kind.
-- **Instance flags**: FACT 47 treats the flags global as a plain boolean
+  a plain CoreDef (callee funcs, memories, instance-flags globals). The
+  per-adapter `intrinsics` manifest is those args zipped with the adapter's
+  import names, categorized by trampoline kind.
+- **Instance flags**: FACT treats the flags global as a plain boolean
   `may_leave` (no bit masks); initial value 1.
-- **`ResourceDrop` has no `async` field** in 47.0.3 (`{ instance, ty }`) —
+- **`ResourceDrop` has no `async` field** (`{ instance, ty }`) —
   plan-format.md's example shows one.
 - **`Component::imported_resources: PrimaryMap<ResourceIndex,
   RuntimeImportIndex>`** is emitted as the plan's `importedResources`
-  (contracts v0.2 proposal). `Component::resource_index` (`info.rs:222`) is
+  (contracts v0.2 proposal). `Component::resource_index` (`info.rs`) is
   the mapping the runtime must reproduce:
-  `ResourceIndex = importedResources.len() + DefinedResourceIndex`.
+  `ResourceIndex = importedResources.len() + DefinedResourceIndex` (line
+  number not re-verified at the pinned rev).
 - **Feature gates**: beyond the async set, the shim enables
   `cm-fixed-length-lists`, `cm-map`, `cm-implements` and `cm-threading`,
   because the official suite contains components it expects to *decode* which

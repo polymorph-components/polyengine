@@ -13,8 +13,7 @@
 type CoreDef =
   | { kind: "export"; instance: number; item: { name: string; space: string } }
   | { kind: "instance-flags"; instance: number }
-  | { kind: "trampoline"; index: number }
-  | { kind: "task-may-block" };
+  | { kind: "trampoline"; index: number };
 
 type Envelope = {
   plan?: {

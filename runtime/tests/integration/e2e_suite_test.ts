@@ -404,9 +404,10 @@ async function commandsOf(dir: string): Promise<[string, WastCommand[]][]> {
 
 /**
  * Known acceptance gaps for the blanket verdict check below: wasmparser
- * 0.252 (pinned via wasmtime-environ 47.0.3, crates/translator-shim)
+ * 0.258 (pinned via wasmtime-environ's pinned git rev, crates/translator-shim)
  * validates components that CM#703/#704 ("name rules") and CM#688
- * ("max-value-size") require rejecting at the current pin. Tracked https://github.com/polymorph-components/polyengine/issues/248.
+ * ("max-value-size") require rejecting at the current pin — both files are
+ * still listed in upstream `test/nyi.txt`. Tracked https://github.com/polymorph-components/polyengine/issues/248.
  *
  * Authoritative source of truth for these rows is harness/src/xfail.ts (same
  * (file, line) keys): its stale-xfail detector (harness/tests/
@@ -420,15 +421,15 @@ async function commandsOf(dir: string): Promise<[string, WastCommand[]][]> {
  * the full phase-verdict check below.
  */
 const KNOWN_ACCEPTANCE_GAPS: ReadonlySet<string> = new Set([
-  // name-rules-47 (https://github.com/polymorph-components/polyengine/issues/248): kebab-case name-folding import
-  // conflicts wasmparser 0.252 does not detect.
+  // name-rules-nyi (https://github.com/polymorph-components/polyengine/issues/248): kebab-case name-folding import
+  // conflicts wasmparser 0.258 does not detect.
   "kebab.json:149",
   "kebab.json:154",
   "kebab.json:159",
   "kebab.json:164",
   "kebab.json:169",
-  // max-value-size-47 (https://github.com/polymorph-components/polyengine/issues/248): the elem_size(t, i64) < 2^28
-  // check wasmparser 0.252 does not enforce.
+  // max-value-size-nyi (https://github.com/polymorph-components/polyengine/issues/248): the elem_size(t, i64) < 2^28
+  // check wasmparser 0.258 does not enforce.
   "max-value-size.json:25",
   "max-value-size.json:31",
   "max-value-size.json:37",

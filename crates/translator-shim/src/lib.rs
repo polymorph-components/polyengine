@@ -15,7 +15,7 @@
 //! { "plan": { ... }, "adapters": [ { "file": "adapters/2.wasm", "wasm": "<base64>" } ] }
 //! ```
 //!
-//! Exact wasmtime-environ 47.0.3 entry points used:
+//! Exact wasmtime-environ entry points used (pinned rev, see root Cargo.toml):
 //!
 //! - `Translator::new(&Tunables, &mut wasmparser::Validator,
 //!   &mut ComponentTypesBuilder, &ScopeVec<u8>)`
@@ -37,6 +37,9 @@ use base64::Engine as _;
 use serde::Serialize;
 use wasmtime_environ::component::{ComponentTypesBuilder, Translator};
 use wasmtime_environ::{ScopeVec, Tunables, wasmparser};
+
+/// Pinned `wasmtime-environ` crate version + short git rev (root Cargo.toml).
+pub const WASMTIME_ENVIRON_VERSION: &str = "49.0.0-dev+4675ee1";
 
 pub mod error;
 pub mod plan;
@@ -85,12 +88,12 @@ fn features() -> wasmparser::WasmFeatures {
     f.insert(wasmparser::WasmFeatures::CM_THREADING);
     // ISSUE #95 TRIPWIRE — do not enable `CM_VALUES`.
     //
-    // Trusted wasmtime-environ 47.0.3's component frontend has two
-    // `unimplemented!()` panics that a `CM_VALUES`-accepted component can
-    // reach: a component `start` section (translate.rs:1338) and a
-    // component-level value import/export (translate.rs:1499). With the
-    // feature off (the wasmparser 0.252 default excludes it, and nothing
-    // above turns it on), `wasmparser::Validator` rejects both shapes during
+    // Trusted wasmtime-environ's component frontend (pinned rev, see root
+    // Cargo.toml) has two `unimplemented!()` panics that a
+    // `CM_VALUES`-accepted component can reach: a component `start` section
+    // and a component-level value import/export (`component/translate.rs`).
+    // With the feature off (the wasm-tools 0.258 default excludes it, and
+    // nothing above turns it on), `wasmparser::Validator` rejects both shapes during
     // validation — a `TranslateError { phase: Validation, .. }` envelope,
     // never reaching the translator body that panics. That is exercised and
     // pinned by `tests/cm_values_tripwire.rs`.
@@ -248,7 +251,7 @@ fn map_translation(
 
     let producer = plan::Producer {
         shim_version: env!("CARGO_PKG_VERSION").to_string(),
-        wasmtime_environ: "47.0.3".to_string(),
+        wasmtime_environ: WASMTIME_ENVIRON_VERSION.to_string(),
         features: feature_names(),
     };
     let component_id = plan::ComponentId {
