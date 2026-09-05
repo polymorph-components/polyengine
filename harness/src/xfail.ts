@@ -658,35 +658,8 @@ export const XFAIL: XfailEntry[] = [
     reason: "same cascade as line 214, see that entry",
   },
   // --- async/futures-must-write.json: root cause: STREAMS ---
-  // --- async/reentrance.json: BRAND NEW file (test/async/reentrance.wast is
-  // 100% new content added by CM#705's "remove the may_enter flag/trap",
-  // polyengine#173). The `fact-reentrance-47` static-stub class (#248,
-  // retired — see the note at the top of this file) previously MASKED the
-  // three rows below: with the stub gone, each now surfaces a genuine
-  // scheduler/reentrance semantic gap of its own, not a regression from
-  // this bump. Classed `cm705-reentrance`,
-  // https://github.com/polymorph-components/polyengine/issues/279.
-  // Lines 42/60/99/100/151/198/237/346 (the pure fact-reentrance-47 rows,
-  // with no residue underneath) all PASS now and are pruned. ---
-  {
-    file: "async/reentrance.json",
-    line: 429,
-    reason:
-      "expected trap \"deadlock detected: event loop cannot make further " +
-      "progress\", got SuspendError: trying to suspend JS frames — the " +
-      "deadlock is never diagnosed because the wait reaches a Suspending " +
-      "import through a JS callback frame; cm705-reentrance, " +
-      "https://github.com/polymorph-components/polyengine/issues/279",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 517,
-    reason:
-      "expected return, got trap \"cannot drop a subtask which has not " +
-      "yet resolved\" — subtask.cancel on parked callback tasks while the " +
-      "callee instance is on the stack does not settle the cancellation " +
-      "before subtask.drop; cm705-reentrance, https://github.com/polymorph-components/polyengine/issues/279",
-  },
+  // --- async/reentrance.json: the remaining entries are the deferred
+  // thread-built-in cascade (#12), NOT reentrance. ---
   {
     file: "async/reentrance.json",
     line: 522,
@@ -709,15 +682,6 @@ export const XFAIL: XfailEntry[] = [
     reason:
       "cascade of line 657 (module pending-capability, deferred thread " +
       "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance (not reentrance-related)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 837,
-    reason:
-      "expected trap \"waitable cannot be used synchronously while added " +
-      "to a waitable set\", got \"guest trapped: unreachable\" — the " +
-      "reentrant `back` does not raise the sync-use-in-waitable-set trap; " +
-      "cm705-reentrance, https://github.com/polymorph-components/polyengine/issues/279",
   },
   // --- async/self-switch-traps.json: NEW file added by the CM#687
   // thread.*-then-promote built-ins (third_party/component-model advance

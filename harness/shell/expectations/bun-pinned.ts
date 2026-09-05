@@ -54,9 +54,9 @@ export const bunPinned: ShellLaneExpectation = {
   totals: {
     commands: 1511,
     executed: 1411,
-    passed: 1281,
+    passed: 1284,
     failed: 0,
-    xfail: 130,
+    xfail: 127,
     pendingRuntime: 95,
     pendingCapability: 0,
     unsupportedDirective: 5,

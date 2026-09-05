@@ -17,7 +17,7 @@ up via JSPI where the engine provides it.
 
 Pre-1.0, but densely gated:
 
-- **Official Component Model test suite**: 1281 passing / 0 failing commands
+- **Official Component Model test suite**: 1284 passing / 0 failing commands
   across all directories (remaining: named xfail classes — deferred threads
   ([#12](https://github.com/polymorph-components/polyengine/issues/12)),
   cm705-sync-sched ([#249](https://github.com/polymorph-components/polyengine/issues/249)),

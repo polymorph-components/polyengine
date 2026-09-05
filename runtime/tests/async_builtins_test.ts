@@ -472,7 +472,7 @@ Deno.test(
     const seti = f.inst.handles.add(wset);
     assertTraps(
       () => f.asGuest(() => join(f.subtaski, seti)),
-      "synchronous waiter",
+      "waitable cannot be used synchronously while added to a waitable set",
     );
 
     // Unwind cleanly: resolve the callee so the park settles, and drain the
@@ -482,6 +482,67 @@ Deno.test(
     const rc = await pending;
     assertEq(rc, SubtaskState.CANCELLED_BEFORE_RETURNED);
     assertEq(f.subtask.hasSyncWaiter, false);
+  },
+);
+
+Deno.test(
+  "subtask.cancel: hasSyncWaiter is set BEFORE on_cancel runs, for both " +
+    "forms, so a reentrant waitable.join traps",
+  () => {
+    // definitions.py `canon_subtask_cancel`: `has_sync_waiter = True` precedes
+    // `on_cancel()` and is cleared after, whether or not the call blocks. The
+    // window matters because `on_cancel()` can run the cancelled callee
+    // synchronously, and that callee may reenter the canceller — which is
+    // exactly test/async/reentrance.wast:837.
+    for (const async_ of [false, true]) {
+      const f = mkSubtaskFixture();
+      const join = createWaitableJoin(f.inst);
+      const wset = new WaitableSet();
+      const seti = f.inst.handles.add(wset);
+      let sawInsideOnCancel: unknown = null;
+      f.subtask.onCancel = () => {
+        sawInsideOnCancel = f.subtask.hasSyncWaiter;
+        // The reentrant frame the callee would run: it must trap.
+        try {
+          f.asGuest(() => join(f.subtaski, seti));
+          sawInsideOnCancel = "join did not trap";
+        } catch (e) {
+          if (
+            !(e as Error).message.includes(
+              "waitable cannot be used synchronously while added to a " +
+                "waitable set",
+            )
+          ) throw e;
+        }
+        // Resolve so the cancel does not park, keeping this test synchronous.
+        resolveSubtask(f.subtask, f.subtaski);
+      };
+      const cancel = createSubtaskCancel({ async: async_ }, f.inst, "plain");
+      const rc = f.asGuest(() => cancel(f.subtaski)) as number;
+      assertEq(sawInsideOnCancel, true);
+      assertEq(rc, SubtaskState.CANCELLED_BEFORE_RETURNED);
+      // ... and the claim is released on the non-blocking exit too.
+      assertEq(f.subtask.hasSyncWaiter, false);
+    }
+  },
+);
+
+Deno.test(
+  "subtask.cancel: a subtask in a waitable set traps in BOTH forms",
+  () => {
+    // definitions.py `canon_subtask_cancel`'s `trap_if(subtask.in_waitable_set())`
+    // is unconditional — test/async/trap-if-sync-and-waitable-set.wast:325-327.
+    for (const async_ of [false, true]) {
+      const f = mkSubtaskFixture();
+      const wset = new WaitableSet();
+      f.inst.handles.add(wset);
+      f.subtask.join(wset);
+      const cancel = createSubtaskCancel({ async: async_ }, f.inst, "plain");
+      assertTraps(
+        () => f.asGuest(() => cancel(f.subtaski)),
+        "waitable cannot be used synchronously while added to a waitable set",
+      );
+    }
   },
 );
 

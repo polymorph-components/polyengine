@@ -331,24 +331,25 @@ class Executor {
 
   /**
    * Core functions exported by a core instance that imports at least one
-   * genuinely-blocking trampoline (`trampolineNeedsSuspension`, per
-   * DECLARATION — the async form of a copy/cancel built-in never blocks and
-   * does not mark) or a function from an already-marked instance. FACT
-   * consults this to decide whether a callee needs its own `promising`
-   * entry; wrapping one that cannot block forces asynchrony the ABI forbids
-   * (an eagerly-completing callee must report RETURNED, not STARTED).
+   * `Suspending`-wrapped trampoline (`trampolineCanBlock`, per DECLARATION —
+   * the async form of a copy built-in never blocks, is not wrapped and does
+   * not mark) or a function from an already-marked instance. FACT consults
+   * this to decide whether a callee needs its own `promising` entry.
+   *
+   * WRAPPED IMPLIES MARKED, and must: jspi pin (c) traps a Suspending import
+   * called from a non-promising activation unconditionally, plain-value path
+   * included (see `importValue`).
    *
    * Instance granularity is still an over-approximation — a module exporting
-   * both a blocking and a non-blocking function marks both — but with two
-   * mitigations it no longer produces wrong answers on the official corpus:
-   *
-   *   * per-declaration classification keeps async-form-only importers (and
-   *     the FACT `[adapter-callee]*` pass-through wrappers reached through
-   *     them) out of the set entirely;
-   *   * a needlessly-wrapped callee no longer changes observable state:
-   *     `async-start-call` parks the caller until the callee is determinate
-   *     (fact_calls.ts), reconstructing the reference's synchronous
-   *     run-to-first-block across the engine's microtask hops (jspi pin (j)).
+   * both a blocking and a non-blocking function marks both — and so is the
+   * marking of `async-start-call`/`subtask-cancel` importers, whose wrap
+   * exists for a park that often does not happen. Neither produces wrong
+   * answers on the official corpus, because a needlessly-wrapped callee no
+   * longer changes observable state: `async-start-call` parks the caller
+   * until the callee is determinate (fact_calls.ts), reconstructing the
+   * reference's synchronous run-to-first-block across the engine's microtask
+   * hops (jspi pin (j)) — so an eagerly-completing callee still reports
+   * RETURNED rather than STARTED.
    *
    * Per-FUNCTION reachability (a call-graph pass in the translator, where
    * wasmparser already is) would still shrink the set — as a wrapping-cost
@@ -356,8 +357,26 @@ class Executor {
    */
   readonly suspendableFuncs = new WeakSet<object>();
 
+  /**
+   * Exports of instances with GENUINE blocking evidence — the tier that
+   * propagates in full through `importValue`. A superset relationship holds
+   * by construction: these are also in `suspendableFuncs`.
+   */
+  private readonly blockingFuncs = new WeakSet<object>();
+  /**
+   * Exports of instances whose only evidence is a `Suspending`-WRAPPED but
+   * not-necessarily-blocking import (`async-start-call`, `subtask-cancel`).
+   * Enough to require a `promising` entry (jspi pin (c) — see `importValue`),
+   * not enough to claim the function blocks; propagates as its own tier so a
+   * FACT adapter carrying it does not promote the lift callees reached
+   * through it (see `importValue`).
+   */
+  private readonly wrapFuncs = new WeakSet<object>();
+
   /** Scratch: set by `importValue` while one module's imports are resolved. */
   private sawBlockingImport = false;
+  /** Scratch: the wrap-only tier of the same question. */
+  private sawWrapImport = false;
   /** LoweredIndex-es whose host functions carry the `suspending()` brand —
    * populated by `buildLoweredImport`, read by `importValue`. */
   private readonly suspendableLowerings = new Set<number>();
@@ -582,6 +601,7 @@ class Executor {
           // suspension point; every function it exports is therefore
           // potentially-blocking, and everything else is not.
           this.sawBlockingImport = false;
+          this.sawWrapImport = false;
           // Which component instance this core module belongs to — the plan
           // states it here and nowhere else (`instance: null` = FACT adapter,
           // contracts/plan-format.md). `unsafeIntrinsic` reads it while the
@@ -662,11 +682,24 @@ class Executor {
             }
             throw e;
           }
-          if (this.sawBlockingImport) {
+          if (this.sawBlockingImport || this.sawWrapImport) {
+            // Wrap-only evidence gives a GUEST module its own `promising`
+            // entry (jspi pin (c)) but leaves a FACT adapter
+            // (`instance: null`) out of `suspendableFuncs`: the adapter's
+            // pass-through export is what `*-start-call` receives as a LIFT
+            // CALLEE, and promising-wrapping an eagerly-completing callee is
+            // the STARTED-vs-RETURNED divergence `trampolineCanBlock`
+            // (jspi/bridge.ts) warns about — measured as
+            // test/async/drop-subtask.wast:140 under POLYENGINE_SCHED_SEED=1.
+            // Either way the evidence PROPAGATES, in its own tier, so the
+            // guest importing that adapter export still gets marked.
+            const promising = this.sawBlockingImport || init.instance !== null;
             for (const exported of Object.values(instance.exports)) {
-              if (typeof exported === "function") {
-                this.suspendableFuncs.add(exported as unknown as object);
-              }
+              if (typeof exported !== "function") continue;
+              const fn = exported as unknown as object;
+              (this.sawBlockingImport ? this.blockingFuncs : this.wrapFuncs)
+                .add(fn);
+              if (promising) this.suspendableFuncs.add(fn);
             }
           }
           this.instances.push(instance);
@@ -995,7 +1028,13 @@ class Executor {
     // broke the handshake pins.
     if (
       typeof value === "function" &&
-      this.suspendableFuncs.has(value as unknown as object)
+      this.wrapFuncs.has(value as unknown as object)
+    ) {
+      this.sawWrapImport = true;
+    }
+    if (
+      typeof value === "function" &&
+      this.blockingFuncs.has(value as unknown as object)
     ) {
       this.sawBlockingImport = true;
     }
@@ -1037,11 +1076,29 @@ class Executor {
       ) as unknown as Importable;
     }
     if (!trampolineCanBlock(d, optionsAsync)) return value;
-    // `async-start-call` is wrapped (its jspi-only determinacy park must be
-    // able to suspend the caller) but does NOT mark the importer: see
-    // `trampolineCanBlock` in jspi/bridge.ts for why marking on it is wrong.
+    // WRAPPED IMPLIES MARKED. Anything handed to wasm as a
+    // `WebAssembly.Suspending` makes its importer's frames suspendable, so
+    // that importer's entries must be `promising`-wrapped — jspi pin (c) is
+    // unconditional: a Suspending import called from a non-promising
+    // activation traps EVEN WHEN it produces its value synchronously
+    // (measured: "trying to suspend without WebAssembly.promising"; with an
+    // outer promising entry and JS frames in between, "trying to suspend JS
+    // frames"). `async-start-call` and `subtask-cancel` used to be wrapped
+    // WITHOUT marking, on the grounds that a needlessly-promising callee
+    // reported STARTED where the reference reports RETURNED. That reason has
+    // expired: `async-start-call`'s determinacy park (intrinsics/fact_calls.ts)
+    // reconstructs the reference's run-to-first-block across the hop, which is
+    // what the note above `suspendableFuncs` already records as the mitigation.
+    // What the omission cost was a hard trap in the one shape where the
+    // importer had no other blocking import: test/async/reentrance.wast:429,
+    // whose `$MC` imports only `b`'s async-start-call, `waitable-set.new` and
+    // `waitable.join` — it trapped with SuspendError instead of reaching the
+    // deadlock verdict. The two tiers (`blockingFuncs`/`wrapFuncs`) keep the
+    // marking from over-reaching — see the post-instantiate marking.
     if (trampolineNeedsSuspension(d, optionsAsync)) {
       this.sawBlockingImport = true;
+    } else {
+      this.sawWrapImport = true;
     }
     this.noteImport();
     return suspendingImport(
