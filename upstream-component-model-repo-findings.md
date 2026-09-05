@@ -153,7 +153,10 @@ entry on resolution — see git history.)
   wasmtime 49 toolchain bump** — upstream is actively reworking this corner
   post-#703, so re-verify the bundled wasmparser then (probes in #238); if it
   folds, the bump closes #238 and this entry dies, otherwise implement
-  shim-side and re-raise the filing question.
+  shim-side and re-raise the filing question. **Update 2026-09-04: the
+  wasmtime-49-dev bump landed (git rev 4675ee1, wasmparser 0.258) — the fold
+  is still absent per upstream `test/nyi.txt`, so #238 stays open; re-verify
+  probes against 0.258 before re-raising the filing question.**
 
 [WebAssembly/component-model]: https://github.com/WebAssembly/component-model
 

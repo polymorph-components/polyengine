@@ -41,9 +41,8 @@
 // during-sync-scheduling-candidates.wast/during-sync-call-exclusive-resume.
 // wast files, new kebab.wast/max-value-size.wast assert_invalid rows, plus
 // a few line-shifted-but-unchanged rows); the new xfail classes
-// (fact-reentrance-47, cm705-sync-sched, cm707-cancel, name-rules-47,
-// max-value-size-47, plus growth in the pre-existing wasmparser
-// thread-built-in pin-drift class) are translate-time / our-own-runtime
+// (cm705-reentrance, cm705-sync-sched, cm707-cancel, name-rules-nyi,
+// max-value-size-nyi) are translate-time / our-own-runtime
 // drift, engine-independent by construction — see harness/src/xfail.ts.
 
 import type { ShellLaneExpectation } from "./types.ts";
@@ -60,12 +59,12 @@ export const smPinned: ShellLaneExpectation = {
     "the sm-nightly canary.",
   deltas: [],
   totals: {
-    commands: 1475,
-    executed: 1428,
-    passed: 1263,
+    commands: 1511,
+    executed: 1411,
+    passed: 1281,
     failed: 0,
-    xfail: 165,
-    pendingRuntime: 42,
+    xfail: 130,
+    pendingRuntime: 95,
     pendingCapability: 0,
     unsupportedDirective: 5,
   },

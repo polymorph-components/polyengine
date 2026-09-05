@@ -168,7 +168,6 @@ export interface ComponentHandle {
   coreInstances: WebAssembly.Instance[];
   /** See `Executor.suspendableFuncs`. */
   suspendableFuncs: WeakSet<object>;
-  taskMayBlock: WebAssembly.Global;
   /** `ResourceIndex` -> the `HostResourceType` bound to it, if any. */
   hostResourceTypes: Map<number, HostResourceType>;
   /**
@@ -310,11 +309,6 @@ class Executor {
     if (this.suspensionMode === "jspi") this.wrappedImports = true;
     return this.suspensionMode;
   }
-  readonly taskMayBlock = new WebAssembly.Global(
-    { value: "i32", mutable: true },
-    1,
-  );
-
   // extract-* landing zones (index spaces per plan-format.md).
   readonly memories: WebAssembly.Memory[] = [];
   readonly reallocs: CoreFn[] = [];
@@ -830,7 +824,6 @@ class Executor {
       componentInstances,
       coreInstances: this.instances,
       suspendableFuncs: this.suspendableFuncs,
-      taskMayBlock: this.taskMayBlock,
       hostResourceTypes: this.hostResourceTypes,
       omittedExports: this.omittedExports,
       loadedPlan: this.loaded,
@@ -1075,8 +1068,6 @@ class Executor {
         // thread's* context slots (definitions.py `Thread.storage`); every
         // other symbol fails here, at instantiate time.
         return this.unsafeIntrinsic(def.intrinsic);
-      case "task-may-block":
-        return this.taskMayBlock;
       default: {
         const exhaustive: never = def;
         throw new PlanError(

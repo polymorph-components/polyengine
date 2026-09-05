@@ -17,9 +17,13 @@ up via JSPI where the engine provides it.
 
 Pre-1.0, but densely gated:
 
-- **Official Component Model test suite**: 1250 passing / 0 failing commands
-  across all directories (remaining: named xfail classes — wasmparser pin
-  drift, 🧵-deferred, small gaps), identical on Deno, Chromium, and Firefox
+- **Official Component Model test suite**: 1281 passing / 0 failing commands
+  across all directories (remaining: named xfail classes — deferred threads
+  ([#12](https://github.com/polymorph-components/polyengine/issues/12)),
+  cm705-sync-sched ([#249](https://github.com/polymorph-components/polyengine/issues/249)),
+  cm705-reentrance ([#279](https://github.com/polymorph-components/polyengine/issues/279)),
+  upstream-nyi ([#248](https://github.com/polymorph-components/polyengine/issues/248))),
+  identical on Deno, Chromium, and Firefox
   (behind its JSPI pref); WebKit reaches the same totals on trunk builds
   (the pinned build lacks JSC multi-memory, since implemented upstream).
 - **Real-workload proof points** (the [polymorph] component family):

@@ -6,7 +6,7 @@ component binary. This document is the interface between `crates/translator-shim
 (producer) and `runtime/` (consumer); see also
 [descriptor-ir.md](descriptor-ir.md) and [intrinsics.md](intrinsics.md).
 
-Current `formatVersion`: **4**. The compat rule is strict equality; any
+Current `formatVersion`: **5**. The compat rule is strict equality; any
 change bumps `formatVersion` and updates producer and consumer in the same
 commit. A stale cached artifact fails loudly rather than executing subtly
 differently.
@@ -45,10 +45,10 @@ plan never embeds it.
 
 ```jsonc
 {
-  "formatVersion": 4,
+  "formatVersion": 5,
   "producer": {
     "shimVersion": "…",              // crates/translator-shim crate version
-    "wasmtimeEnviron": "47.0.3",     // exact pinned version
+    "wasmtimeEnviron": "49.0.0-dev+4675ee1", // crate version + pinned git rev
     "features": ["cm-async", "…"]    // wasmparser feature set used
                                      // (incl. cm-fixed-length-lists, cm-map,
                                      //  cm-implements, cm-threading) —
@@ -87,8 +87,10 @@ plan never embeds it.
   //   { "kind": "export", "instance": n, "item": {…} }      core instance export
   //   { "kind": "instance-flags", "instance": n }           i32 flags global
   //   { "kind": "trampoline", "index": n }                  host trampoline
-  //   { "kind": "task-may-block" }                          runtime-managed global
   //   { "kind": "unsafe-intrinsic", "intrinsic": "<symbol>" }
+  // (v5 removed `task-may-block`: wasmtime dropped the FACT-visible
+  // may-block global with #14146; sync-blocking is now enforced lazily by
+  // the scheduler, never by adapter code.)
   // The unsafe-intrinsic symbol is wasmtime's stable UnsafeIntrinsic::name()
   // ("context-get-i32-0", …), never the #[repr(u32)] ordinal (unstable
   // internal). All 21 variants are wire-representable. Executor obligation:
@@ -101,6 +103,10 @@ plan never embeds it.
   // exports by *name*, so the shim resolves Index via Module::exports
   // inversion and always emits:
   //   { "name": "…", "space": "func" | "table" | "memory" | "global" | "tag" }
+  // Adapter modules import `unsafe-intrinsic` CoreDefs too (FACT saves,
+  // clears and restores the task's `context.{get,set}` slots around
+  // `realloc` and `post-return` calls); the executor wires them exactly as
+  // it does for embedded modules.
 
   // Host trampolines (ComponentTranslation::trampolines), one per
   // wasmtime_environ::component::Trampoline variant. Executors must fail
@@ -111,6 +117,19 @@ plan never embeds it.
     { "kind": "lower-import", "lowered": 0 /* LoweredIndex */,
       "options": 0 /* -> canonicalOptions */, "type": 0 /* -> types */ },
     { "kind": "resource-drop", "instance": 0, "resource": 0 },
+    // FACT `runtime.trap<code>` import, nullary: the trap code is static per
+    // import site (wasmtime `Trampoline::Trap(Trap)`), so it rides in the
+    // plan rather than as a call argument. `code` is wasmtime's `Trap`
+    // discriminant (`trap_encoding.rs`), the same numbering the pre-v5
+    // i32 argument carried.
+    { "kind": "trap", "code": 24 },
+    // Cooperative-threading built-ins (Explainer §thread.*, submodule pin
+    // 7c67611): `thread-index` and `thread-resume-later` carry `instance`;
+    // `thread-suspend`, `thread-yield`, `thread-suspend-then-resume`,
+    // `thread-yield-then-resume`, `thread-suspend-then-promote`,
+    // `thread-yield-then-promote` carry `instance` + `cancellable`;
+    // `thread-new-indirect` is unchanged from v4.
+    { "kind": "thread-yield", "instance": 0, "cancellable": false },
     { "kind": "task-return",
       "results": 0,      // RAW wasmtime TypeTupleIndex — the FACT lookup key
                          // prepare-call passes at runtime

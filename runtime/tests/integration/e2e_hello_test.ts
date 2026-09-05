@@ -43,7 +43,7 @@ Deno.test("hello: full pipeline shim -> plan -> executor -> greet()", async () =
   const { plan, adapters } = translator.translate(helloWasm);
 
   assertEq(plan.formatVersion, SUPPORTED_FORMAT_VERSION);
-  assertEq(plan.producer.wasmtimeEnviron, "47.0.3");
+  assertEq(plan.producer.wasmtimeEnviron, "49.0.0-dev+4675ee1");
   assertEq(adapters.size, 0); // no cross-component links in hello
 
   const component = await instantiateComponent({

@@ -121,8 +121,7 @@ export type WireCoreDef =
    * `canon_context_set`, lines 2348/2358) and fails at instantiate time on
    * every other symbol.
    */
-  | { kind: "unsafe-intrinsic"; intrinsic: string }
-  | { kind: "task-may-block" };
+  | { kind: "unsafe-intrinsic"; intrinsic: string };
 
 /** @internal */
 export interface WireCoreExport {
@@ -151,7 +150,29 @@ export type WireTrampoline =
     options: number;
     type: number;
   }
-  | { kind: "trap"; index: number }
+  | { kind: "trap"; index: number; code: number }
+  | {
+    kind: "thread-index";
+    index: number;
+    instance: number;
+  }
+  | {
+    kind: "thread-resume-later";
+    index: number;
+    instance: number;
+  }
+  | {
+    kind:
+      | "thread-suspend"
+      | "thread-yield"
+      | "thread-suspend-then-resume"
+      | "thread-yield-then-resume"
+      | "thread-suspend-then-promote"
+      | "thread-yield-then-promote";
+    index: number;
+    instance: number;
+    cancellable: boolean;
+  }
   | { kind: "enter-sync-call"; index: number }
   | { kind: "exit-sync-call"; index: number }
   | {

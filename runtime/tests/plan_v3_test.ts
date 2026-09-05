@@ -35,7 +35,7 @@ import type { ValType } from "../src/cabi/types.ts";
 function minimalPlan(overrides: Partial<WirePlan> = {}): WirePlan {
   return {
     formatVersion: SUPPORTED_FORMAT_VERSION,
-    producer: { shimVersion: "0", wasmtimeEnviron: "47.0.3", features: [] },
+    producer: { shimVersion: "0", wasmtimeEnviron: "49.0.0-dev+4675ee1", features: [] },
     component: { sha256: "0".repeat(64), len: 0 },
     modules: [],
     initializers: [],
@@ -70,8 +70,8 @@ function expectPlanError(fn: () => unknown, includes: string): void {
 // Loader
 // ---------------------------------------------------------------------------
 
-Deno.test("the format version is a strict-equality gate (at 4 since plan v4)", () => {
-  assertEq(SUPPORTED_FORMAT_VERSION, 4);
+Deno.test("the format version is a strict-equality gate (at 5 since plan v5)", () => {
+  assertEq(SUPPORTED_FORMAT_VERSION, 5);
   expectPlanError(
     () => loadPlan(minimalPlan({ formatVersion: 2 })),
     "unsupported plan formatVersion 2",

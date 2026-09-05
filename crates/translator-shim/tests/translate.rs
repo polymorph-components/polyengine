@@ -101,8 +101,10 @@ fn linked_generates_fact_adapter() {
     assert_eq!(adapter_inits.len(), t.adapters.len());
 
     // Manifest categories cover the translator-spike-observed intrinsic surface
-    // (intrinsics.md §A): callee core-def, instance flags, task-may-block,
-    // trap + enter/exit-sync-call trampolines.
+    // (intrinsics.md §A): callee core-def, instance flags, trap +
+    // enter/exit-sync-call trampolines. (`task-may-block` was a
+    // `CoreDef::TaskMayBlock` category; upstream removed that variant at the
+    // pinned wasmtime-environ rev, see root Cargo.toml.)
     let manifests: Vec<String> = adapter_entries(&t)
         .iter()
         .flat_map(|m| match m {
@@ -115,7 +117,6 @@ fn linked_generates_fact_adapter() {
     for expected in [
         "core-def",
         "instance-flags",
-        "task-may-block",
         "trampoline:trap",
         "trampoline:enter-sync-call",
         "trampoline:exit-sync-call",
@@ -224,7 +225,10 @@ fn hello_plan_shape() {
     let plan = &t.plan;
 
     assert_eq!(plan.format_version, FORMAT_VERSION);
-    assert_eq!(plan.producer.wasmtime_environ, "47.0.3");
+    assert_eq!(
+        plan.producer.wasmtime_environ,
+        translator_shim::WASMTIME_ENVIRON_VERSION
+    );
     assert_eq!(plan.component.len, bytes.len());
     assert_eq!(plan.component.sha256.len(), 64);
 

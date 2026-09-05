@@ -41,7 +41,11 @@ import { assertEq } from "./support/asserts.ts";
 function minimalPlan(overrides: Partial<WirePlan> = {}): WirePlan {
   return {
     formatVersion: SUPPORTED_FORMAT_VERSION,
-    producer: { shimVersion: "0", wasmtimeEnviron: "47.0.3", features: [] },
+    producer: {
+      shimVersion: "0",
+      wasmtimeEnviron: "49.0.0-dev+4675ee1",
+      features: [],
+    },
     component: { sha256: "0".repeat(64), len: 0 },
     modules: [],
     initializers: [],

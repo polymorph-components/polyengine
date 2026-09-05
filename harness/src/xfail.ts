@@ -19,83 +19,38 @@ export interface XfailEntry {
 }
 
 export const XFAIL: XfailEntry[] = [
-  // --- binary/binary.json: wasmparser pin drift (#13 exit re-classified
-  // these from "translator-shim gaps" to pin-blocked: the rejecting decoder
-  // is wasmparser 0.252 inside wasmtime-environ 47.0.3, not shim code —
-  // the error strings below do not occur in crates/translator-shim).
-  // Tracked by https://github.com/polymorph-components/polyengine/issues/152. The former
-  // binary.json:1421 entry (module exports) is GONE: plan v4 carries
-  // core-module exports (#13). ---
-  {
-    file: "binary/binary.json",
-    line: 974,
-    reason:
-      "translator error [validation]: invalid boolean value — wasmparser " +
-      "0.252 misparses the 🧵 thread built-in encodings re-aritied in the " +
-      "0.253-0.255 window; dual-classed with deferred threads " +
-      "(https://github.com/polymorph-components/polyengine/issues/12), pin exit tracked by " +
-      "https://github.com/polymorph-components/polyengine/issues/152 " +
-      "(pending-capability: wasmparser/wast pin alignment). CM#705 pin " +
-      "advance (polyengine#173) shifted this row from wast line 962 to " +
-      "974 (12 lines of CM#698 outer-alias-count edits landed earlier in " +
-      "the file); same error, same offset class, line renumbered only.",
-  },
-  {
-    file: "binary/binary.json",
-    line: 1206,
-    reason:
-      "translator error [validation]: invalid leading byte (0x2) for name " +
-      "option — the 0x2 name option is the 🔗 canonical-interface-names " +
-      "encoding (canonversion/versionsuffix), which postdates wasmparser " +
-      "0.252 (contracts/embedder-api.md forward note); pin exit tracked by " +
-      "https://github.com/polymorph-components/polyengine/issues/152 " +
-      "(pending-capability: wasmparser/wast pin alignment). CM#705 pin " +
-      "advance (polyengine#173) shifted this row from wast line 1194 to " +
-      "1206; same error, same offset class, line renumbered only.",
-  },
-  // --- validation/attributes.json: same 0x2 name-option pin drift as
-  // binary/binary.json:1206 above. ---
-  {
-    file: "validation/attributes.json",
-    line: 30,
-    reason:
-      "translator error [validation]: invalid leading byte (0x2) for name " +
-      "option — same 🔗 canonical-names pin-drift class as " +
-      "binary/binary.json:1206, https://github.com/polymorph-components/polyengine/issues/152 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
-  },
-  {
-    file: "validation/attributes.json",
-    line: 213,
-    reason: "same name-option pin drift as line 30, see that entry",
-  },
+  // (The former `wasmparser/wast pin drift` class, polyengine#152, exited
+  // with the wasmtime `main` re-pin: testgen's `wast` and the shim's
+  // wasmparser are on the same release train, enforced by `just test-rust`.)
   // --- validation/kebab.json: CM#703/#704 ("name rules" reworks, pulled in
   // by the CM#705 pin advance polyengine#173) added import-name-conflict
   // checks under kebab-case folding (a `foo-bar` import conflicts with
   // `foobar`/`FOOBAR`/`foob-ar`/method-and-static-qualified variants that
-  // fold to the same name). wasmtime-environ 47.0.3's wasmparser accepts
-  // all five components as distinct imports — the folding-conflict check is
-  // newer than the pinned wasmparser. Classed `name-rules-47`,
-  // https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmparser/wast pin
-  // alignment). Same gap class already tracked for interface names in
+  // fold to the same name). This is not pin-drift residue: the file is
+  // listed in upstream's own third_party/component-model/test/nyi.txt at
+  // the current pin (wasmtime `main`@4675ee1) — wasmtime itself does not
+  // implement this check yet, so wasmparser 0.258 accepts all five
+  // components as distinct imports. Classed `name-rules-nyi`,
+  // https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: upstream nyi.txt).
+  // Same gap class already tracked for interface names in
   // upstream-component-model-repo-findings.md (#246/#247). ---
   {
     file: "validation/kebab.json",
     line: 149,
     reason:
       'expected assert_invalid ("import name `foobar` conflicts with ' +
-      'previous name `foo-bar`"), but it validated — wasmparser 0.252 ' +
-      "(wasmtime-environ 47.0.3) does not implement CM#703/#704's " +
-      "kebab-case name-folding conflict check; name-rules-47, " +
-      "https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmparser/wast pin " +
-      "alignment)",
+      'previous name `foo-bar`"), but it validated — wasmtime does not ' +
+      "implement CM#703/#704's kebab-case name-folding conflict check yet " +
+      "(third_party/component-model/test/nyi.txt lists this file); " +
+      "name-rules-nyi, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: upstream " +
+      "nyi.txt)",
   },
   {
     file: "validation/kebab.json",
     line: 154,
     reason:
       'expected assert_invalid ("import name `FOOBAR` conflicts with ' +
-      'previous name `foo-bar`"), but it validated — same name-rules-47 ' +
+      'previous name `foo-bar`"), but it validated — same name-rules-nyi ' +
       "gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
@@ -103,7 +58,7 @@ export const XFAIL: XfailEntry[] = [
     line: 159,
     reason:
       'expected assert_invalid ("import name `foob-ar` conflicts with ' +
-      'previous name `foo-bar`"), but it validated — same name-rules-47 ' +
+      'previous name `foo-bar`"), but it validated — same name-rules-nyi ' +
       "gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
@@ -112,7 +67,7 @@ export const XFAIL: XfailEntry[] = [
     reason:
       'expected assert_invalid ("import name `[static]foo-bar.FO-ob-AR` ' +
       'conflicts with previous name `foo-bar`"), but it validated — same ' +
-      "name-rules-47 gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
+      "name-rules-nyi gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/kebab.json",
@@ -120,15 +75,17 @@ export const XFAIL: XfailEntry[] = [
     reason:
       'expected assert_invalid ("import name `[method]foo-bar.foobar` ' +
       'conflicts with previous name `foo-bar`"), but it validated — same ' +
-      "name-rules-47 gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
+      "name-rules-nyi gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
   },
   // --- validation/max-value-size.json: CM#688 ("max-value-size", pulled in
   // by the CM#705 pin advance polyengine#173) added the elem_size(t, i64) <
-  // 2^28 validation rule (CanonicalABI.md#element-size). wasmtime-environ
-  // 47.0.3's wasmparser does not enforce it — every assert_invalid in this
-  // file validates instead of rejecting. Classed `max-value-size-47`,
-  // https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmparser/wast pin
-  // alignment). Line 63 is the dispatch-flagged pointer-width-sensitive row
+  // 2^28 validation rule (CanonicalABI.md#element-size). Not pin-drift
+  // residue: this file is also listed in upstream's own
+  // third_party/component-model/test/nyi.txt at the current pin — wasmtime
+  // itself does not enforce this check yet, so every assert_invalid in
+  // this file validates instead of rejecting. Classed `max-value-size-nyi`,
+  // https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: upstream nyi.txt).
+  // Line 63 is the dispatch-flagged pointer-width-sensitive row
   // (`list string 16777216`, the i32-vs-i64 elem-size boundary): observed
   // behavior on this (presumably 64-bit host) run is identical to the
   // others — wasmparser accepts it outright, not a differing failure mode
@@ -138,18 +95,18 @@ export const XFAIL: XfailEntry[] = [
     line: 25,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — wasmparser 0.252 (wasmtime-environ 47.0.3) does not " +
-      "implement CM#688's elem_size < 2^28 check (single fixed list just " +
-      "over the limit: `(list u8 268435456)`); max-value-size-47, " +
-      "https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmparser/wast pin " +
-      "alignment)",
+      "validated — wasmtime does not implement CM#688's elem_size < 2^28 " +
+      "check yet (third_party/component-model/test/nyi.txt lists this " +
+      "file; single fixed list just over the limit: `(list u8 " +
+      "268435456)`); max-value-size-nyi, " +
+      "https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: upstream nyi.txt)",
   },
   {
     file: "validation/max-value-size.json",
     line: 31,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-47 gap as line 25 (fixed list " +
+      "validated — same max-value-size-nyi gap as line 25 (fixed list " +
       "whose product exceeds MAX: `(list u64 33554432)`), " +
       "https://github.com/polymorph-components/polyengine/issues/248",
   },
@@ -158,7 +115,7 @@ export const XFAIL: XfailEntry[] = [
     line: 37,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-47 gap as line 25 (u32-wrap class: " +
+      "validated — same max-value-size-nyi gap as line 25 (u32-wrap class: " +
       "real byte size is 2^32 but a naive u32 multiply wraps to 0: " +
       "`(list u64 536870912)`), https://github.com/polymorph-components/polyengine/issues/248",
   },
@@ -167,7 +124,7 @@ export const XFAIL: XfailEntry[] = [
     line: 43,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-47 gap as line 25 (compound sum " +
+      "validated — same max-value-size-nyi gap as line 25 (compound sum " +
       "exceeds MAX via a tuple), https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
@@ -175,7 +132,7 @@ export const XFAIL: XfailEntry[] = [
     line: 48,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-47 gap as line 25 (compound sum " +
+      "validated — same max-value-size-nyi gap as line 25 (compound sum " +
       "exceeds MAX via a record), https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
@@ -183,7 +140,7 @@ export const XFAIL: XfailEntry[] = [
     line: 57,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-47 gap as line 25 (nested fixed " +
+      "validated — same max-value-size-nyi gap as line 25 (nested fixed " +
       "list), https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
@@ -191,7 +148,7 @@ export const XFAIL: XfailEntry[] = [
     line: 63,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-47 gap as line 25; this is the " +
+      "validated — same max-value-size-nyi gap as line 25; this is the " +
       "dispatch-flagged pointer-width-sensitive row (`(list string " +
       "16777216)`, the i32-vs-i64 elem-size boundary noted in the wast " +
       "source comment) — observed identically to the other rows on this " +
@@ -431,581 +388,416 @@ export const XFAIL: XfailEntry[] = [
   // all pin 🧵 sync-call-blocking semantics and are built largely from thread
   // built-ins (thread.new-indirect / resume-later / suspend-then-resume /
   // suspend / index / yield-then-promote) — the deferred-threads class,
-  // https://github.com/polymorph-components/polyengine/issues/12 — and their components fail TRANSLATION first,
-  // in the wasmparser-pin-drift class documented at trap-if-block-and-sync.
-  // json:5 (https://github.com/polymorph-components/polyengine/issues/152): wasmparser 0.252 predates the 0.253-0.255
-  // re-arity of the thread built-in opcodes, so the decoder misparses the
-  // canonical section. `async/during-sync-call-exclusive-resume.json` and
+  // https://github.com/polymorph-components/polyengine/issues/12. (History: at the prior pin these components
+  // failed TRANSLATION first, under the now-exited wasmparser/wast
+  // pin-drift class — see the EXIT note at the top of this file.) At the
+  // current pin every one of these components TRANSLATES and DEFINES
+  // fine; the remaining failure is that INSTANTIATING them requires a
+  // host trampoline for a thread built-in (`thread-index`,
+  // `thread-new-indirect`, ...) that polyengine's executor does not yet
+  // implement — a `module`/`module_instance` command reports
+  // `pending-capability: instantiate: component requires host trampoline
+  // '...'` and is SKIPPED (not failed; no xfail entry needed for it), and
+  // every later assert against that instance cascades with "no current
+  // instance". `async/during-sync-call-exclusive-resume.json` and
   // `async/during-sync-scheduling-candidates.json` are BRAND NEW files added by
-  // the CM#705 pin advance (polyengine#173) — they did not exist pre-advance,
-  // so these are new entries, not renumbered ones. Predicted class from the
-  // dispatch was `cm705-sync-sched` (polyengine#249, a semantic scheduling
-  // deviation); investigation found the observed failures are translator-level
-  // (TranslateError at the `module`/`module_definition` command, not a runtime
-  // semantic mismatch), root-caused by the SAME thread-built-in wasmparser pin
-  // drift as the older during-sync-call-*.json files below — so these are
-  // classed here (https://github.com/polymorph-components/polyengine/issues/152 / https://github.com/polymorph-components/polyengine/issues/12), not under #249. ---
-  {
-    file: "async/during-sync-call-may-block-if-other-ready-threads.json",
-    line: 12,
-    reason:
-      "translator error [validation]: invalid boolean value (at offset " +
-      "0x3eb) — wasmparser pin drift (class of trap-if-block-and-sync." +
-      "json:5): the $Tester definition's canonical section uses 🧵 " +
-      "thread.new-indirect/resume-later/suspend-then-resume encodings that " +
-      "wasmparser 0.252 misparses; deferred-threads anyway, " +
-      "https://github.com/polymorph-components/polyengine/issues/12 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
-  },
-  {
-    file: "async/during-sync-call-may-block-if-other-ready-threads.json",
-    line: 110,
-    reason:
-      "cascade of line 12: the Tester definition failed translation, so " +
-      "there is no definition named 'Tester' to instantiate",
-  },
+  // the CM#705 pin advance (polyengine#173, third_party/component-model
+  // 2f13265) — they did not exist pre-advance, so these are new entries,
+  // not renumbered ones. Predicted class from that dispatch was
+  // `cm705-sync-sched` (polyengine#249, a semantic scheduling deviation);
+  // investigation there found the observed failures were translator-level
+  // at the time (the since-exited pin-drift class); the subsequent re-pin
+  // resolved that translation gap, uncovering the SAME deferred-threads
+  // class (#12) one layer down at instantiation. ---
   {
     file: "async/during-sync-call-may-block-if-other-ready-threads.json",
     line: 111,
-    reason: "cascade of line 12 via line 110: no current instance",
+    reason:
+      "cascade of line 110 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-new-indirect', " +
+      "deferred thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): " +
+      "no current instance",
   },
   {
     file: "async/during-sync-call-may-block-if-other-ready-threads.json",
     line: 112,
-    reason: "cascade of line 12 via line 110: no current instance",
-  },
-  {
-    file: "async/during-sync-call-may-block-if-other-ready-threads.json",
-    line: 114,
-    reason:
-      "cascade of line 12: the Tester definition failed translation, so " +
-      "there is no definition named 'Tester' to instantiate",
+    reason: "same cascade as line 111, see that entry",
   },
   {
     file: "async/during-sync-call-may-block-if-other-ready-threads.json",
     line: 115,
-    reason: "cascade of line 12 via line 114: no current instance",
+    reason:
+      "cascade of line 114 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-new-indirect', " +
+      "deferred thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): " +
+      "no current instance",
   },
   // CM#705 (polyengine#173) appended a second component to this file (a new
   // "setup"/"run" pair driven by thread.new-indirect/index/resume-later/
-  // suspend) — same thread-built-in pin-drift mechanism as line 12 above, at
-  // a fresh offset.
-  {
-    file: "async/during-sync-call-may-block-if-other-ready-threads.json",
-    line: 136,
-    reason:
-      "translator error [validation]: invalid boolean value (at offset " +
-      "0x28e) — same wasmparser thread-built-in pin-drift class as line 12 " +
-      "(https://github.com/polymorph-components/polyengine/issues/152), new second component appended by the CM#705 " +
-      "pin advance (polyengine#173); deferred-threads anyway, " +
-      "https://github.com/polymorph-components/polyengine/issues/12 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
-  },
+  // suspend) — same deferred-threads mechanism as above, at a fresh offset.
+  // Its own module_instance command (line 136) is pending-capability
+  // ('thread-new-indirect') and needs no xfail entry (skipped, not failed).
   {
     file: "async/during-sync-call-may-block-if-other-ready-threads.json",
     line: 206,
-    reason: "cascade of line 136: no current instance",
+    reason:
+      "cascade of line 136 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-new-indirect', " +
+      "deferred thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): " +
+      "no current instance",
   },
   {
     file: "async/during-sync-call-may-block-if-other-ready-threads.json",
     line: 207,
-    reason: "cascade of line 136: no current instance",
+    reason: "same cascade as line 206, see that entry",
   },
   // async/during-sync-call-exclusive-resume.json: BRAND NEW file (CM#705 pin
   // advance, polyengine#173; test/async/during-sync-call-exclusive-resume.wast
   // is 100% new content, not a renumbering of the deleted
   // during-sync-call-no-exclusive-resume.wast). All three of its components
-  // are built from thread.index/suspend/resume-later — same pin-drift class.
-  {
-    file: "async/during-sync-call-exclusive-resume.json",
-    line: 9,
-    reason:
-      "translator error [validation]: unexpected end-of-file (at offset " +
-      "0x158) — same wasmparser thread-built-in pin-drift class as " +
-      "trap-if-block-and-sync.json:5 (https://github.com/polymorph-components/polyengine/issues/152): 0.252 reads no " +
-      "cancel? byte for 🧵 thread.suspend, walks the canonical section out " +
-      "of alignment and off the end; deferred-threads anyway, " +
-      "https://github.com/polymorph-components/polyengine/issues/12 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
-  },
+  // are built from thread.index/suspend/resume-later; each `module` command
+  // is itself pending-capability ('thread-index' at line 9, 'thread-suspend'
+  // at line 65 -- for the third component, whose own preceding module
+  // command line is not separately listed here) and needs no xfail entry.
   {
     file: "async/during-sync-call-exclusive-resume.json",
     line: 59,
-    reason: "cascade of line 9: no current instance",
+    reason:
+      "cascade of line 9 (module pending-capability: instantiate requires " +
+      "host trampoline 'thread-index', deferred thread built-ins, " +
+      "https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-call-exclusive-resume.json",
     line: 60,
-    reason: "cascade of line 9: no current instance",
+    reason: "same cascade as line 59, see that entry",
   },
-  // line 65 (the file's second component) is a skipped-not-failed command;
-  // no xfail entry needed. Its cascades at lines 102/103 target the THIRD
-  // component (line 65's own module definition succeeds), which fails
-  // translation independently for the same reason as line 9.
   {
     file: "async/during-sync-call-exclusive-resume.json",
     line: 102,
     reason:
-      "cascade: the third component in this file failed translation for " +
-      "the same reason as line 9 (thread-built-in pin drift, " +
-      "https://github.com/polymorph-components/polyengine/issues/152); no current instance",
+      "cascade of line 65 (module pending-capability: instantiate " +
+      "requires host trampoline 'thread-suspend', deferred thread " +
+      "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-call-exclusive-resume.json",
     line: 103,
-    reason: "cascade of line 102: no current instance",
+    reason: "same cascade as line 102, see that entry",
   },
   // async/during-sync-scheduling-candidates.json: BRAND NEW file (CM#705 pin
   // advance, polyengine#173). Six components, each built from thread
   // built-ins (thread.new-indirect/resume-later/suspend/index/
-  // yield-then-promote); every component fails translation with the same
-  // wasmparser thread-built-in pin-drift class as trap-if-block-and-sync.
-  // json:5 (https://github.com/polymorph-components/polyengine/issues/152), cascading to every assert against it.
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 19,
-    reason:
-      "translator error [validation]: invalid boolean value (at offset " +
-      "0x241) — wasmparser thread-built-in pin drift, same class as " +
-      "trap-if-block-and-sync.json:5 (https://github.com/polymorph-components/polyengine/issues/152); deferred-threads " +
-      "anyway, https://github.com/polymorph-components/polyengine/issues/12 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
-  },
+  // yield-then-promote); every component's `module`/`module_instance`
+  // command is pending-capability (deferred thread built-ins, #12) and
+  // needs no xfail entry — the cascading asserts below do.
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 74,
-    reason: "cascade of line 19: no current instance",
+    reason:
+      "cascade of line 19 (module pending-capability: instantiate " +
+      "requires host trampoline 'thread-new-indirect', deferred thread " +
+      "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 75,
-    reason: "cascade of line 19: no current instance",
-  },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 78,
-    reason:
-      "translator error [validation]: invalid leading byte (0x2d) for " +
-      "canonical function (at offset 0x196) — same pin-drift class as " +
-      "line 19, https://github.com/polymorph-components/polyengine/issues/152 (pending-capability: wasmparser/wast pin " +
-      "alignment)",
+    reason: "same cascade as line 74, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 132,
-    reason: "cascade of line 78: no current instance",
+    reason:
+      "cascade of line 78 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 133,
-    reason: "cascade of line 78: no current instance",
+    reason: "same cascade as line 132, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 134,
-    reason: "cascade of line 78: no current instance",
+    reason: "same cascade as line 132, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 135,
-    reason: "cascade of line 78: no current instance",
-  },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 144,
-    reason:
-      "translator error [validation]: invalid leading byte (0x2d) for " +
-      "canonical function (at offset 0x1b1) — same pin-drift class as " +
-      "line 19, https://github.com/polymorph-components/polyengine/issues/152 (pending-capability: wasmparser/wast pin " +
-      "alignment)",
+    reason: "same cascade as line 132, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 234,
-    reason: "cascade of line 144: no current instance",
+    reason:
+      "cascade of line 144 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 235,
-    reason: "cascade of line 144: no current instance",
+    reason: "same cascade as line 234, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 236,
-    reason: "cascade of line 144: no current instance",
+    reason: "same cascade as line 234, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 237,
-    reason: "cascade of line 144: no current instance",
+    reason: "same cascade as line 234, see that entry",
   },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 245,
-    reason:
-      "component definition failed translation: translator error " +
-      "[validation]: invalid boolean value (at offset 0x1d0) — same " +
-      "pin-drift class as line 19, https://github.com/polymorph-components/polyengine/issues/152 (pending-capability: " +
-      "wasmparser/wast pin alignment)",
-  },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 303,
-    reason:
-      "cascade of line 245: no definition named 'BlockedCallbackTester'" ,
-  },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 307,
-    reason:
-      "cascade of line 245: no definition named 'BlockedCallbackTester'" ,
-  },
+  // Note: this file's line 245 ("BlockedCallbackTester" component
+  // definition) itself now TRANSLATES AND DEFINES successfully at the
+  // 4675ee1 pin (it was stale here pre-cleanup, per the stale-xfail
+  // detector, and has been pruned); the definition's later use at line 303
+  // still needs a host trampoline this executor lacks.
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 304,
-    reason: "cascade of line 245: no current instance",
+    reason:
+      "cascade of line 303 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 305,
-    reason: "cascade of line 245: no current instance",
+    reason: "same cascade as line 304, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 308,
-    reason: "cascade of line 245: no current instance",
+    reason:
+      "cascade of line 307 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 309,
-    reason: "cascade of line 245: no current instance",
+    reason: "same cascade as line 308, see that entry",
   },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 315,
-    reason:
-      "component definition failed translation: translator error " +
-      "[validation]: invalid boolean value (at offset 0x1bb) — same " +
-      "pin-drift class as line 19, https://github.com/polymorph-components/polyengine/issues/152 (pending-capability: " +
-      "wasmparser/wast pin alignment)",
-  },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 403,
-    reason:
-      "cascade of line 315: no definition named 'SyncLiftedTester'",
-  },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 407,
-    reason:
-      "cascade of line 315: no definition named 'SyncLiftedTester'",
-  },
+  // Same as above for line 315 ("SyncLiftedTester"): the definition itself
+  // is pruned-stale here (now translates fine); its uses at 403/407 still
+  // lack a host trampoline.
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 404,
-    reason: "cascade of line 315: no current instance",
+    reason:
+      "cascade of line 403 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 405,
-    reason: "cascade of line 315: no current instance",
+    reason: "same cascade as line 404, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 408,
-    reason: "cascade of line 315: no current instance",
+    reason:
+      "cascade of line 407 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 409,
-    reason: "cascade of line 315: no current instance",
-  },
-  {
-    file: "async/during-sync-scheduling-candidates.json",
-    line: 414,
-    reason:
-      "translator error [validation]: invalid boolean value (at offset " +
-      "0x2c1) — same pin-drift class as line 19, https://github.com/polymorph-components/polyengine/issues/152 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
+    reason: "same cascade as line 408, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 482,
-    reason: "cascade of line 414: no current instance",
+    reason:
+      "cascade of line 414 (module pending-capability: instantiate " +
+      "requires host trampoline 'thread-new-indirect', deferred thread " +
+      "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 483,
-    reason: "cascade of line 414: no current instance",
+    reason: "same cascade as line 482, see that entry",
   },
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 484,
-    reason: "cascade of line 414: no current instance",
+    reason: "same cascade as line 482, see that entry",
   },
-  {
-    file: "async/during-sync-call-no-sibling-resume.json",
-    line: 16,
-    reason:
-      "translator error [validation]: invalid leading byte (0x28) for " +
-      "canonical function lift (at offset 0x30c) — same wasmparser " +
-      "pin-drift class as during-sync-call-exclusive-resume.json:9; " +
-      "deferred-threads anyway, https://github.com/polymorph-components/polyengine/issues/12 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
-  },
+  // async/during-sync-call-no-sibling-resume.json: same deferred-threads
+  // mechanism; its `module` commands (lines 16, 162) are pending-capability
+  // ('thread-new-indirect', 'thread-suspend') and need no xfail entry.
   {
     file: "async/during-sync-call-no-sibling-resume.json",
     line: 155,
     reason:
-      "cascade of this file's first failure (line 16): the component " +
-      "failed translation, so no current instance exists",
+      "cascade of line 16 (module pending-capability: instantiate " +
+      "requires host trampoline 'thread-new-indirect', deferred thread " +
+      "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-call-no-sibling-resume.json",
     line: 156,
-    reason: "cascade of line 16, see line 155",
-  },
-  {
-    file: "async/during-sync-call-no-sibling-resume.json",
-    line: 162,
-    reason:
-      "translator error [validation]: unexpected end-of-file (at offset " +
-      "0x291) — same wasmparser pin-drift class: 0.252 reads no cancel? " +
-      "byte for 🧵 thread.suspend (0x29), walks the canonical section out " +
-      "of alignment and off the end; deferred-threads anyway, " +
-      "https://github.com/polymorph-components/polyengine/issues/12 " +
-      "(pending-capability: wasmparser/wast pin alignment)",
+    reason: "same cascade as line 155, see that entry",
   },
   {
     file: "async/during-sync-call-no-sibling-resume.json",
     line: 214,
     reason:
-      "cascade of the line-162 module failure: no current instance " +
-      "exists for this command",
+      "cascade of line 162 (module pending-capability: instantiate " +
+      "requires host trampoline 'thread-suspend', deferred thread " +
+      "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/during-sync-call-no-sibling-resume.json",
     line: 215,
-    reason: "same line-162 cascade as line 214",
+    reason: "same cascade as line 214, see that entry",
   },
   // --- async/futures-must-write.json: root cause: STREAMS ---
   // --- async/reentrance.json: BRAND NEW file (test/async/reentrance.wast is
   // 100% new content added by CM#705's "remove the may_enter flag/trap",
-  // polyengine#173). CORRECTED CLASSIFICATION (revision round; verified by
-  // probing the runner directly and reading wasmtime-environ 47.0.3 source):
-  //
-  // The `wasm trap:` PREFIX is the discriminator between the two mechanisms
-  // that can produce a "cannot enter component instance" message:
-  //   - "wasm trap: cannot enter component instance" (the `wasm trap:` prefix)
-  //     is raised by GENERATED ADAPTER CODE — wasmtime-environ 47.0.3's FACT
-  //     compiles an unconditional `Trap::CannotEnterComponent` stub
-  //     (src/fact/trampoline.rs:116-127) whenever a fused adapter's lift and
-  //     lower sides are the SAME instance, or either is an ancestor of the
-  //     other — i.e. every VERTICAL (parent/child, either direction) fused
-  //     adapter is a static trap stub at the 47.0.3 pin, independent of
-  //     polyengine's own reentrance implementation. Only SIBLING adapters
-  //     compile to real fused code at this pin. Classed `fact-reentrance-47`,
-  //     https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmtime-environ bump).
-  //   - "cannot enter component instance ${index}" (NO `wasm trap:` prefix)
-  //     is polyengine's OWN entry refusal (runtime/src/exec/boundary.ts,
-  //     intrinsics/fact_calls.ts), produced in JS, not wasm — since the
-  //     CM#705 adoption landed (#251/#252/#255 + the model deletion,
-  //     polyengine#173) that refusal fires ONLY for a poisoned instance
-  //     (the per-instance corpse divergence, docs/architecture.md §6); the
-  //     transient reentrance gate it once signified is gone. ZERO corpus
-  //     rows in this file hit that path: every failing row below carries
-  //     the `wasm trap:` prefix, so all are FACT-47 static-stub trips.
-  //     The adoption cannot be proven or disproven here: FACT-47's stubs
-  //     trap before any polyengine runtime code runs. #173 is pinned by
-  //     runtime unit tests, not by this file. See also the correction note at
-  //     https://github.com/polymorph-components/polyengine/issues/248#issuecomment-5471308919. ---
-  {
-    file: "async/reentrance.json",
-    line: 42,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 60,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 99,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 151,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 198,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 237,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 346,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 517,
-    reason:
-      "expected return, got trap: wasm trap: cannot enter component " +
-      "instance — the `wasm trap:` prefix identifies this as FACT's " +
-      "static vertical-adapter trap stub (wasmtime-environ 47.0.3 " +
-      "src/fact/trampoline.rs:116-127 compiles `Trap::CannotEnterComponent` " +
-      "unconditionally whenever the fused adapter's lift/lower share an " +
-      "instance or either is an ancestor of the other), not polyengine's " +
-      "own reentrance gate (whose message has no `wasm trap:` prefix); " +
-      "fact-reentrance-47, https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: " +
-      "wasmtime-environ bump)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 100,
-    reason:
-      "cannot enter component instance 0 (reentrance forbidden) — " +
-      "instance poisoned by: Trap: wasm trap: cannot enter component " +
-      "instance — a POISON CASCADE of line 99's FACT-47 static-stub trap " +
-      "(polyengine's withPoisonCause names the original trap, #145): line " +
-      "99 traps first with the wasm-trap-prefixed FACT stub, poisoning the " +
-      "instance, so this second invoke on it reports the poisoned-corpse " +
-      "wrapper around the same underlying cause; clears when line 99 " +
-      "clears at the wasmtime-environ bump; fact-reentrance-47, " +
-      "https://github.com/polymorph-components/polyengine/issues/248",
-  },
+  // polyengine#173). The `fact-reentrance-47` static-stub class (#248,
+  // retired — see the note at the top of this file) previously MASKED the
+  // three rows below: with the stub gone, each now surfaces a genuine
+  // scheduler/reentrance semantic gap of its own, not a regression from
+  // this bump. Classed `cm705-reentrance`,
+  // https://github.com/polymorph-components/polyengine/issues/279.
+  // Lines 42/60/99/100/151/198/237/346 (the pure fact-reentrance-47 rows,
+  // with no residue underneath) all PASS now and are pruned. ---
   {
     file: "async/reentrance.json",
     line: 429,
     reason:
       "expected trap \"deadlock detected: event loop cannot make further " +
-      "progress\", got \"wasm trap: cannot enter component instance\" — " +
-      "the FACT-47 static vertical-adapter stub (trampoline.rs:116-127) " +
-      "preempts the deadlock-detection path entirely, firing before the " +
-      "scheduler can observe no ready threads; fact-reentrance-47, " +
-      "https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmtime-environ bump)",
+      "progress\", got SuspendError: trying to suspend JS frames — the " +
+      "deadlock is never diagnosed because the wait reaches a Suspending " +
+      "import through a JS callback frame; cm705-reentrance, " +
+      "https://github.com/polymorph-components/polyengine/issues/279",
+  },
+  {
+    file: "async/reentrance.json",
+    line: 517,
+    reason:
+      "expected return, got trap \"cannot drop a subtask which has not " +
+      "yet resolved\" — subtask.cancel on parked callback tasks while the " +
+      "callee instance is on the stack does not settle the cancellation " +
+      "before subtask.drop; cm705-reentrance, https://github.com/polymorph-components/polyengine/issues/279",
   },
   {
     file: "async/reentrance.json",
     line: 522,
     reason:
-      "translator error [validation]: section size mismatch: unexpected " +
-      "data at the end of the section (at offset 0xee) — wasmparser " +
-      "thread-built-in pin drift, same class as trap-if-block-and-sync." +
-      "json:5, https://github.com/polymorph-components/polyengine/issues/152 (this component uses " +
-      "waitable-set.new/waitable.join/subtask.cancel plus thread " +
-      "built-ins); deferred-threads anyway, https://github.com/polymorph-components/polyengine/issues/12 " +
-      "(pending-capability: wasmparser/wast pin alignment); NOT reentrance-related — " +
-      "a pure translate-time parse-drift failure at the module command, before " +
-      "any reentrance semantics could run",
+      "cascade: this component's `module` command is pending-capability " +
+      "(instantiate requires a host trampoline for a deferred thread " +
+      "built-in — waitable-set.new/waitable.join/subtask.cancel plus " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12); NOT reentrance-related",
   },
   {
     file: "async/reentrance.json",
     line: 645,
     reason:
-      "cascade of line 522's translate-time failure: no current instance " +
-      "(translate-time parse drift, not reentrance)",
-  },
-  {
-    file: "async/reentrance.json",
-    line: 657,
-    reason:
-      "translator error [validation]: invalid leading byte (0x2b) for " +
-      "canonical function lift (at offset 0xe8) — same wasmparser " +
-      "thread-built-in pin-drift class as line 522, https://github.com/polymorph-components/polyengine/issues/152 " +
-      "(pending-capability: wasmparser/wast pin alignment); NOT " +
-      "reentrance-related — a pure translate-time parse-drift failure at " +
-      "the module command",
+      "cascade of line 522 (module pending-capability, deferred thread " +
+      "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance (not reentrance-related)",
   },
   {
     file: "async/reentrance.json",
     line: 760,
     reason:
-      "cascade of line 657's translate-time failure: no current instance " +
-      "(translate-time parse drift, not reentrance)",
+      "cascade of line 657 (module pending-capability, deferred thread " +
+      "built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance (not reentrance-related)",
   },
   {
     file: "async/reentrance.json",
     line: 837,
     reason:
       "expected trap \"waitable cannot be used synchronously while added " +
-      "to a waitable set\", got \"wasm trap: cannot enter component " +
-      "instance\" — the FACT-47 static vertical-adapter stub " +
-      "(trampoline.rs:116-127) preempts the intended waitable-set-membership " +
-      "trap by firing first on the reentrant call; fact-reentrance-47, " +
-      "https://github.com/polymorph-components/polyengine/issues/248 (pending-capability: wasmtime-environ bump)",
+      "to a waitable set\", got \"guest trapped: unreachable\" — the " +
+      "reentrant `back` does not raise the sync-use-in-waitable-set trap; " +
+      "cm705-reentrance, https://github.com/polymorph-components/polyengine/issues/279",
+  },
+  // --- async/self-switch-traps.json: NEW file added by the CM#687
+  // thread.*-then-promote built-ins (third_party/component-model advance
+  // 2f13265 -> 7c67611, this dispatch). Its Tester component needs a host
+  // trampoline for `thread-index`, not implemented by this executor yet
+  // (deferred thread built-ins, https://github.com/polymorph-components/polyengine/issues/12); every
+  // module_instance command against it is pending-capability/SKIPPED (no
+  // xfail entry needed) and every assert cascades with "no current
+  // instance". Also listed in upstream's own
+  // third_party/component-model/test/nyi.txt at this pin. ---
+  {
+    file: "async/self-switch-traps.json",
+    line: 46,
+    reason:
+      "cascade of line 45 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
+  },
+  {
+    file: "async/self-switch-traps.json",
+    line: 48,
+    reason: "same cascade as line 46, see that entry",
+  },
+  {
+    file: "async/self-switch-traps.json",
+    line: 50,
+    reason: "same cascade as line 46, see that entry",
+  },
+  {
+    file: "async/self-switch-traps.json",
+    line: 52,
+    reason: "same cascade as line 46, see that entry",
+  },
+  // --- async/switch-to-ready-callback.json: NEW file, same CM#687 advance
+  // as self-switch-traps.json above. Same root cause: 'thread-index'
+  // deferred (https://github.com/polymorph-components/polyengine/issues/12); every module_instance command against
+  // Tester is pending-capability/SKIPPED (no xfail entry needed) and every
+  // assert cascades with "no current instance". ---
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 355,
+    reason:
+      "cascade of line 354 (module_instance pending-capability: " +
+      "instantiate requires host trampoline 'thread-index', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
+  },
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 357,
+    reason: "same cascade as line 355, see that entry",
+  },
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 359,
+    reason: "same cascade as line 355, see that entry",
+  },
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 361,
+    reason: "same cascade as line 355, see that entry",
+  },
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 363,
+    reason: "same cascade as line 355, see that entry",
+  },
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 365,
+    reason: "same cascade as line 355, see that entry",
+  },
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 367,
+    reason: "same cascade as line 355, see that entry",
+  },
+  {
+    file: "async/switch-to-ready-callback.json",
+    line: 369,
+    reason: "same cascade as line 355, see that entry",
   },
   // --- async/sync-streams.json: test/async/sync-streams.wast expects three
   // values polyengine does not produce (STARTING vs STARTED at the
@@ -1033,350 +825,155 @@ export const XFAIL: XfailEntry[] = [
       "produce, so the guest's own assertion traps; cm705-sync-sched, " +
       "https://github.com/polymorph-components/polyengine/issues/249",
   },
-  // --- async/trap-if-block-and-sync.json: cm705-gate-removal? No — the
-  // whole file is blocked by the pre-existing wasmparser/wast pin-drift
-  // class (https://github.com/polymorph-components/polyengine/issues/152, dual-classed with deferred
-  // threads https://github.com/polymorph-components/polyengine/issues/12): $Tester's canonical section uses
-  // 🧵 thread built-in encodings (CM#705 added a `trap-if-sync-cancel` export
-  // built from thread.suspend/thread.resume-later et al) that wasmparser 0.252
-  // misparses, same mechanism as binary.json:974/1206. Every later
-  // "(component instance $i $Tester)" + assert command cascades off the one
-  // failed component-definition command at line 5; CM#705 grew the file from
-  // 17 to 18 exported tests (trap-if-sync-cancel plus the four
-  // sync-stream/-future rows), so the cascade spans lines 273-311. ---
+  // --- async/trap-if-block-and-sync.json: (history: at the prior pin the
+  // whole file was blocked by the now-exited wasmparser/wast pin-drift
+  // class — see the EXIT note at the top of this file, $Tester's canonical
+  // section used 🧵 thread built-in encodings that the old decoder
+  // misparsed.) $Tester TRANSLATES AND DEFINES fine at the current pin
+  // (line 5 is stale here and pruned, confirmed by the stale-xfail
+  // detector); the surviving gap is one level down — instantiating it
+  // needs a host trampoline for a deferred thread built-in
+  // (`thread-yield-then-resume`), which this executor does not implement
+  // yet (deferred threads, https://github.com/polymorph-components/polyengine/issues/12).
+  // Every `(component instance $i $Tester)` command in the file is
+  // therefore pending-capability and SKIPPED (not failed; no xfail entry
+  // needed), and every assert against it cascades with "no current
+  // instance". CM#705 grew the file from 17 to 18 exported tests
+  // (trap-if-sync-cancel plus the four sync-stream/-future rows); the
+  // subsequent re-pin further changed the exact command layout (module_instance
+  // + assert pairs interleave 1:1 now, at lines 315-360, rather than the
+  // old single-definition-then-39-cascades shape at lines 5/273-311), so
+  // the old cascade line numbers (273-311) no longer correspond to any
+  // command in the regenerated corpus and have been replaced with the
+  // current ones below. ---
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 5,
+    line: 316,
     reason:
-      "wasmparser pin drift (same class as binary.json:974/1206 and " +
-      "attributes.json:30/213): `testgen` assembles the suite with `wast` " +
-      "255.0.0 while `translator-shim` validates with `wasmparser` 0.252.0, " +
-      "the version wasmtime-environ 47.0.3 links against. The 0.253-0.255 " +
-      "window re-aritied the thread built-in opcodes, so 0.252 misparses the " +
-      "$Tester canonical section and rejects a 🧵 thread-built-in-derived " +
-      "leading byte (\"invalid leading byte (0x28) for canonical function " +
-      "lift (at offset 0xb66)\" — a decoder-level failure, not a plan.rs " +
-      "mapping bug). Lifted by a wasmtime-environ whose wasmparser is >= the " +
-      "0.255 line; downgrading testgen to `wast` 252 is NOT a fix (verified: " +
-      "it fails to parse 44 of the 59 suite files, which use the newer " +
-      "`(memory (core memory ...))` text syntax). Note the file's canonical " +
-      "functions are all deferred thread built-ins anyway (https://github.com/polymorph-components/polyengine/issues/12) " +
-      "(pending-capability: wasmparser/wast pin alignment)",
+      "cascade of line 315 (module_instance pending-capability: instantiate " +
+      "requires host trampoline 'thread-yield-then-resume', deferred " +
+      "thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): no current instance",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 273,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 318,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 274,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 320,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 275,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 322,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 276,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 324,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 277,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 326,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 278,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 328,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 279,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 330,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 280,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 332,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 281,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 334,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 282,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 336,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 283,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 338,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 284,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 340,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 285,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 342,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 286,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 344,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 287,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 346,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 288,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 348,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 289,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 350,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 290,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 352,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 291,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 354,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 292,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 356,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 293,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 358,
+    reason: "same cascade as line 316, see that entry",
   },
   {
     file: "async/trap-if-block-and-sync.json",
-    line: 294,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 295,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 296,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 297,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 298,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 299,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 300,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 301,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 302,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 303,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 304,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 305,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 306,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 307,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 308,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 309,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 310,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-block-and-sync.json",
-    line: 311,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
+    line: 360,
+    reason: "same cascade as line 316, see that entry",
   },
   // --- async/trap-if-done.json: root cause: STREAMS ---
-  // --- async/trap-if-sync-and-waitable-set.json: root cause: FACT-ASYNC ---
+  // --- async/trap-if-sync-and-waitable-set.json: root cause: deferred
+  // thread built-ins (https://github.com/polymorph-components/polyengine/issues/12) — this file's Tester component
+  // needs a host trampoline for `thread-new-indirect`, which this executor
+  // does not implement yet, so every `module_instance` command against it
+  // is pending-capability/SKIPPED (no xfail entry needed) and every assert
+  // cascades with "no current instance". The file grew (CM#715) so the
+  // cascade now extends past the pre-existing 281-305 entries below to
+  // 307-327 (new entries added at the end of this block). Also listed in
+  // upstream's own third_party/component-model/test/nyi.txt at this pin. ---
   {
     file: "async/trap-if-sync-and-waitable-set.json",
     line: 281,
@@ -1480,6 +1077,65 @@ export const XFAIL: XfailEntry[] = [
       "cascade of this file's first failure: the component was " +
       "declined at instantiation, so no instance exists for this " +
       "command",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 307,
+    reason:
+      "cascade of this file's Tester module_instance command " +
+      "(pending-capability: instantiate requires host trampoline " +
+      "'thread-new-indirect', deferred thread built-ins, https://github.com/polymorph-components/polyengine/issues/12): " +
+      "no current instance — new row, file grew (CM#715)",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 309,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 311,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 313,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 315,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 317,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 319,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 321,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 323,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 325,
+    reason: "same cascade as line 307, see that entry",
+  },
+  {
+    file: "async/trap-if-sync-and-waitable-set.json",
+    line: 327,
+    reason: "same cascade as line 307, see that entry",
   },
   // --- async/trap-if-transfer-in-waitable-set.json: root cause: STREAMS ---
   // --- async/wait-during-callback.json: root cause: STREAMS ---

@@ -546,7 +546,8 @@ pub fn resolve_world(
     } else {
         let contents = std::fs::read_to_string(wit_path)
             .with_context(|| format!("reading {}", wit_path.display()))?;
-        let group = wit_parser::UnresolvedPackageGroup::parse(wit_path, &contents)?;
+        let group = wit_parser::UnresolvedPackageGroup::parse(wit_path, &contents)
+            .map_err(|(source_map, err)| anyhow::anyhow!("{}", err.render(&source_map)))?;
         resolve.push_group(group)?
     };
     let world_id = resolve

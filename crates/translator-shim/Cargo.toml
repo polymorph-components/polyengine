@@ -8,8 +8,8 @@ publish.workspace = true
 crate-type = ["lib", "cdylib"]
 
 [dependencies]
-# Pinned exactly (docs/architecture.md §4.1): the same major (47) as the installed wasmtime
-# CLI (47.0.1). Version lives in the root workspace table.
+# Pinned exactly (docs/architecture.md §4.1) to a wasmtime git rev; the
+# pin lives in the root workspace table.
 wasmtime-environ = { workspace = true }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
@@ -20,4 +20,4 @@ base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 [dev-dependencies]
 # For generating test components from WAT in tests (same wasm-tools family
 # version as wasmparser above).
-wat = "1.252"
+wat = "1.258"

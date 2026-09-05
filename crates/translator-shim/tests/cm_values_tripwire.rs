@@ -1,8 +1,8 @@
 //! ISSUE #95 tripwire: pins that a component using a `start` section, or a
 //! component-level `value` import, is rejected in the VALIDATION phase
 //! today — never reaching the `unimplemented!()` panics trusted
-//! wasmtime-environ 47.0.3's `translate.rs` has for both shapes
-//! (`:1338` for `start`, `:1499` for values). See the `CM_VALUES` comment
+//! wasmtime-environ's `translate.rs` has for both shapes (pinned rev, see
+//! root Cargo.toml). See the `CM_VALUES` comment
 //! on `features()` in `src/lib.rs`.
 //!
 //! Both shapes are gated by wasmparser's `cm_values` feature

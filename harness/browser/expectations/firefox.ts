@@ -52,12 +52,12 @@ export const firefox: LaneExpectation = {
   // Findings lane: totals are recorded for drift detection but the driver
   // does not gate on them (`required: false`).
   totals: {
-    commands: 1475,
-    executed: 1428,
-    passed: 1263,
+    commands: 1511,
+    executed: 1411,
+    passed: 1281,
     failed: 0,
-    xfail: 165,
-    pendingRuntime: 42,
+    xfail: 130,
+    pendingRuntime: 95,
     pendingCapability: 0,
     unsupportedDirective: 5,
   },

@@ -169,7 +169,7 @@ function capabilityOf(kind: string): "core" | "resources" | "task-core" {
 /**
  * The borrow bookkeeping of one in-flight synchronous cross-component call,
  * bracketed by the FACT adapter's `enter-sync-call` / `exit-sync-call`
- * imports (wasmtime-environ 47.0.3 `fact/trampoline.rs:810,904`: enter is
+ * imports (wasmtime-environ `fact/trampoline.rs`: enter is
  * emitted *before* argument translation and exit *after* the callee returns,
  * so every resource transfer for the call happens inside the bracket).
  *
@@ -407,10 +407,13 @@ function createTrampolineBody(
       return ctx.loweredImport(d);
     }
 
-    case "trap":
-      // FACT `runtime.trap` import: `(code: i32) -> ()` followed by
-      // `unreachable` (wasmtime-environ `fact/trampoline.rs:3932`).
-      return (code?: number) => {
+    case "trap": {
+      // FACT `runtime.trap<N>` import: nullary, one per trap code — the code
+      // is a static plan-visible field of the trampoline decl, not a call
+      // argument (`fact/trampoline.rs` `fn trap` -> `import_trap(trap)`,
+      // named `runtime.trap<N>`; contracts/plan-format.md "trap" trampoline).
+      const code = (decl as Extract<WireTrampoline, { kind: "trap" }>).code;
+      return () => {
         if (code === TRAP_UNCAUGHT_EXCEPTION) {
           const pending = ctx.trapState.pending;
           if (pending !== undefined) {
@@ -421,15 +424,14 @@ function createTrampolineBody(
             throw pending;
           }
         }
-        const message = code === undefined
-          ? undefined
-          : FACT_TRAP_MESSAGES[code];
+        const message = FACT_TRAP_MESSAGES[code];
         trap(
           message === undefined
-            ? `FACT adapter trap (code ${code ?? "?"})`
+            ? `FACT adapter trap (code ${code})`
             : `wasm trap: ${message}`,
         );
       };
+    }
 
     // Sync-call task bookkeeping (intrinsics.md §A) — assert-and-count.
     // wasmtime 47 signatures:

@@ -1,7 +1,7 @@
 // FACT string-transcoder intrinsics (runtime/src/intrinsics/transcode.ts).
 //
 // Each case is checked against the behavior of the corresponding wasmtime
-// 47.0.3 libcall (`runtime/vm/component/libcalls.rs`), which is the reference
+// libcall (`runtime/vm/component/libcalls.rs`), which is the reference
 // for this layer: FACT's generated adapters depend not just on the bytes
 // written but on the exact return values (how much of the source was
 // consumed, how much of the destination was filled, the compact-utf16 tag),

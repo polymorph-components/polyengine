@@ -39,7 +39,7 @@ const DUP_IMPORT_MODULE = new Uint8Array([
 function planFor(args: WirePlan["initializers"][0] & { op: "instantiate-module" }): WirePlan {
   return {
     formatVersion: SUPPORTED_FORMAT_VERSION,
-    producer: { shimVersion: "test", wasmtimeEnviron: "47.0.3", features: [] },
+    producer: { shimVersion: "test", wasmtimeEnviron: "49.0.0-dev+4675ee1", features: [] },
     component: { sha256: "0".repeat(64), len: DUP_IMPORT_MODULE.length },
     modules: [{ kind: "embedded", offset: 0, len: DUP_IMPORT_MODULE.length }],
     initializers: [args],

@@ -12,4 +12,4 @@ path = "src/main.rs"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
-wast = "255.0.0"
+wast = "258.0.0"

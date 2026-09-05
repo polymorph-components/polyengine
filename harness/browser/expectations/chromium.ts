@@ -48,12 +48,12 @@ export const chromium: LaneExpectation = {
   deltas: [],
   // Identical to the Deno lane's TOTAL row.
   totals: {
-    commands: 1475,
-    executed: 1428,
-    passed: 1263,
+    commands: 1511,
+    executed: 1411,
+    passed: 1281,
     failed: 0,
-    xfail: 165,
-    pendingRuntime: 42,
+    xfail: 130,
+    pendingRuntime: 95,
     pendingCapability: 0,
     unsupportedDirective: 5,
   },

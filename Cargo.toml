@@ -11,9 +11,11 @@ edition = "2021"
 publish = false
 
 [workspace.dependencies]
-# wasmtime-environ and wit-parser ride together: wasmtime 47 links wasmparser
-# 0.252, and wit-parser 0.252 is the same wasm-tools release train
-# (docs/architecture.md §4.1, §9). Bump both here, together; `just
-# test-rust` asserts they still agree.
-wasmtime-environ = { version = "=47.0.3", features = ["component-model", "compile", "anyhow"] }
-wit-parser = { version = "=0.252.0", features = ["serde"] }
+# wasmtime-environ and wit-parser ride together: the pinned wasmtime rev
+# (main, 49.0.0-dev) links wasmparser 0.258, and wit-parser 0.258 is the
+# same wasm-tools release train (docs/architecture.md §4.1, §9). Bump both
+# here, together — and third_party/component-model to the rev wasmtime's
+# own tests/component-model submodule pins; `just test-rust` asserts the
+# crates still agree.
+wasmtime-environ = { git = "https://github.com/bytecodealliance/wasmtime", rev = "4675ee16b703b33948073a5ff6b961367371e7a1", features = ["component-model", "compile", "anyhow"] }
+wit-parser = { version = "=0.258.0", features = ["serde"] }

@@ -6,7 +6,7 @@ the plan (`CoreDef::Trampoline` / `lower-import`). Producers of the
 requirement: the translator shim (per-plan manifest). Implementor: the runtime
 (`runtime/src/intrinsics/`).
 
-Sources of truth (pinned `wasmtime-environ 47.0.3`):
+Sources of truth (pinned `wasmtime-environ`, git rev in the root `Cargo.toml`):
 - (A) `wasmtime_environ::fact::Import` — every import FACT can emit.
 - (B) `wasmtime_environ::component::Trampoline` — every host trampoline the
   plan can reference.
@@ -22,8 +22,8 @@ not representable in the plan (never silently drop).
    error — waiting belongs to the task core.
 2. **Traps** are thrown as the runtime's `ComponentTrap` and must not be
    catchable by guest code (they propagate through wasm as JS exceptions).
-3. **Instance-state rules** (`may_leave`, `task_may_block` bookkeeping)
-   implement the Component Model invariants — the engine (JSPI) will not
+3. **Instance-state rules** (`may_leave` bookkeeping) implement the
+   Component Model invariants — the engine (JSPI) will not
    enforce them for us. The spec has no reentrance gate (CM#705 removed
    `may_enter`/`entering_set`): reentrance into a live instance
    (host-mediated, dtor, `*-start-call`, `enter-sync-call`) is valid. What
@@ -43,8 +43,9 @@ Import-module namespaces observed in generated adapters:
 instantiation-argument `CoreDef`s — the runtime never sees `fact::Import`
 directly. Intrinsic-like imports arrive as `CoreDef::Trampoline` entries
 (Trap, Enter/ExitSyncCall, Transcoder, ResourceTransfer*, PrepareCall,
-*StartCall, *Transfer) or plain wiring (callee funcs, memories, flags
-globals, task-may-block). The per-adapter manifest is import-names ×
+*StartCall, *Transfer), `CoreDef::UnsafeIntrinsic` (the `context.{get,set}`
+slot save/restore FACT wraps around `realloc` and `post-return`), or plain
+wiring (callee funcs, memories, flags globals). The per-adapter manifest is import-names ×
 resolved args, categorized — which is exactly what the shim emits.
 
 Pinned decisions:
@@ -53,10 +54,16 @@ Pinned decisions:
   component instance serves as both the FACT-visible flags global and
   host-side `may_leave`; FACT 47 reads/writes it as a plain 0/1 boolean (no
   bitmask).
-- **`task-may-block` initial value = 1** (sync tasks may block); one
-  runtime-managed mutable global.
-- **`Trap` carries an i32 code**; all codes map to `ComponentTrap`
-  (enumerate codes later for diagnostics).
+- **`Trap` is one nullary import per trap code** (`runtime.trap<N>`); the
+  code is a plan-visible field of the `trap` trampoline (plan-format.md),
+  and every code maps to `ComponentTrap` with wasmtime's message text.
+- **No eager sync-blocking check in adapters.** wasmtime #14146 removed the
+  `task_may_block` global and the static same-instance/ancestor
+  `cannot enter component` stub: a sync-typed function may call an
+  async-typed function or blocking built-in, and the trap fires only if it
+  actually has to block with no runnable thread left (the scheduler's
+  deadlock trap, definitions.py `Thread.wait_until`/`switch`). Reentrance is
+  allowed except into a trapped instance.
 - **ResourceTransfer semantics**: `resource-transfer-borrow` registers the
   source handle as a lender on the current sync-call scope and increments
   `num_lends` **unconditionally — borrow handles may be re-lent onward**
@@ -98,7 +105,9 @@ Implemented: `LowerImport` (host function call through descriptor-IR
 lift/lower), `ResourceDrop` (incl. the dtor call rules of
 docs/architecture.md §7), `ResourceNew`, `ResourceRep`, `Transcoder`, and
 the task-core set — `BackpressureInc/Dec`, `TaskReturn`, `TaskCancel`,
-`WaitableSetNew/Wait/Poll/Drop`, `WaitableJoin`, `ThreadYield`,
+`WaitableSetNew/Wait/Poll/Drop`, `WaitableJoin`, `ThreadYield` (the other
+`Thread*` built-ins are plan-representable but unimplemented, refused at
+instantiate time),
 `SubtaskDrop/Cancel`, `Stream*`, `Future*`, `ErrorContext*`,
 `ContextGet/Set`.
 
