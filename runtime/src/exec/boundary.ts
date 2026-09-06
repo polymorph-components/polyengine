@@ -678,6 +678,83 @@ function fireDriverArrival(store: Store): void {
 }
 
 // ---------------------------------------------------------------------------
+// Host-call arrival: the other stale snapshot
+// ---------------------------------------------------------------------------
+//
+// Every park that watches host calls does it by SNAPSHOT — `[...
+// store.pendingHostCalls]` is spread once, when the racer parks. A parked
+// driver therefore watches the calls that existed at park time and nothing
+// else, and the calls a store owns are not a fixed set: guest execution
+// registers new ones at the two `pendingHostCalls.add` sites below.
+//
+// The driver-arrival one-shot above does NOT cover this. It fires when a new
+// *driver* starts (`driveAsync` at depth > 1), and the registration that
+// opens the hole routinely happens under no new driver at all: an export
+// entered through the synchronous `drive` path runs guest code, the guest
+// lowers a host import, the call is registered — and the incumbent parked
+// driver, whose snapshot predates it, never hears about it. When that call
+// settles, its continuation readies the guest thread and deletes itself from
+// `pendingHostCalls`, but nobody drives: the settlement pump is standing down
+// because `storeDriverDepth > 0` (the parked driver counts), and the parked
+// driver is still waiting on promises that may never settle. The guest is
+// resumed by the next unrelated export call. That is the same class as #239 —
+// liveness held hostage by whatever an incumbent driver happens to be parked
+// on — with the registration, not the arrival of a second loop, as the event
+// that goes unheard.
+//
+// So registrations announce themselves too, on the same one-shot discipline:
+// fired by `registerHostCall` below (THE path for both sites), raced by
+// `driveAsync`'s parks
+// and by the settlement pump alongside their snapshots. A racer wakes within
+// a microtask, re-snapshots (which now includes the new call), and re-parks.
+//
+// Kept separate from driver arrival rather than folded into it because the
+// two mean different things — "another loop is driving this store, stand
+// down" versus "your snapshot is stale, re-take it" — and only the first is
+// what `fireDriverArrival`'s callers and doc comment assert.
+const hostCallArrivals = new WeakMap<Store, { p: Promise<null>; r: () => void }>();
+
+/** A one-shot that resolves (to `null`, the race's "nothing settled" value)
+ * when a new host call is registered on `store`. */
+function armHostCallArrival(store: Store): Promise<null> {
+  let n = hostCallArrivals.get(store);
+  if (n === undefined) {
+    let r!: () => void;
+    const p = new Promise<null>((res) => (r = () => res(null)));
+    n = { p, r };
+    hostCallArrivals.set(store, n);
+  }
+  return n.p;
+}
+
+function fireHostCallArrival(store: Store): void {
+  const n = hostCallArrivals.get(store);
+  if (n === undefined) return;
+  // Deleted before resolving, exactly as `fireDriverArrival`: a racer that
+  // wakes on this and re-parks must mint a fresh, unresolved one-shot rather
+  // than pick the settled promise back up and spin.
+  hostCallArrivals.delete(store);
+  n.r();
+}
+
+/**
+ * Register an outstanding host call on `store` and announce it to every
+ * parked racer. THE registration path for real host calls — the two lowering
+ * sites below go through it, and so does the regression test that pins the
+ * announcement (tests/parked_driver_host_call_test.ts), because a raw
+ * `pendingHostCalls.add` is exactly the silent registration this closes.
+ *
+ * (`HostActivity`'s arm in exec/host_streams.ts is deliberately NOT a caller:
+ * it re-arms on every embedder notification and means "the embedder may still
+ * act", not "the host owes an event" — the same distinction `hasRealHostCall`
+ * draws.)
+ */
+export function registerHostCall(store: Store, promise: Promise<unknown>): void {
+  store.pendingHostCalls.add(promise);
+  fireHostCallArrival(store);
+}
+
+// ---------------------------------------------------------------------------
 // The settlement pump: liveness between export calls
 // ---------------------------------------------------------------------------
 //
@@ -783,11 +860,17 @@ async function settlementPumpLoop(store: Store): Promise<void> {
       const real = realHostCalls(store);
       if (real.length === 0) return;
       const nudge = armSettlementNudge(store);
+      // `armHostCallArrival` rides here for the same reason the nudge does:
+      // `real` is a snapshot, and a host call registered by a driver that is
+      // live right now (we stood down for it above) is invisible to it. The
+      // nudge covers only the driver-EXIT path (`ensureSettlementPump`).
+      const arrival = armHostCallArrival(store);
       // Rejections are not this pump's to report: the registration site's
       // own continuation parks them on `store.hostFailure`.
       await Promise.race([
         ...real.map((p) => p.then(() => {}, () => {})),
         nudge,
+        arrival,
       ]);
       if (storeDriverDepth(store) > 0) continue;
       // Drive unconditionally after a wake: `storeQuiescent` cannot see a
@@ -1156,10 +1239,17 @@ async function driveAsync(
         // `armDriverArrival` rides the race for every driver, not just the one
         // holding the entry: waking on a new arrival is also how a fallback
         // pump reaches its next `done()` — i.e. its stand-down — promptly.
+        // `armHostCallArrival` rides for the sibling reason: the tags below
+        // are a snapshot of what was parked when we entered the race, so a
+        // host call registered after that — by an export entered through the
+        // synchronous `drive` path, which fires no driver arrival — can ready
+        // a thread with no racer watching for it. See the host-call arrival
+        // note above.
         winner = await Promise.race([
           chosenTag,
           ...others,
           armDriverArrival(store),
+          armHostCallArrival(store),
         ]);
       } finally {
         if (sole) store.removePendingResumption(chosen);
@@ -1209,6 +1299,14 @@ async function driveAsync(
     await Promise.race([
       ...store.pendingHostCalls,
       armDriverArrival(store),
+      // ... and the host-call-arrival one-shot, because the spread above is a
+      // SNAPSHOT: a host call registered while we are parked here — by an
+      // export entered through the synchronous `drive` path, which starts no
+      // new driver and so fires no driver arrival — would otherwise be
+      // watched by nobody at all (the settlement pump stands down while we,
+      // the parked driver, keep `storeDriverDepth` positive). See the
+      // host-call arrival note above.
+      armHostCallArrival(store),
     ]).catch(() => {});
   }
   } finally {
@@ -2335,7 +2433,7 @@ export function createLoweredImport(input: {
         // externally-wakeable (driveAsync: `pendingHostCalls.size === 0` is a
         // precondition of the deadlock verdict) and so teardown can observe
         // the outstanding call, mirroring the async arm below.
-        store.pendingHostCalls.add(promise);
+        registerHostCall(store, promise);
         // LENDER DISCHARGE ON EVERY SETTLE PATH (#106, the sibling of the
         // fact_calls.ts sync-start park's #102 enumeration):
         //
@@ -2419,7 +2517,7 @@ export function createLoweredImport(input: {
           store.hostFailure = e;
         },
       );
-      store.pendingHostCalls.add(promise);
+      registerHostCall(store, promise);
       if (!deferCancel) {
         // cancellation discard DISCARD (contracts/embedder-api.md §"Functions and async";
         // polyengine#241) — the reference's prompt-cancel host,
