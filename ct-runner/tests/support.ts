@@ -3,6 +3,7 @@
 
 import { Translator } from "../../runtime/src/shim/mod.ts";
 import type { ComponentArtifacts } from "../../runtime/src/embedder/mod.ts";
+import type { RunCounts } from "../src/mod.ts";
 
 const root = new URL("../../", import.meta.url);
 
@@ -38,3 +39,11 @@ export function artifactsOfBytes(
 }
 
 export const TEST_SUITE_WASM = "examples/guests/build/test-suite.component.wasm";
+
+/** `runSuite`'s tally for an unfiltered, untagged run of TEST_SUITE_WASM
+ * (4 pass, 1 fail, 1 skip; nothing gated or deselected). Tests whose
+ * subject is not the counts assert this whole; tests ABOUT `only`/tags
+ * spell out their own. */
+export const FULL_RUN_COUNTS: RunCounts = {
+  passed: 4, failed: 1, skipped: 1, na: 0, deselected: 0, selected: 6, total: 6,
+};

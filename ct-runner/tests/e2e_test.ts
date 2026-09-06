@@ -6,7 +6,7 @@
 
 import { assertEq } from "../../runtime/tests/support/asserts.ts";
 import { runSuite } from "../src/mod.ts";
-import { artifactsOf, haveFixture, TEST_SUITE_WASM } from "./support.ts";
+import { artifactsOf, FULL_RUN_COUNTS, haveFixture, TEST_SUITE_WASM } from "./support.ts";
 
 const ready = await haveFixture(TEST_SUITE_WASM);
 
@@ -21,15 +21,7 @@ Deno.test({
       suiteName: "test-suite",
       emit: (l) => lines.push(l),
     });
-    assertEq(counts, {
-      passed: 4,
-      failed: 1,
-      skipped: 1,
-      na: 0,
-      deselected: 0,
-      selected: 6,
-      total: 6,
-    });
+    assertEq(counts, FULL_RUN_COUNTS);
     assertEq(lines.length, 1 + 6 + 1); // envelope + 6 cases + terminator
 
     const events = lines.slice(1, -1).map((l) => JSON.parse(l));
@@ -158,14 +150,6 @@ Deno.test({
       freshCases: false,
       emit: (l) => lines.push(l),
     });
-    assertEq(counts, {
-      passed: 4,
-      failed: 1,
-      skipped: 1,
-      na: 0,
-      deselected: 0,
-      selected: 6,
-      total: 6,
-    });
+    assertEq(counts, FULL_RUN_COUNTS);
   },
 });
