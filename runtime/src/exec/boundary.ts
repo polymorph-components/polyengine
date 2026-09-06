@@ -689,11 +689,15 @@ function fireDriverArrival(store: Store): void {
 //
 // The driver-arrival one-shot above does NOT cover this. It fires when a new
 // *driver* starts (`driveAsync` at depth > 1), and the registration that
-// opens the hole routinely happens under no new driver at all: an export
-// entered through the synchronous `drive` path runs guest code, the guest
-// lowers a host import, the call is registered — and the incumbent parked
-// driver, whose snapshot predates it, never hears about it. When that call
-// settles, its continuation readies the guest thread and deletes itself from
+// opens the hole routinely happens under no new driver at all. Two paths run
+// guest code without bumping the driver depth: an export entered through the
+// synchronous `drive` path, and `HostActivity.pump()`'s synchronous drain
+// (exec/host_streams.ts) while its async half is already parked in
+// `driveAsync` — the stream-dom shape, a `readDirect` session live and every
+// import awaited from an event handler. Either way the guest lowers a host
+// import, the call is registered — and the incumbent parked driver, whose
+// snapshot predates it, never hears about it. When that call settles, its
+// continuation readies the guest thread and deletes itself from
 // `pendingHostCalls`, but nobody drives: the settlement pump is standing down
 // because `storeDriverDepth > 0` (the parked driver counts), and the parked
 // driver is still waiting on promises that may never settle. The guest is
@@ -703,10 +707,11 @@ function fireDriverArrival(store: Store): void {
 // that goes unheard.
 //
 // So registrations announce themselves too, on the same one-shot discipline:
-// fired by `registerHostCall` below (THE path for both sites), raced by
-// `driveAsync`'s parks
-// and by the settlement pump alongside their snapshots. A racer wakes within
-// a microtask, re-snapshots (which now includes the new call), and re-parks.
+// fired by `registerHostCall` below (THE path for both sites) and raced by
+// every `driveAsync` park that spreads `pendingHostCalls`, alongside the
+// snapshot. A racer wakes within a microtask, re-snapshots (which now includes
+// the new call), and re-parks. The settlement pump does not need it: see the
+// note at its race.
 //
 // Kept separate from driver arrival rather than folded into it because the
 // two mean different things — "another loop is driving this store, stand
@@ -860,17 +865,16 @@ async function settlementPumpLoop(store: Store): Promise<void> {
       const real = realHostCalls(store);
       if (real.length === 0) return;
       const nudge = armSettlementNudge(store);
-      // `armHostCallArrival` rides here for the same reason the nudge does:
-      // `real` is a snapshot, and a host call registered by a driver that is
-      // live right now (we stood down for it above) is invisible to it. The
-      // nudge covers only the driver-EXIT path (`ensureSettlementPump`).
-      const arrival = armHostCallArrival(store);
+      // The host-call arrival one-shot does NOT ride here, deliberately: a
+      // registration this snapshot misses always reaches `ensureSettlementPump`
+      // (which fires the nudge) — `driveAsync`'s finally, `drive`'s synchronous
+      // completion, and `HostActivity.pump()`'s async half is itself a
+      // `driveStoreAsync`. Any driver live meanwhile is what we stand down for.
       // Rejections are not this pump's to report: the registration site's
       // own continuation parks them on `store.hostFailure`.
       await Promise.race([
         ...real.map((p) => p.then(() => {}, () => {})),
         nudge,
-        arrival,
       ]);
       if (storeDriverDepth(store) > 0) continue;
       // Drive unconditionally after a wake: `storeQuiescent` cannot see a
@@ -1172,6 +1176,7 @@ async function driveAsync(
           await Promise.race([
             ...store.pendingHostCalls,
             armDriverArrival(store),
+            armHostCallArrival(store),
           ]).catch(() => {});
           continue;
         }
@@ -1241,10 +1246,10 @@ async function driveAsync(
         // pump reaches its next `done()` — i.e. its stand-down — promptly.
         // `armHostCallArrival` rides for the sibling reason: the tags below
         // are a snapshot of what was parked when we entered the race, so a
-        // host call registered after that — by an export entered through the
-        // synchronous `drive` path, which fires no driver arrival — can ready
-        // a thread with no racer watching for it. See the host-call arrival
-        // note above.
+        // host call registered after that under no new driver (a sync `drive`
+        // export, `HostActivity.pump()`'s sync drain — neither fires a driver
+        // arrival) can ready a thread with no racer watching for it. See the
+        // host-call arrival note above.
         winner = await Promise.race([
           chosenTag,
           ...others,
@@ -1300,12 +1305,12 @@ async function driveAsync(
       ...store.pendingHostCalls,
       armDriverArrival(store),
       // ... and the host-call-arrival one-shot, because the spread above is a
-      // SNAPSHOT: a host call registered while we are parked here — by an
-      // export entered through the synchronous `drive` path, which starts no
-      // new driver and so fires no driver arrival — would otherwise be
-      // watched by nobody at all (the settlement pump stands down while we,
-      // the parked driver, keep `storeDriverDepth` positive). See the
-      // host-call arrival note above.
+      // SNAPSHOT: a host call registered while we are parked here under no
+      // new driver (a sync `drive` export, `HostActivity.pump()`'s sync drain
+      // — neither fires a driver arrival) would otherwise be watched by
+      // nobody at all (the settlement pump stands down while we, the parked
+      // driver, keep `storeDriverDepth` positive). See the host-call arrival
+      // note above.
       armHostCallArrival(store),
     ]).catch(() => {});
   }
