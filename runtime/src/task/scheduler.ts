@@ -1270,29 +1270,28 @@ export function storeQuiescent(store: Store): boolean {
 }
 
 /**
- * The reference's `canon_lift` sync driving loop (line 2213):
+ * The reference's `canon_lift` sync driving loop (definitions.py, lines
+ * 2190-2192, post-CM#705):
  *
  * ```python
  * while task.state != Task.State.RESOLVED:
- *   candidates = { t for t in inst.threads if t.ready() and t is not inst.exclusive_thread }
+ *   candidates = { t for t in inst.threads if t.ready() }
  *   trap_if(not candidates)
  *   random.choice(list(candidates)).resume()
  * ```
  *
  * Note the candidate set is `inst.threads` — threads *of the callee instance*
- * — and excludes the exclusive thread, and that an empty set is a **trap**
- * (the spec's deadlock trap), not a hang.
+ * — with no exclusion (CM#705 dropped the prior `exclusive_thread` carve-out),
+ * and that an empty set is a **trap** (the spec's deadlock trap), not a hang.
  */
 export function driveSyncLift(
   task: {
     state: string;
-    inst: { threads: Iterable<SchedulableThread>; exclusiveThread: unknown };
+    inst: { threads: Iterable<SchedulableThread> };
   },
 ): void {
   while (task.state !== "resolved") {
-    const candidates = [...task.inst.threads].filter(
-      (t) => t.ready() && (t as unknown) !== task.inst.exclusiveThread,
-    );
+    const candidates = [...task.inst.threads].filter((t) => t.ready());
     trapIf(
       candidates.length === 0,
       "deadlock: synchronous task cannot resolve and no thread is ready",

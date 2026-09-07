@@ -406,6 +406,19 @@ the spec removed `may_enter`/`entering_set`
 reentrance into a live instance — host-mediated or otherwise — is simply
 valid.
 
+Named divergence ([#296](https://github.com/polymorph-components/polyengine/issues/296)):
+**cancel-read/cancel-write of a copy that already COMPLETED reports
+CANCELLED|count.** definitions.py's `cancel_copy` returns an already-armed
+pending event verbatim, so cancelling a stream copy the guest never observed
+completing would report COMPLETED|count; polyengine instead supersedes an
+undelivered stream COMPLETED with CANCELLED, count preserved, following the
+upstream suite (`test/async/big-interleaving-test.wast:1526-1531`, which
+asserts `0x42` where the reference's own rule gives `0x40`) over
+definitions.py itself. Mechanics at the site
+(`runtime/src/intrinsics/stream_builtins.ts`, `takeCancelEvent`); the
+definitions.py-vs-suite disagreement is tracked for upstream filing as
+[CM-3](../upstream-component-model-repo-findings.md#cm-3-cancel_copy-returns-a-stale-completed-where-wasmtime-reports-cancelled).
+
 ## 7. Canonical ABI decisions
 
 Authority: [CanonicalABI.md] and its executable reference
