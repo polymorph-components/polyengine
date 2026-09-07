@@ -33,6 +33,7 @@ import {
   driveSyncLift,
   EventCode,
   withActivation,
+  addInstancePoisonedListener,
   hasRealHostCall,
   isInstancePoisoned,
   type EventTuple,
@@ -436,16 +437,44 @@ function traceDrive(loop: string, store: Store, done: () => boolean, branch: str
 }
 
 /**
+ * What a driving loop does when it runs out of moves with `done()` still
+ * false — the reference's empty-candidate-set state.
+ *
+ * `"trap"` is definitions.py `canon_lift`'s `trap_if(not candidates)` (line
+ * 2189) and the default for every driver in this runtime: the sync-lift
+ * paths, the destructor entry, and the pumps (which cannot reach the verdict
+ * anyway — see `driveStoreAsync`).
+ *
+ * `"exit"` returns instead, leaving `done()` false for the caller to notice.
+ * It exists for ONE caller: an **async-typed** lifted export (#292). The
+ * reference's driving loop is guarded by `if not ft.async_`, so for such an
+ * export `canon_lift` returns right after the first `thread.resume()` and the
+ * driving — with it, the idle verdict — belongs to the embedder's
+ * `Store.tick`, which never traps. wasmtime draws the same line:
+ * `run_concurrent` is `poll_until(trap_on_idle=false)` (a `call_concurrent`
+ * future simply stays pending on idle), and the trapping variant
+ * `run_concurrent_trap_on_idle` is `pub(super)`, backing only the blocking
+ * `[Typed]Func::call_async`. Polyengine's Promise-shaped export is
+ * `call_concurrent` under an always-live `run_concurrent` (docs/architecture.md
+ * §"Mapping the reference model"), hence "exit".
+ */
+type IdlePolicy = "trap" | "exit";
+
+/**
  * Pump `store` until `done()` holds. Returns `undefined` if that was achieved
  * synchronously, or a Promise that settles when it has been.
+ *
+ * Under `idle: "exit"` it may also return with `done()` still false; see
+ * `IdlePolicy`.
  */
 function drive(
   store: Store,
   done: () => boolean,
   what: string,
+  idle: IdlePolicy = "trap",
 ): void | Promise<void> {
   try {
-    return driveLoop(store, done, what);
+    return driveLoop(store, done, what, idle);
   } catch (e) {
     // EXIT BY EXCEPTION IS STILL AN EXIT. A trap unwinds this call, but the
     // sibling work this loop already started — a registered host call, a
@@ -461,6 +490,7 @@ function driveLoop(
   store: Store,
   done: () => boolean,
   what: string,
+  idle: IdlePolicy,
 ): void | Promise<void> {
   for (;;) {
     traceDrive("drive", store, done, "top");
@@ -493,9 +523,19 @@ function driveLoop(
     // activation has not run yet (see `Store.tick`).
     if (store.awaiting.size > 0 || store.hasPendingResumptions()) {
       traceDrive("drive", store, done, "->async(awaiting/pending)");
-      return driveAsync(store, done, what);
+      return driveAsync(store, done, what, idle);
     }
     if (store.pendingHostCalls.size === 0) {
+      // The idle verdict. Under "exit" (an async-typed lift, #292) this is
+      // not a fault at all: the task simply has nothing to run right now and
+      // the export's Promise stays pending until a later driver finishes it.
+      if (idle === "exit") {
+        traceDrive("drive", store, done, "EXIT-idle");
+        // Same hand-off as the `done()` exit above: work this loop started
+        // outlives it.
+        ensureSettlementPump(store);
+        return;
+      }
       traceDrive("drive", store, done, "DEADLOCK-TRAP");
       trapIf(
         true,
@@ -505,7 +545,7 @@ function driveLoop(
       );
     }
     traceDrive("drive", store, done, "->async(hostcalls)");
-    return driveAsync(store, done, what);
+    return driveAsync(store, done, what, idle);
   }
 }
 
@@ -960,6 +1000,7 @@ async function driveAsync(
   store: Store,
   done: () => boolean,
   what: string,
+  idle: IdlePolicy = "trap",
 ): Promise<void> {
   const depth = storeDriverDepth(store) + 1;
   driverDepth.set(store, depth);
@@ -1152,6 +1193,10 @@ async function driveAsync(
             continue;
           }
           if (store.readyCandidates().length === 0) {
+            if (idle === "exit") {
+              traceDrive("driveAsync", store, done, "EXIT-idle");
+              return;
+            }
             trapIf(
               true,
               `wasm trap: deadlock detected: event loop cannot make ` +
@@ -1336,6 +1381,10 @@ async function driveAsync(
       continue;
     }
     if (store.pendingHostCalls.size === 0) {
+      if (idle === "exit") {
+        traceDrive("driveAsync", store, done, "EXIT-idle");
+        return;
+      }
       traceDrive("driveAsync", store, done, "DEADLOCK-TRAP");
       trapIf(
         true,
@@ -1439,6 +1488,46 @@ function takeHostFailure(store: Store): unknown {
  */
 export const SYNC_ENTRY: unique symbol = Symbol("polyengine.syncEntry");
 
+// ---------------------------------------------------------------------------
+// Pending async-typed lifts, and their poisoning (#292)
+// ---------------------------------------------------------------------------
+//
+// An async-typed export whose driver exited idle (see `IdlePolicy`) leaves a
+// host-visible Promise settled by nothing but the task itself finishing. If
+// the task instead dies — a LATER driver runs it and traps — the instance is
+// poisoned and that task's threads will never unregister, so the Promise
+// would hang forever. That is precisely the failure #66 fixed for parked
+// stream/future ends, and it gets the same treatment: a poisoning listener
+// that rejects every pending lift of the instance with the poisoning cause.
+//
+// Registered on the extra-listener seam rather than `setOnInstancePoisoned`
+// (which streams.ts owns) — see `addInstancePoisonedListener` for the
+// evaluation-order reason both are seams.
+const pendingLifts = new WeakMap<object, Set<(cause: unknown) => void>>();
+
+function registerPendingLift(inst: object, reject: (c: unknown) => void): void {
+  let s = pendingLifts.get(inst);
+  if (s === undefined) pendingLifts.set(inst, (s = new Set()));
+  s.add(reject);
+}
+
+function unregisterPendingLift(
+  inst: object,
+  reject: (c: unknown) => void,
+): void {
+  pendingLifts.get(inst)?.delete(reject);
+}
+
+addInstancePoisonedListener((inst, cause) => {
+  const s = pendingLifts.get(inst as object);
+  if (s === undefined || s.size === 0) return;
+  // Drained before dispatch: a rejection handler running synchronously must
+  // not see, or re-enter, this set.
+  const waiters = [...s];
+  s.clear();
+  for (const r of waiters) r(cause);
+});
+
 export function createLiftedFunction(input: {
   name: string;
   ft: FuncType;
@@ -1497,6 +1586,17 @@ export function createLiftedFunction(input: {
    * is nothing to poison — the same structural safety as `entryRefusal`.
    */
   refuseOnEntryHops?: boolean;
+  /**
+   * Make **async-typed** exports trap on idle instead of leaving their
+   * Promise pending (#292). Default false; see `IdlePolicy`.
+   *
+   * `InstantiateInput.trapOnIdle`'s only consumer is the conformance harness,
+   * whose `invoke` directive is a *blocking* call — the wast semantics
+   * wasmtime serves with `run_concurrent_trap_on_idle` behind
+   * `[Typed]Func::call_async`, not with `call_concurrent`. It is deliberately
+   * absent from the embedder layer's options.
+   */
+  trapOnIdle?: boolean;
 }): (...args: ComponentValue[]) => unknown {
   const {
     name,
@@ -1516,6 +1616,9 @@ export function createLiftedFunction(input: {
   // built-in, so it is `promising`-wrapped exactly when the imports are
   // `Suspending`-wrapped.
   const enteredCore = enterWasm(core, mode);
+  // See the comment at the `drive` call in `invokeNow` and `IdlePolicy`.
+  const idlePolicy: IdlePolicy =
+    ft.async === true && input.trapOnIdle !== true ? "exit" : "trap";
   const taskOpts: TaskOptions = {
     async_: opts.async,
     callback: opts.callback !== null,
@@ -1751,7 +1854,60 @@ export function createLiftedFunction(input: {
       throw e;
     }
 
+    /**
+     * The task outlived its driver (#292): hand the host a Promise settled by
+     * the task itself.
+     *
+     * Resolution rides `finishHostEntry` unchanged — it already holds
+     * `completed`/`resultsToHost` — fired from `Task.onFinished`, i.e. the
+     * moment this task's last thread unregisters. That point is safe for the
+     * old `done` predicate's task-scoped clauses: `resolvedSeen` is
+     * guaranteed (`unregisterThread`'s own `trapIf(state !== "resolved")`
+     * fires first otherwise), and this task's threads are gone from
+     * `store.awaiting`, so `midWasmCall()` is false by construction.
+     * `hopParked()` is deliberately NOT re-tested: a hop is the obligation of
+     * the driver that put it in flight (#280), never of a Promise waiting on
+     * another task.
+     *
+     * Rejection has two sources: `finishHostEntry` itself throwing, and the
+     * instance being poisoned by a later driver that ran this task into a
+     * trap. Neither calls `unwind()`. A trap on the background path happens
+     * under ANOTHER driver's `invokeNow`, whose own `catch` already unwinds
+     * the FACT sync-call scopes and restores `may_leave` — running it twice
+     * would restore sibling instances' `may_leave` from underneath a lift
+     * that driver is still mid-flight in. This mirrors what already happens
+     * to a post-`task.return` producer thread that traps later.
+     */
+    const backgroundCompletion = (): Promise<unknown> =>
+      new Promise((resolve, reject) => {
+        // Degenerate case: the task is already over (its threads unregistered
+        // during the drive) and only a foreign hop kept `done` false. Nothing
+        // will fire `onFinished`, so settle now.
+        if (task.threads.length === 0) {
+          try {
+            resolve(finishHostEntry());
+          } catch (e) {
+            reject(e);
+          }
+          return;
+        }
+        const onPoison = (cause: unknown): void => {
+          task.onFinished = null;
+          reject(cause);
+        };
+        registerPendingLift(inst, onPoison);
+        task.onFinished = () => {
+          unregisterPendingLift(inst, onPoison);
+          try {
+            resolve(finishHostEntry());
+          } catch (e) {
+            reject(e);
+          }
+        };
+      });
+
     let pending: void | Promise<void>;
+    let driveDone: () => boolean = () => true;
     try {
       // Completion is "the task resolved AND its threads have drained", not
       // merely "resolved". `task.return` resolves the task, but the activation
@@ -1810,10 +1966,29 @@ export function createLiftedFunction(input: {
       // covers this task's own suspended thread.
       const midWasmCall = () => task.threads.some((t) => store.awaiting.has(t));
       const hopParked = () => entryHopThreads(store).length > 0;
+      driveDone = () => resolvedSeen && !midWasmCall() && !hopParked();
+      // ASYNC-TYPED EXPORTS DO NOT TRAP ON IDLE (#292). definitions.py
+      // `canon_lift` runs the driving loop — and with it the
+      // empty-candidate-set `trap_if` — only `if not ft.async_` (line 2189);
+      // for an async-typed export it returns right after the first
+      // `thread.resume()` and driving is the embedder's `Store.tick`, which
+      // never traps. wasmtime splits the same way (`run_concurrent` =
+      // `poll_until(trap_on_idle=false)` vs the `pub(super)`
+      // `run_concurrent_trap_on_idle` behind the blocking `call_async`), and
+      // polyengine's Promise-shaped export is the `call_concurrent` side.
+      // So the driver EXITS — it does not park and does not trap — and the
+      // task is left live for whichever driver next runs the store (the next
+      // export call, the settlement pump, a host stream op): exactly the
+      // between-calls liveness that already services post-`task.return`
+      // producer threads. Repro: an async export parked WAITing on an
+      // intra-component future a later export call writes.
+      // Sync-typed exports are unchanged: their loop traps on idle in every
+      // mode, which is what the paragraphs above describe.
       pending = drive(
         store,
-        () => resolvedSeen && !midWasmCall() && !hopParked(),
+        driveDone,
         `export '${name}'`,
+        idlePolicy,
       );
     } catch (e) {
       unwind();
@@ -1821,13 +1996,17 @@ export function createLiftedFunction(input: {
     }
     if (pending === undefined) {
       try {
+        if (idlePolicy === "exit" && !driveDone()) return backgroundCompletion();
         return finishHostEntry();
       } catch (e) {
         unwind();
         throw e;
       }
     }
-    return pending.then(finishHostEntry, (e) => {
+    return pending.then(() => {
+      if (idlePolicy === "exit" && !driveDone()) return backgroundCompletion();
+      return finishHostEntry();
+    }, (e) => {
       unwind();
       throw e;
     });

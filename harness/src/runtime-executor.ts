@@ -163,7 +163,17 @@ export class RuntimeExecutor implements CommandExecutor {
     }
     let handle: ComponentHandle;
     try {
-      handle = await instantiateComponent({ plan, componentBytes: bytes, adapters });
+      handle = await instantiateComponent({
+        plan,
+        componentBytes: bytes,
+        adapters,
+        // The wast `invoke` directive is a BLOCKING call: an async-typed
+        // export that goes idle with its task unresolved is a deadlock for
+        // this runner, not a Promise to leave pending (#292). wasmtime's
+        // wast runner takes the same route — `[Typed]Func::call_async`, i.e.
+        // `run_concurrent_trap_on_idle`.
+        trapOnIdle: true,
+      });
     } catch (e) {
       if (e instanceof Trap) {
         if (expect === "trap") throw new TrapError(e.message);

@@ -157,6 +157,25 @@ export interface InstantiateInput {
    * checked.
    */
   loadedPlan?: LoadedPlan;
+  /**
+   * Make **async-typed** exports trap on idle (#292). Default false.
+   *
+   * An async-typed export whose task parks on something only a *later* call
+   * can ready — a `future.read` on an intra-component future — is not a
+   * deadlock: definitions.py `canon_lift` runs its trapping driving loop only
+   * `if not ft.async_` (line 2189), leaving the driving to the embedder. So
+   * by default such an export's Promise simply stays pending. Setting this
+   * restores the trap, which is what a *blocking* call wants — wasmtime's
+   * `run_concurrent_trap_on_idle` behind `[Typed]Func::call_async`.
+   *
+   * Its only consumer is the conformance harness's `invoke` directive
+   * (harness/src/runtime-executor.ts). Deliberately NOT surfaced by the
+   * embedder layer (`EmbedderOptions`): the embedder's exports are the
+   * `call_concurrent` shape.
+   *
+   * Sync-typed exports are unaffected either way — their loop always traps.
+   */
+  trapOnIdle?: boolean;
 }
 
 /** An instantiated component: its export surface plus introspection state. */
@@ -243,6 +262,8 @@ class Executor {
   readonly adapterBytes: Map<string, Uint8Array>;
   readonly hostImports: HostImports;
   readonly verifyHash: boolean;
+  /** See `InstantiateInput.trapOnIdle`. */
+  readonly trapOnIdle: boolean;
   /** See `InstantiateInput.jspi` and jspi/bridge.ts's invariant. */
   readonly suspensionMode: SuspensionMode;
 
@@ -392,6 +413,7 @@ class Executor {
     this.adapterBytes = input.adapters ?? new Map();
     this.hostImports = input.imports ?? {};
     this.verifyHash = input.verifyHash ?? true;
+    this.trapOnIdle = input.trapOnIdle ?? false;
     // AUTO-DETECTION IS ON by default. `chooseMode` picks jspi when the
     // embedder opts in OR when the plan needs suspension: a stackful async
     // lift, or a genuinely blocking built-in — classified per DECLARATION
@@ -895,6 +917,8 @@ class Executor {
           trapState: this.trapState,
           syncCallStack: this.syncCallStack,
           allInstances: () => this.componentInstances.values(),
+          // Async-typed exports only; see `InstantiateInput.trapOnIdle`.
+          trapOnIdle: this.trapOnIdle,
         });
         // Every SYNC-TYPED export additionally carries a plain-entered
         // variant (see SYNC_ENTRY, contracts/embedder-api.md §"Functions and async"):
