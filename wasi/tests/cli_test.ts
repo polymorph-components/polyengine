@@ -100,6 +100,42 @@ Deno.test("cli: no terminal is ever attached (option collapses to undefined)", (
   assertEq(stdinTerm.getTerminalStdin(), undefined);
 });
 
+// `passthrough` mirrors writes to the console as they happen, on both
+// tracks, while still capturing. A consumer (lann/wosh) depends on it:
+// its guest's stderr is the only diagnostic channel it has.
+Deno.test("cli: passthrough mirrors stdout/stderr to console on both tracks; off by default", async () => {
+  const logged: string[] = [];
+  const errored: string[] = [];
+  const origLog = console.log, origError = console.error;
+  console.log = (...a: unknown[]) => logged.push(a.join(" "));
+  console.error = (...a: unknown[]) => errored.push(a.join(" "));
+  try {
+    const quiet = cli();
+    (quiet.imports["wasi:cli/stdout@0.2"] as { getStdout(): { write(c: Uint8Array): void } })
+      .getStdout().write(new TextEncoder().encode("silent"));
+    assertEq(logged.length, 0);
+    assertEq(quiet.captured.stdoutText(), "silent");
+
+    const { imports, captured } = cli({ passthrough: true });
+    (imports["wasi:cli/stdout@0.2"] as { getStdout(): { write(c: Uint8Array): void } })
+      .getStdout().write(new TextEncoder().encode("out2"));
+    (imports["wasi:cli/stderr@0.2"] as { getStderr(): { write(c: Uint8Array): void } })
+      .getStderr().write(new TextEncoder().encode("err2"));
+    await (imports["wasi:cli/stderr@0.3"] as {
+      writeViaStream(data: AsyncIterable<Uint8Array>): Promise<{ kind: string }>;
+    }).writeViaStream((async function* () {
+      yield new TextEncoder().encode("err3");
+    })());
+    assertEq(JSON.stringify(logged), JSON.stringify(["out2"]));
+    assertEq(JSON.stringify(errored), JSON.stringify(["err2", "err3"]));
+    assertEq(captured.stdoutText(), "out2");
+    assertEq(captured.stderrText(), "err2err3");
+  } finally {
+    console.log = origLog;
+    console.error = origError;
+  }
+});
+
 // --- the @0.3 track (capture impl) ---------------------------------------------
 
 Deno.test("cli@0.3: write-via-stream captures; read-via-stream serves the buffer", async () => {
