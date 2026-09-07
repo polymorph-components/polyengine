@@ -349,9 +349,7 @@ export class Task {
       resume(cancelled?: boolean): void;
     };
     let candidates: Cancellable[] = this.threads.filter((t) => t.cancellable);
-    const excludeImplicit = this.ft.async === true && this.needsExclusive() &&
-      this.inst.exclusiveThread !== null &&
-      this.inst.exclusiveThread !== this.implicitThread;
+    const excludeImplicit = !this.implicitThreadCancellable();
     if (excludeImplicit) {
       candidates = candidates.filter((t) => t !== this.implicitThread);
     }
@@ -407,9 +405,31 @@ export class Task {
     }
   }
 
+  /**
+   * Is the implicit thread cancellable *right now*?
+   *
+   * The reference makes cancellability a live predicate — the callback loop
+   * passes `cancellable = lock_available` (definitions.py 2167/2175), false
+   * while a sibling activation of the instance holds the exclusive slot. We
+   * carry a static flag per block point instead, so this is where the "and
+   * the lock is free" conjunct lives: both `request_cancellation`'s candidate
+   * filter and `Thread.wait_until`'s pending-cancel wakeup disjunct consult
+   * it.
+   */
+  implicitThreadCancellable(): boolean {
+    return !(this.ft.async === true && this.needsExclusive() &&
+      this.inst.exclusiveThread !== null &&
+      this.inst.exclusiveThread !== this.implicitThread);
+  }
+
+  /** definitions.py `Task.has_pending_cancel` (line 533). */
+  hasPendingCancel(): boolean {
+    return this.state === "pending-cancel";
+  }
+
   /** definitions.py `Task.deliver_pending_cancel` (line 536). */
   deliverPendingCancel(cancellable: boolean): boolean {
-    if (cancellable && this.state === "pending-cancel") {
+    if (cancellable && this.hasPendingCancel()) {
       this.state = "cancel-delivered";
       return true;
     }
