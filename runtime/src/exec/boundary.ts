@@ -445,7 +445,8 @@ function traceDrive(loop: string, store: Store, done: () => boolean, branch: str
  * paths, the destructor entry, and the pumps (which cannot reach the verdict
  * anyway — see `driveStoreAsync`).
  *
- * `"exit"` returns instead, leaving `done()` false for the caller to notice.
+ * `"exit"` returns instead, with the verdict `"idle"` (`DriveExit`) for the
+ * caller to act on.
  * It exists for ONE caller: an **async-typed** lifted export (#292). The
  * reference's driving loop is guarded by `if not ft.async_`, so for such an
  * export `canon_lift` returns right after the first `thread.resume()` and the
@@ -461,18 +462,35 @@ function traceDrive(loop: string, store: Store, done: () => boolean, branch: str
 type IdlePolicy = "trap" | "exit";
 
 /**
- * Pump `store` until `done()` holds. Returns `undefined` if that was achieved
- * synchronously, or a Promise that settles when it has been.
+ * WHY a driving loop returned: `"done"` means `done()` held at the exit test,
+ * `"idle"` means the loop ran out of moves with `done()` still false and
+ * `idle: "exit"` let it return instead of trapping (only an async-typed lift
+ * asks for that; see `IdlePolicy`).
  *
- * Under `idle: "exit"` it may also return with `done()` still false; see
- * `IdlePolicy`.
+ * The verdict is a RETURN VALUE, not something the caller re-derives, because
+ * `done` is a predicate over shared, time-varying store state: between a
+ * driver's exit test and its caller's continuation (one microtask later)
+ * another driver of the same store can flip it. That is polyengine#310 — a
+ * lift that exited `done` re-tested `driveDone()` in its `.then`, the
+ * settlement pump had meanwhile hop-parked a background activation, and the
+ * lift took the never-completing background path. The exit verdict is a fact
+ * about the past and cannot rot; the predicate can.
+ */
+type DriveExit = "done" | "idle";
+
+/**
+ * Pump `store` until `done()` holds. Returns the exit verdict directly if
+ * that was settled synchronously, or a Promise of it otherwise.
+ *
+ * Under `idle: "exit"` the verdict may be `"idle"`, i.e. it returned with
+ * `done()` still false; see `IdlePolicy` and `DriveExit`.
  */
 function drive(
   store: Store,
   done: () => boolean,
   what: string,
   idle: IdlePolicy = "trap",
-): void | Promise<void> {
+): DriveExit | Promise<DriveExit> {
   try {
     return driveLoop(store, done, what, idle);
   } catch (e) {
@@ -491,7 +509,7 @@ function driveLoop(
   done: () => boolean,
   what: string,
   idle: IdlePolicy,
-): void | Promise<void> {
+): DriveExit | Promise<DriveExit> {
   for (;;) {
     traceDrive("drive", store, done, "top");
     // The synchronous drain must not run while a thread is parked on a
@@ -515,7 +533,7 @@ function driveLoop(
       // will not fire — arm the settlement pump here for any host calls the
       // guest registered fire-and-forget during this drive.
       ensureSettlementPump(store);
-      return;
+      return "done";
     }
     // A thread parked on a Promise (jspi) can only progress after a microtask
     // turn, exactly like an outstanding host call. So can an outstanding
@@ -534,7 +552,7 @@ function driveLoop(
         // Same hand-off as the `done()` exit above: work this loop started
         // outlives it.
         ensureSettlementPump(store);
-        return;
+        return "idle";
       }
       traceDrive("drive", store, done, "DEADLOCK-TRAP");
       trapIf(
@@ -606,7 +624,9 @@ export async function driveStoreAsync(
   done: () => boolean,
   what: string,
 ): Promise<void> {
-  return await driveAsync(store, done, what);
+  // The exit verdict is for `drive`'s lift caller (see `DriveExit`); the
+  // pumps drive to quiescence and have nothing to decide on it.
+  await driveAsync(store, done, what);
 }
 
 /**
@@ -1001,7 +1021,7 @@ async function driveAsync(
   done: () => boolean,
   what: string,
   idle: IdlePolicy = "trap",
-): Promise<void> {
+): Promise<DriveExit> {
   const depth = storeDriverDepth(store) + 1;
   driverDepth.set(store, depth);
   // An incumbent driver may be parked in the awaiting-race holding the
@@ -1079,7 +1099,7 @@ async function driveAsync(
     if (store.hostFailure !== undefined) throw takeHostFailure(store);
     if (done()) {
       traceDrive("driveAsync", store, done, "EXIT-done");
-      return;
+      return "done";
     }
     // Only a SERVICEABLE tail is a reason to loop again: a queue holding
     // only tails DEFERRED on a non-enterable instance (issue #156) would
@@ -1195,7 +1215,7 @@ async function driveAsync(
           if (store.readyCandidates().length === 0) {
             if (idle === "exit") {
               traceDrive("driveAsync", store, done, "EXIT-idle");
-              return;
+              return "idle";
             }
             trapIf(
               true,
@@ -1383,7 +1403,7 @@ async function driveAsync(
     if (store.pendingHostCalls.size === 0) {
       if (idle === "exit") {
         traceDrive("driveAsync", store, done, "EXIT-idle");
-        return;
+        return "idle";
       }
       traceDrive("driveAsync", store, done, "DEADLOCK-TRAP");
       trapIf(
@@ -1858,16 +1878,20 @@ export function createLiftedFunction(input: {
      * The task outlived its driver (#292): hand the host a Promise settled by
      * the task itself.
      *
+     * Reached ONLY when this lift's own driver exited with the verdict
+     * `"idle"` (`DriveExit`) — it ran out of moves with the task unfinished.
+     * It is never reached after a `"done"` exit, however the store's state
+     * may have moved on since (polyengine#310).
+     *
      * Resolution rides `finishHostEntry` unchanged — it already holds
      * `completed`/`resultsToHost` — fired from `Task.onFinished`, i.e. the
      * moment this task's last thread unregisters. That point is safe for the
-     * old `done` predicate's task-scoped clauses: `resolvedSeen` is
-     * guaranteed (`unregisterThread`'s own `trapIf(state !== "resolved")`
-     * fires first otherwise), and this task's threads are gone from
-     * `store.awaiting`, so `midWasmCall()` is false by construction.
-     * `hopParked()` is deliberately NOT re-tested: a hop is the obligation of
-     * the driver that put it in flight (#280), never of a Promise waiting on
-     * another task.
+     * `done` predicate's task-scoped clauses: `resolvedSeen` is guaranteed
+     * (`unregisterThread`'s own `trapIf(state !== "resolved")` fires first
+     * otherwise), and this task's threads are gone from `store.awaiting`, so
+     * `midWasmCall()` is false by construction. `hopParked()` plays no part:
+     * a hop is the obligation of the driver that put it in flight (#280),
+     * never of a Promise waiting on another task.
      *
      * Rejection has two sources: `finishHostEntry` itself throwing, and the
      * instance being poisoned by a later driver that ran this task into a
@@ -1906,8 +1930,7 @@ export function createLiftedFunction(input: {
         };
       });
 
-    let pending: void | Promise<void>;
-    let driveDone: () => boolean = () => true;
+    let outcome: DriveExit | Promise<DriveExit>;
     try {
       // Completion is "the task resolved AND its threads have drained", not
       // merely "resolved". `task.return` resolves the task, but the activation
@@ -1966,7 +1989,7 @@ export function createLiftedFunction(input: {
       // covers this task's own suspended thread.
       const midWasmCall = () => task.threads.some((t) => store.awaiting.has(t));
       const hopParked = () => entryHopThreads(store).length > 0;
-      driveDone = () => resolvedSeen && !midWasmCall() && !hopParked();
+      const driveDone = () => resolvedSeen && !midWasmCall() && !hopParked();
       // ASYNC-TYPED EXPORTS DO NOT TRAP ON IDLE (#292). definitions.py
       // `canon_lift` runs the driving loop — and with it the
       // empty-candidate-set `trap_if` — only `if not ft.async_` (line 2189);
@@ -1984,7 +2007,7 @@ export function createLiftedFunction(input: {
       // intra-component future a later export call writes.
       // Sync-typed exports are unchanged: their loop traps on idle in every
       // mode, which is what the paragraphs above describe.
-      pending = drive(
+      outcome = drive(
         store,
         driveDone,
         `export '${name}'`,
@@ -1994,19 +2017,33 @@ export function createLiftedFunction(input: {
       unwind();
       throw e;
     }
-    if (pending === undefined) {
+    /**
+     * Branch on the driver's EXIT VERDICT, never on a fresh `driveDone()`
+     * (polyengine#310).
+     *
+     * `driveDone` is a predicate over store-wide state that other drivers
+     * mutate. Re-evaluating it here — a microtask after the driver returned,
+     * on the asynchronous path — reads a different instant than the one the
+     * driver decided on. Observed: this lift's driver exited `EXIT-done`,
+     * then the settlement pump (servicing a settled host call belonging to
+     * another task) resumed a background activation that transiently
+     * hop-parked, so `hopParked()` read true in the continuation and the lift
+     * took `backgroundCompletion()` — which waits for the task's LAST thread
+     * to unregister, i.e. never, for a task holding long-lived spawned
+     * futures. The verdict cannot rot that way: `"done"` means the driver
+     * saw the task finished, which stays true.
+     */
+    const finish = (verdict: DriveExit): unknown =>
+      verdict === "idle" ? backgroundCompletion() : finishHostEntry();
+    if (!isPromiseLike(outcome)) {
       try {
-        if (idlePolicy === "exit" && !driveDone()) return backgroundCompletion();
-        return finishHostEntry();
+        return finish(outcome);
       } catch (e) {
         unwind();
         throw e;
       }
     }
-    return pending.then(() => {
-      if (idlePolicy === "exit" && !driveDone()) return backgroundCompletion();
-      return finishHostEntry();
-    }, (e) => {
+    return outcome.then(finish, (e) => {
       unwind();
       throw e;
     });
