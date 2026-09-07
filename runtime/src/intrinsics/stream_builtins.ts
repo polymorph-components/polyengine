@@ -495,6 +495,8 @@ function dropEnd(
   hi: number,
   what: string,
 ): void {
+  // Guest-supplied index is u32; core wasm delivers i32 args signed (F3, R2).
+  hi = hi >>> 0;
   trapIf(!inst.mayLeave, `${what}: cannot leave component instance`);
   const e = inst.handles.remove(hi);
   trapIf(!(e instanceof EndT), `${what}: wrong end type for this handle`);
@@ -523,9 +525,11 @@ export function createErrorContextNew(
 ): CoreFn {
   const opts = ctx.options(decl.options);
   return (ptr?: number, taggedCodeUnits?: number) => {
+    ptr = (ptr ?? 0) >>> 0;
+    taggedCodeUnits = (taggedCodeUnits ?? 0) >>> 0;
     trapIf(!inst.mayLeave, "error-context.new: cannot leave component instance");
     const cx = new LiftLowerContext(cabiOptions(opts), inst, null);
-    const s = loadStringFromRange(cx, ptr ?? 0, taggedCodeUnits ?? 0);
+    const s = loadStringFromRange(cx, ptr, taggedCodeUnits);
     return inst.handles.add(new ErrorContext(s));
   };
 }
@@ -538,17 +542,19 @@ export function createErrorContextDebugMessage(
 ): CoreFn {
   const opts = ctx.options(decl.options);
   return (i?: number, ptr?: number) => {
+    i = (i ?? 0) >>> 0;
+    ptr = (ptr ?? 0) >>> 0;
     trapIf(
       !inst.mayLeave,
       "error-context.debug-message: cannot leave component instance",
     );
-    const e = inst.handles.get(i ?? 0);
+    const e = inst.handles.get(i);
     trapIf(
       !(e instanceof ErrorContext),
       errorContextTrapMessage("error-context.debug-message", e),
     );
     const cx = new LiftLowerContext(cabiOptions(opts), inst, null);
-    storeString(cx, (e as ErrorContext).debugMessage, ptr ?? 0);
+    storeString(cx, (e as ErrorContext).debugMessage, ptr);
   };
 }
 
@@ -557,11 +563,12 @@ export function createErrorContextDrop(
   inst: ComponentInstanceState,
 ): CoreFn {
   return (i?: number) => {
+    i = (i ?? 0) >>> 0;
     trapIf(
       !inst.mayLeave,
       "error-context.drop: cannot leave component instance",
     );
-    const e = inst.handles.remove(i ?? 0);
+    const e = inst.handles.remove(i);
     trapIf(
       !(e instanceof ErrorContext),
       errorContextTrapMessage("error-context.drop", e),
@@ -589,9 +596,9 @@ export function createStreamRead(
       elem,
       opts,
       inst,
-      i: i ?? 0,
-      ptr: ptr ?? 0,
-      n: n ?? 0,
+      i: (i ?? 0) >>> 0,
+      ptr: (ptr ?? 0) >>> 0,
+      n: (n ?? 0) >>> 0,
     });
 }
 
@@ -611,9 +618,9 @@ export function createStreamWrite(
       elem,
       opts,
       inst,
-      i: i ?? 0,
-      ptr: ptr ?? 0,
-      n: n ?? 0,
+      i: (i ?? 0) >>> 0,
+      ptr: (ptr ?? 0) >>> 0,
+      n: (n ?? 0) >>> 0,
     });
 }
 
@@ -633,8 +640,8 @@ export function createFutureRead(
       elem,
       opts,
       inst,
-      i: i ?? 0,
-      ptr: ptr ?? 0,
+      i: (i ?? 0) >>> 0,
+      ptr: (ptr ?? 0) >>> 0,
     });
 }
 
@@ -654,8 +661,8 @@ export function createFutureWrite(
       elem,
       opts,
       inst,
-      i: i ?? 0,
-      ptr: ptr ?? 0,
+      i: (i ?? 0) >>> 0,
+      ptr: (ptr ?? 0) >>> 0,
     });
 }
 
@@ -673,7 +680,7 @@ export function createStreamCancelRead(
       elem,
       inst,
       async_: d.async === true,
-      i: i ?? 0,
+      i: (i ?? 0) >>> 0,
       what: "stream.cancel-read",
     });
 }
@@ -692,7 +699,7 @@ export function createStreamCancelWrite(
       elem,
       inst,
       async_: d.async === true,
-      i: i ?? 0,
+      i: (i ?? 0) >>> 0,
       what: "stream.cancel-write",
     });
 }
@@ -711,7 +718,7 @@ export function createFutureCancelRead(
       elem,
       inst,
       async_: d.async === true,
-      i: i ?? 0,
+      i: (i ?? 0) >>> 0,
       what: "future.cancel-read",
     });
 }
@@ -730,7 +737,7 @@ export function createFutureCancelWrite(
       elem,
       inst,
       async_: d.async === true,
-      i: i ?? 0,
+      i: (i ?? 0) >>> 0,
       what: "future.cancel-write",
     });
 }
@@ -861,29 +868,35 @@ function transferAsyncEnd(input: {
 }
 
 export function createStreamTransfer(ctx: AsyncTransferContext): CoreFn {
-  return (srcIdx?: number, srcTable?: number, dstTable?: number) =>
-    transferAsyncEnd({
+  return (srcIdx?: number, srcTable?: number, dstTable?: number) => {
+    srcTable = (srcTable ?? 0) >>> 0;
+    dstTable = (dstTable ?? 0) >>> 0;
+    return transferAsyncEnd({
       EndT: ReadableStreamEnd as unknown as EndCtor,
-      srcInst: ctx.streamTableInstance(srcTable ?? 0),
-      dstInst: ctx.streamTableInstance(dstTable ?? 0),
-      srcElem: ctx.streamElem(srcTable ?? 0),
-      dstElem: ctx.streamElem(dstTable ?? 0),
-      srcIdx: srcIdx ?? 0,
+      srcInst: ctx.streamTableInstance(srcTable),
+      dstInst: ctx.streamTableInstance(dstTable),
+      srcElem: ctx.streamElem(srcTable),
+      dstElem: ctx.streamElem(dstTable),
+      srcIdx: (srcIdx ?? 0) >>> 0,
       what: "stream",
     });
+  };
 }
 
 export function createFutureTransfer(ctx: AsyncTransferContext): CoreFn {
-  return (srcIdx?: number, srcTable?: number, dstTable?: number) =>
-    transferAsyncEnd({
+  return (srcIdx?: number, srcTable?: number, dstTable?: number) => {
+    srcTable = (srcTable ?? 0) >>> 0;
+    dstTable = (dstTable ?? 0) >>> 0;
+    return transferAsyncEnd({
       EndT: ReadableFutureEnd as unknown as EndCtor,
-      srcInst: ctx.futureTableInstance(srcTable ?? 0),
-      dstInst: ctx.futureTableInstance(dstTable ?? 0),
-      srcElem: ctx.futureElem(srcTable ?? 0),
-      dstElem: ctx.futureElem(dstTable ?? 0),
-      srcIdx: srcIdx ?? 0,
+      srcInst: ctx.futureTableInstance(srcTable),
+      dstInst: ctx.futureTableInstance(dstTable),
+      srcElem: ctx.futureElem(srcTable),
+      dstElem: ctx.futureElem(dstTable),
+      srcIdx: (srcIdx ?? 0) >>> 0,
       what: "future",
     });
+  };
 }
 
 /**

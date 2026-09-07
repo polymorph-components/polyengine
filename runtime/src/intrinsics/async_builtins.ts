@@ -283,8 +283,12 @@ export function createWaitableSetWait(
   // (line 2414).
   const cancellable = opts.cancellable;
   return (si?: number, ptr?: number) => {
+    // Guest-supplied index/pointer are u32; core wasm delivers i32 args
+    // signed (F3, R2). Normalize at the entry boundary.
+    si = (si ?? 0) >>> 0;
+    ptr = (ptr ?? 0) >>> 0;
     trapIf(!inst.mayLeave, "waitable-set.wait: cannot leave component instance");
-    const wset = requireWaitableSet(inst, si ?? 0, "waitable-set.wait");
+    const wset = requireWaitableSet(inst, si, "waitable-set.wait");
     const task = currentTask() as Task;
     let event: EventTuple;
     if (task.deliverPendingCancel(cancellable)) {
@@ -330,7 +334,7 @@ export function createWaitableSetWait(
           const ev: EventTuple = cancelled
             ? [EventCode.TASK_CANCELLED, 0, 0]
             : wset.getPendingEvent();
-          return unpackEvent(opts, inst, ptr ?? 0, ev);
+          return unpackEvent(opts, inst, ptr, ev);
         },
         onSettled: () => {
           wset.numWaiting -= 1;
@@ -343,7 +347,7 @@ export function createWaitableSetWait(
           "instead)",
       );
     }
-    return unpackEvent(opts, inst, ptr ?? 0, event);
+    return unpackEvent(opts, inst, ptr, event);
   };
 }
 
@@ -357,18 +361,22 @@ export function createWaitableSetPoll(
   /** See `createWaitableSetWait`: `cancellable` is an option, not a decl field. */
   const cancellable = opts.cancellable;
   return (si?: number, ptr?: number) => {
+    si = (si ?? 0) >>> 0;
+    ptr = (ptr ?? 0) >>> 0;
     trapIf(!inst.mayLeave, "waitable-set.poll: cannot leave component instance");
-    const wset = requireWaitableSet(inst, si ?? 0, "waitable-set.poll");
+    const wset = requireWaitableSet(inst, si, "waitable-set.poll");
     const event = wset.poll(currentTask(), cancellable);
-    return unpackEvent(opts, inst, ptr ?? 0, event);
+    return unpackEvent(opts, inst, ptr, event);
   };
 }
 
 /** definitions.py `canon_waitable_set_drop` (line 2441). */
 export function createWaitableSetDrop(inst: ComponentInstanceState): CoreFn {
   return (i?: number) => {
+    // Guest-supplied index is u32; core wasm delivers i32 args signed (F3, R2).
+    i = (i ?? 0) >>> 0;
     trapIf(!inst.mayLeave, "waitable-set.drop: cannot leave component instance");
-    const wset = inst.handles.remove(i ?? 0);
+    const wset = inst.handles.remove(i);
     trapIf(
       !(wset instanceof WaitableSet),
       "waitable-set.drop: handle is not a waitable set",
@@ -380,8 +388,10 @@ export function createWaitableSetDrop(inst: ComponentInstanceState): CoreFn {
 /** definitions.py `canon_waitable_join` (line 2451). */
 export function createWaitableJoin(inst: ComponentInstanceState): CoreFn {
   return (wi?: number, si?: number) => {
+    wi = (wi ?? 0) >>> 0;
+    si = (si ?? 0) >>> 0;
     trapIf(!inst.mayLeave, "waitable.join: cannot leave component instance");
-    const w = inst.handles.get(wi ?? 0);
+    const w = inst.handles.get(wi);
     trapIf(!(w instanceof Waitable), "waitable.join: handle is not a waitable");
     trapIf(
       (w as Waitable).hasSyncWaiter,
@@ -392,11 +402,11 @@ export function createWaitableJoin(inst: ComponentInstanceState): CoreFn {
       "waitable cannot be used synchronously while added to a waitable set " +
         "(waitable.join)",
     );
-    if ((si ?? 0) === 0) {
+    if (si === 0) {
       (w as Waitable).join(null);
       return;
     }
-    const wset = requireWaitableSet(inst, si!, "waitable.join");
+    const wset = requireWaitableSet(inst, si, "waitable.join");
     (w as Waitable).join(wset);
   };
 }
@@ -408,8 +418,9 @@ export function createWaitableJoin(inst: ComponentInstanceState): CoreFn {
 /** definitions.py `canon_subtask_drop` (line 2494). */
 export function createSubtaskDrop(inst: ComponentInstanceState): CoreFn {
   return (i?: number) => {
+    i = (i ?? 0) >>> 0;
     trapIf(!inst.mayLeave, "subtask.drop: cannot leave component instance");
-    const s = inst.handles.remove(i ?? 0);
+    const s = inst.handles.remove(i);
     trapIf(!(s instanceof Subtask), "subtask.drop: handle is not a subtask");
     (s as Subtask).drop();
   };
@@ -454,6 +465,7 @@ export function createSubtaskCancel(
 ): CoreFn {
   const async_ = decl.async === true;
   return (i?: number) => {
+    i = (i ?? 0) >>> 0;
     // The handle table is the **declared** instance's, not
     // `current_thread().task.inst`. definitions.py `canon_subtask_cancel`
     // (line 2469) uses the latter because the reference has no fused
@@ -468,7 +480,7 @@ export function createSubtaskCancel(
     // correction already applied to every other instance-scoped built-in —
     // see this module's header.
     trapIf(!inst.mayLeave, "subtask.cancel: cannot leave component instance");
-    const subtask = inst.handles.get(i ?? 0);
+    const subtask = inst.handles.get(i);
     trapIf(
       !(subtask instanceof Subtask),
       "subtask.cancel: handle is not a subtask",
