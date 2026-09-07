@@ -1,6 +1,6 @@
 {
   "name": "@polyengine/wasi",
-  "version": "0.6.4",
+  "version": "0.6.5",
   "exports": {
     ".": "./src/mod.ts",
     "./cli": "./src/cli.ts",
