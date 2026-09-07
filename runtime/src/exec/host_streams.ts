@@ -368,18 +368,29 @@ class HostActivity {
    * Promise-returning host import stalled the reader).
    *
    * Traps from the synchronous half propagate to the caller of the host
-   * operation, which is the only place that can report them.
+   * operation AND are recorded on `store.hostFailure`, the same channel
+   * `#pumpAsync` uses: propagation alone is not enough, because the caller is
+   * a host op's promise executor whose promise may already have been settled
+   * by the poisoning retirement walk (the trapping instance held an end of
+   * this very stream), in which case the throw is discarded and the fault
+   * would be mute. A component fault is always loud
+   * (contracts/embedder-api.md §"Streams and futures").
    */
   pump(): void {
     const store = this.#store;
     if (store === null) return;
-    // Settled activation tails gate `tick` (Store.settled); a driver that
-    // never services them wedges the store — this loop runs BETWEEN export
-    // calls, when no driveAsync exists to do it.
-    for (;;) {
-      const serviced = store.serviceSettled();
-      const ticked = store.tick();
-      if (!serviced && !ticked) break;
+    try {
+      // Settled activation tails gate `tick` (Store.settled); a driver that
+      // never services them wedges the store — this loop runs BETWEEN export
+      // calls, when no driveAsync exists to do it.
+      for (;;) {
+        const serviced = store.serviceSettled();
+        const ticked = store.tick();
+        if (!serviced && !ticked) break;
+      }
+    } catch (e) {
+      store.hostFailure ??= e;
+      throw e;
     }
     if (this.#pumping) return;
     // Nothing is outstanding that only an event-loop turn could advance ⇒ no
@@ -1034,6 +1045,22 @@ function mkStreamEnds<T>(
     if (result === CopyResult.DROPPED) activity.close();
     else activity.notify();
   };
+  /**
+   * Withdraw an operation that never got to finish: a trap out of
+   * `activity.pump()`'s synchronous half unwinds through the op's promise
+   * executor with our bookkeeping half-done — the `parked` flag set and our
+   * buffer still in the shared object's pending slot, which wedges the end
+   * ("a write is already in flight") for good. Same withdrawal
+   * `cancelWrite`/`cancelRead` perform; `shared.cancel()` only while the
+   * pending side is still literally ours, since `SharedBase.cancel` asserts
+   * that something is pending and the poisoning walk may have retired it.
+   */
+  const withdraw = (side: "read" | "write", buf: unknown): void => {
+    if (!parked[side]) return;
+    parked[side] = false;
+    if (shared.pendingBuffer === buf as never) shared.cancel();
+    activity.notify();
+  };
   /** The live direct session on each end, if any (direct-access byte edge, polyengine#128). */
   const direct: { read: DirectSession | null; write: DirectSession | null } = {
     read: null,
@@ -1092,7 +1119,16 @@ function mkStreamEnds<T>(
             shared.read(readInst, session as never, onCopy, onCopyDone);
           }
           activity.notify();
-          activity.pump();
+          try {
+            activity.pump();
+          } catch (e) {
+            // The `finally` below clears `parked`/`direct`, but the session
+            // itself would stay in the pending slot with `pending` true and
+            // its promise rejected — the next guest op would re-run the
+            // embedder's callback on a dead session. Retract it first.
+            retractDirect(session);
+            throw e;
+          }
         });
         if (step === "done") break;
       }
@@ -1102,6 +1138,18 @@ function mkStreamEnds<T>(
     }
     return session.total;
   };
+  /**
+   * Retract a direct session from the rendezvous: the pending-slot half of
+   * `cancelDirect`, shared with the pump-trap unwind above.
+   */
+  const retractDirect = (session: DirectSession): void => {
+    session.cancelled = true;
+    if (session.pending && shared.pendingBuffer === session as never) {
+      shared.cancel();
+    } else {
+      session.finish();
+    }
+  };
   /** Shared tail of `cancelWrite`/`cancelRead` for a parked direct session. */
   const cancelDirect = (session: DirectSession): void => {
     // direct-access byte edge: cancelling RETRACTS the session — it resolves with its running
@@ -1109,9 +1157,7 @@ function mkStreamEnds<T>(
     // only when the session actually holds the pending slot: a session caught
     // between two issuances holds nothing, and `SharedBase.cancel` asserts
     // that something is pending.
-    session.cancelled = true;
-    if (session.pending) shared.cancel();
-    else session.finish();
+    retractDirect(session);
     activity.notify();
     activity.pump();
   };
@@ -1165,7 +1211,12 @@ function mkStreamEnds<T>(
             },
           );
           activity.notify();
-          activity.pump();
+          try {
+            activity.pump();
+          } catch (e) {
+            withdraw("write", buf);
+            throw e;
+          }
         });
       },
       async writeAll(values: T[]): Promise<number> {
@@ -1255,7 +1306,12 @@ function mkStreamEnds<T>(
             },
           );
           activity.notify();
-          activity.pump();
+          try {
+            activity.pump();
+          } catch (e) {
+            withdraw("read", buf);
+            throw e;
+          }
         });
       },
       readDirect(
@@ -1444,6 +1500,13 @@ function mkFuture<T>(
     if (result === CopyResult.DROPPED) activity.close();
     else activity.notify();
   };
+  /** See `mkStreamEnds`' `withdraw`: the pump-trap unwind path (F1). */
+  const withdraw = (buf: unknown): void => {
+    if (!parked.any) return;
+    parked.any = false;
+    if (shared.pendingBuffer === buf as never) shared.cancel();
+    activity.notify();
+  };
   const self: HostFuture<T> = {
     write(v: T): Promise<void> {
       // One in-flight operation per wrapper — see mkStreamEnds' guards: a
@@ -1464,7 +1527,12 @@ function mkFuture<T>(
           resolve();
         });
         activity.notify();
-        activity.pump();
+        try {
+          activity.pump();
+        } catch (e) {
+          withdraw(buf);
+          throw e;
+        }
       });
     },
     readResult(): Promise<{ value: T | undefined; result: CopyResult }> {
@@ -1495,7 +1563,12 @@ function mkFuture<T>(
           });
         });
         activity.notify();
-        activity.pump();
+        try {
+          activity.pump();
+        } catch (e) {
+          withdraw(buf);
+          throw e;
+        }
       });
     },
     async read(): Promise<T | undefined> {
