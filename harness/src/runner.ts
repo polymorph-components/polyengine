@@ -5,6 +5,7 @@ import type {
   Action,
   ArtifactRef,
   Command,
+  Kind,
   WastJson,
 } from "./schema.ts";
 import {
@@ -17,6 +18,26 @@ import {
   TrapError,
 } from "./executor.ts";
 import { compareValues as compareComponentValues } from "./value-mapping.ts";
+
+/**
+ * Sniffs the binary preamble to classify an artifact — upstream's JSON
+ * carries no `kind` field, only `filename`/`module_type`/`binary_filename`
+ * (json-from-wast's `WasmFile`). Only the unambiguous core-module preamble
+ * (`\0asm` + version `01 00 00 00`) returns "module"; everything else,
+ * including bytes that are not a valid preamble at all, is handed to the
+ * component pipeline — the strict one, which rejects garbage, and also
+ * where the suite's assert_malformed `(component binary ...)` cases belong.
+ * Residual: a `(component binary ...)` whose bytes happen to be a valid core
+ * preamble would be misclassified as a module and fail visibly (the
+ * component pipeline never even sees it) — the suite has no such case.
+ */
+export function artifactKind(bytes: Uint8Array): Kind {
+  const isModule = bytes.length >= 8 &&
+    bytes[0] === 0x00 && bytes[1] === 0x61 && bytes[2] === 0x73 &&
+    bytes[3] === 0x6d &&
+    bytes[4] === 0x01 && bytes[5] === 0x00 && bytes[6] === 0x00 && bytes[7] === 0x00;
+  return isModule ? "module" : "component";
+}
 
 /**
  * `pending-capability` is a precise, named-in-report subset of
@@ -242,11 +263,12 @@ class FileRunner {
       // level; executable only by a host with a text parser.
       throw new UnsupportedDirective(`text artifact ${ref.filename}`);
     }
+    const bytes = await this.loadArtifact(ref.filename);
     return {
       filename: ref.filename,
-      kind: ref.kind,
+      kind: artifactKind(bytes),
       moduleType: ref.module_type,
-      bytes: await this.loadArtifact(ref.filename),
+      bytes,
     };
   }
 

@@ -116,10 +116,9 @@ entry on resolution — see git history.)
 ## Out of scope (tracked elsewhere, listed so they aren't lost)
 
 - **wasm-tools CLI 1.247 `json-from-wast` parser lag** (15/59 suite files
-  parse; current `wast` crate parses 59/59): version-skew, resolved on our
-  side by owning the emitter (`crates/testgen`, docs/architecture.md §11). Only worth
-  upstream traffic (bytecodealliance/wasm-tools) if still true at a current
-  CLI release.
+  parse; current `wast` crate parses 59/59): version-skew, resolved by
+  version — `crates/testgen` links the `json-from-wast` crate at the pinned
+  wasm-tools release train (0.258 parses 67/67). No upstream traffic needed.
 - **wasmparser 0.252 requires async function types for async lifts; wasm-tools
   1.247's validator predates the rule**: spec-tracking drift between released
   versions, not a component-model repo defect. Handled by docs/architecture.md §4.1/§9

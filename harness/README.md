@@ -31,18 +31,6 @@ Output is deterministic: same suite + same testgen build → byte-identical
 `harness/generated/` (sorted traversal, stable JSON field order, no
 timestamps or absolute paths).
 
-## Why our own converter instead of `wasm-tools json-from-wast`
-
-`json-from-wast` (wasm-tools 1.247.0) *does* model component directives in
-its JSON — the schema below is essentially its schema — but its bundled
-`wast` parser predates the current test suite's text syntax
-(`(dtor (core func ...))`, `async`/`(callback ...)` canon-lift options,
-`(implements ...)` import attributes): 40 of 57 suite files fail to parse
-with that CLI. testgen therefore uses the `wast` crate directly (pinned in
-`Cargo.lock`, currently 255.0.0), which parses the entire suite, and emits
-the same JSON model with two extensions noted below. This is the exact
-fallback docs/architecture.md §11 anticipated.
-
 ## Generated layout
 
 ```
@@ -50,76 +38,37 @@ harness/generated/
   manifest.json            # {"files": ["async/cancel-stream.json", ...]}
   <suite-dir>/<stem>.json  # command file, one per .wast
   <suite-dir>/<stem>.<N>.wasm   # extracted binary (module or component)
-  <suite-dir>/<stem>.<N>.wat    # only for quote forms kept as text
+  <suite-dir>/<stem>.<N>.wat    # quote forms kept as text
 ```
 
 ## JSON schema
 
-Follows WABT's `wast2json` model
-(<https://github.com/WebAssembly/wabt/blob/main/docs/wast2json.md>) as
-emitted by `wasm-tools json-from-wast`. A file is
-`{source_filename, commands: [...]}`; each command has a `type` and the
-1-based source `line`. TypeScript definitions: `src/schema.ts`.
+testgen drives the `wast` parser and the `json-from-wast` crate (the
+implementation of `wasm-tools json-from-wast`, itself the component-aware
+successor of WABT's `wast2json`) as libraries, so the schema is exactly
+upstream's: the serde derives in `json-from-wast`'s `src/lib.rs`
+(`Wast`, `Command`, `WasmFile`, `Action`, `Const`) are the specification;
+`src/schema.ts` mirrors the subset this suite exercises. Points worth knowing
+when reading the files or writing xfail entries:
 
-Command types and their fields:
-
-| type | fields | meaning |
-|---|---|---|
-| `module` | `name?, filename, module_type, kind` | define+validate+instantiate; becomes default action target |
-| `module_definition` | `name?, filename, module_type, kind` | define+validate only (`(component definition ...)`) |
-| `module_instance` | `instance?, module?` | instantiate a prior definition (`module` absent = most recent); becomes default target |
-| `register` | `as, name?` | make instance importable (unused by this suite) |
-| `action` | `action` | run action, ignore results |
-| `assert_return` | `action, expected` | action returns `expected` values |
-| `assert_trap` | `action, text` | action traps, message matches `text` |
-| `assert_invalid` | `filename, module_type, kind, text` | binary decodes but fails validation |
-| `assert_malformed` | `filename, module_type, kind, text` | binary fails decoding (or text fails parsing) |
-| `assert_uninstantiable` | `filename, module_type, kind, text` | valid, but instantiation traps (from `(assert_trap (component ...))`) |
-| `assert_unlinkable` | `filename, module_type, kind, text` | valid, but linking fails (unused by this suite) |
-| `assert_exhaustion` / `assert_exception` / `assert_suspension` | `action, text?` | core-suite directives, unused here |
-
-Actions: `{"type":"invoke", "module"?, "field", "args":[Value]}` and
-`{"type":"get", "module"?, "field"}`. `module` names a **named instance**;
-absent means the current default instance (wast2json convention).
-
-Extensions over `json-from-wast`:
-
-1. **`kind`: `"module" | "component"`** on every artifact-bearing command, so
-   consumers never sniff the 8-byte preamble to tell layers apart. (In the
-   official suite every top-level artifact is a component; core modules only
-   appear nested inside them.)
-2. **Documented component value encoding** (below); `json-from-wast`'s
-   encoding for compound values is unspecified.
-
-### Values
-
-Every value is `{"type": ..., "value": ...}` plus type-specific fields.
-Scalars encode as decimal **strings**; floats are IEEE754 **bit patterns**
-(f32→u32, f64→u64), with `nan:canonical` / `nan:arithmetic` allowed in
-expectations; core `i32`/`i64` are printed unsigned (wast2json convention),
-component `s8..s64` are signed.
-
-| type | encoding |
-|---|---|
-| `bool` | `"true"` / `"false"` |
-| `u8 s8 u16 s16 u32 s32 u64 s64 i32 i64 f32 f64` | decimal string |
-| `char` | the single Unicode scalar value as a string |
-| `string` | the string |
-| `list`, `tuple` | `value` = array of Values |
-| `record` | `value` = array of `{name, value: Value}` |
-| `variant` | `case` = case name, `value` = payload Value or `null` |
-| `enum` | `value` = case name |
-| `option` | `value` = payload Value or `null` (= none) |
-| `result` | `status` = `"ok"`/`"err"`, `value` = payload Value or `null` |
-| `flags` | `value` = array of set flag names |
-| `v128` | `lane_type` set, `value` = array of lane strings (core-suite only) |
-
-### Text artifacts
-
-`(component quote "...")` forms whose malformedness lives at the text level
-are written as `.wat` with `module_type: "text"` (5 in the current suite,
-all `assert_malformed`). They are only executable by a host with a text
-parser; the runner records them as skip(`unsupported-directive`).
+- `line` is 1-based and, for the module- and action-bearing asserts
+  (`assert_invalid/malformed/unlinkable/uninstantiable/trap/return`), is the
+  line of the *inner form* (`(component ...)` / `(invoke ...)`), not the
+  `(assert_...` line. It is the key used by `src/xfail.ts` and the lane
+  expectation overlays.
+- Artifacts are `filename` + `module_type: "binary" | "text"`; nothing in
+  the JSON says whether a binary is a core module or a component. The runner
+  classifies from the preamble (`artifactKind` in `src/runner.ts`: exact
+  core preamble → module, anything else → component; in this suite every
+  top-level artifact is a component).
+- Values are `{"type": ..., "value": ...}`. Scalars are decimal strings
+  (floats as IEEE754 bit patterns; core-value expectations may also be
+  `nan:canonical` / `nan:arithmetic`), `bool` is a JSON boolean, `record` is `[name, value][]`,
+  `variant` is `{case, payload?}`, `result` is `{Ok: v|null}` /
+  `{Err: v|null}`, `option` is `v | null`, `flags` is `string[]`.
+- `(component quote "...")` forms are written as `.wat` with
+  `module_type: "text"` (5 in the current suite, all `assert_malformed`);
+  the runner records them as skip(`unsupported-directive`).
 
 ## Executor contract (provisional)
 

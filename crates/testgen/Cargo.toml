@@ -10,6 +10,6 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow = "1"
-serde = { version = "1", features = ["derive"] }
+json-from-wast = "0.258.0"
 serde_json = { version = "1", features = ["preserve_order"] }
 wast = "258.0.0"

@@ -1,7 +1,7 @@
 //! testgen: convert the official Component Model `.wast` test suite into
-//! JSON command files + extracted `.wasm`/`.wat` artifacts, following the
-//! core-spec `wast2json` model. See harness/README.md for the pipeline and
-//! schema documentation.
+//! JSON command files + extracted `.wasm`/`.wat` artifacts, by driving
+//! `wast` and `json-from-wast` (the `wasm-tools json-from-wast` implementation)
+//! as libraries. See harness/README.md for the pipeline and schema documentation.
 //!
 //! Usage:
 //!   testgen [--test-dir DIR] [--out-dir DIR] [SUBDIR...]
@@ -13,9 +13,6 @@
 //!
 //! SUBDIR arguments (e.g. `binary validation`) restrict conversion to those
 //! test suite subdirectories; the default is everything.
-
-mod convert;
-mod json;
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
@@ -123,24 +120,40 @@ fn run() -> Result<usize> {
             let text = std::fs::read_to_string(&wast_path)
                 .with_context(|| format!("reading {}", wast_path.display()))?;
 
-            match convert::convert_wast(&source_rel, &stem, &text) {
-                Ok(out) => {
-                    let n_artifacts = out.artifacts.len();
-                    for (filename, bytes) in out.artifacts {
-                        std::fs::write(out_sub.join(&filename), bytes)
+            let mut lexer = wast::lexer::Lexer::new(&text);
+            lexer.allow_confusing_unicode(true);
+            let buf = match wast::parser::ParseBuffer::new_with_lexer(lexer) {
+                Ok(buf) => buf,
+                Err(e) => {
+                    failures.push((wast_path, pretty(e, &source_rel, &text)));
+                    continue;
+                }
+            };
+            let ast: wast::Wast = match wast::parser::parse(&buf) {
+                Ok(ast) => ast,
+                Err(e) => {
+                    failures.push((wast_path, pretty(e, &source_rel, &text)));
+                    continue;
+                }
+            };
+            match json_from_wast::Opts::default().convert(&source_rel, &text, ast) {
+                Ok(wast) => {
+                    let n_artifacts = wast.wasms.len();
+                    for (filename, bytes) in &wast.wasms {
+                        std::fs::write(out_sub.join(filename), bytes)
                             .with_context(|| format!("writing {sub}/{filename}"))?;
                     }
-                    let mut json = serde_json::to_string_pretty(&out.json)?;
+                    let mut json = serde_json::to_string_pretty(&wast)?;
                     json.push('\n');
                     std::fs::write(out_sub.join(format!("{stem}.json")), json)
                         .with_context(|| format!("writing {sub}/{stem}.json"))?;
                     println!(
                         "converted {source_rel}: {} commands, {} artifacts",
-                        out.json.commands.len(),
+                        wast.commands.len(),
                         n_artifacts
                     );
                     converted += 1;
-                    total_commands += out.json.commands.len();
+                    total_commands += wast.commands.len();
                 }
                 Err(e) => failures.push((wast_path, e)),
             }
@@ -174,4 +187,10 @@ fn run() -> Result<usize> {
         eprintln!("--- FAILED: {}\n{e:#}", path.display());
     }
     Ok(failures.len())
+}
+
+fn pretty(mut e: wast::Error, path: &str, text: &str) -> anyhow::Error {
+    e.set_path(std::path::Path::new(path));
+    e.set_text(text);
+    anyhow::anyhow!("{e}")
 }

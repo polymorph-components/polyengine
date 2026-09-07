@@ -12,7 +12,8 @@
 
 import type { Kind, ModuleType, Value } from "./schema.ts";
 
-/** An artifact extracted by testgen, loaded into memory. */
+/** An artifact extracted by testgen, loaded into memory (`kind` is derived
+ * by the runner at load time via `artifactKind`, not carried in the JSON). */
 export interface Artifact {
   filename: string;
   kind: Kind;

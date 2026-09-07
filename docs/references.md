@@ -55,6 +55,8 @@ the dependency.
 - wasm-tools repo (CLI + crates): https://github.com/bytecodealliance/wasm-tools
 - `wast` crate (component-aware wast parsing, used by testgen):
   https://docs.rs/wast/
+- `json-from-wast` crate (wast → JSON commands + binaries, used by testgen;
+  the `wasm-tools json-from-wast` implementation): https://docs.rs/json-from-wast/
 - `wasmparser` (0.258.x — must match wasmtime-environ): https://docs.rs/wasmparser/
 - `wasm-encoder`: https://docs.rs/wasm-encoder/
 - `wit-parser` (bindgen input): https://docs.rs/wit-parser/
