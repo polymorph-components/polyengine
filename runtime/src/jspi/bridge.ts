@@ -431,7 +431,14 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
     readonly task: any,
     /** Resumable once this holds; `null` = only an explicit resume. */
     readonly readyFunc: (() => boolean) | null,
-    readonly cancellable: boolean,
+    /**
+     * definitions.py `Thread.cancellable` — set for the duration of this
+     * park, cleared when the point resumes (parity with task/thread.ts's
+     * `Thread.cancellable`, which the reference evaluates as a live
+     * predicate: a point that is no longer parked is never a
+     * `request_cancellation` candidate).
+     */
+    public cancellable: boolean,
     /** Produces the value to hand back to wasm at resume time. */
     private readonly produce: (cancelled: Cancelled) => T,
     // deno-lint-ignore no-explicit-any
@@ -475,7 +482,30 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
   }
 
   ready(): boolean {
-    return !this.#done && this.readyFunc !== null && this.readyFunc();
+    if (this.#done) return false;
+    if (this.readyFunc !== null && this.readyFunc()) return true;
+    // definitions.py `ready_or_cancelled` (`Thread.wait_until` line 369),
+    // ported to task/thread.ts:waitUntil: a cancel that arrived while this
+    // task was not cancellable (parked as `pending-cancel`) makes the block
+    // point ready on its own, otherwise the wakeup is lost until some
+    // unrelated event happens to satisfy `readyFunc` — possibly never.
+    // A `SuspensionPoint` is a frame OF the implicit thread, so the "and the
+    // lock is free" conjunct (`Task.implicitThreadCancellable`, the live
+    // `lock_available` of the reference's callback loop) applies here
+    // unconditionally — the same exclusion `Task.requestCancellation` puts on
+    // its scan of `store.waiting`.
+    return this.cancellable && this.#taskHasPendingCancel() &&
+      this.task.implicitThreadCancellable() === true;
+  }
+
+  /**
+   * `task` is untyped here and some parks carry a stub (no `Task` at all —
+   * instantiation-time built-ins, and the tests that stand in for them), so
+   * both cancel hooks are feature-detected. No task, no pending cancel.
+   */
+  #taskHasPendingCancel(): boolean {
+    return typeof this.task?.hasPendingCancel === "function" &&
+      this.task.hasPendingCancel() === true;
   }
 
   /** Settle the import's Promise; the engine resumes the wasm activation. */
@@ -491,6 +521,17 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
       console.error(`[sp] resume ${dbgId(this)} owner=${dbgId(this.owner)}\n${(new Error().stack ?? "").split("\n").slice(2, 5).join("\n")}`);
     }
     this.#done = true;
+    // AFTER the block (definitions.py `Thread.wait_until` line 372, ported to
+    // task/thread.ts:waitUntil): a plain wakeup taken through the
+    // pending-cancel disjunct in `ready()` becomes a cancelled resume, and
+    // that delivery wins over any event that became pending meanwhile.
+    if (
+      typeof this.task?.deliverPendingCancel === "function" &&
+      this.task.deliverPendingCancel(this.cancellable) === true
+    ) {
+      cancelled = true;
+    }
+    this.cancellable = false;
     this.#store.stopWaiting(this);
     try {
       this.#resumeInner(cancelled);
