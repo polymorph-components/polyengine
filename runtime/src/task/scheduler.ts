@@ -937,9 +937,21 @@ export class Store {
     this.waiting.splice(i, 1);
   }
 
-  /** Ready waiting threads, in wait order (the FIFO of the default policy). */
+  /**
+   * Ready waiting threads, in wait order (the FIFO of the default policy).
+   *
+   * A POISONED instance's threads are not candidates: they are a corpse's and
+   * must never resume (polyengine's per-instance poisoning divergence). The
+   * filter lives here, not in `tick` alone, because the answer is also a
+   * VERDICT elsewhere — the drivers' deadlock probe asks "did anything become
+   * ready?" and must get an answer that agrees with what `tick` will actually
+   * run, or it re-arms forever on a thread `tick` refuses (exec/boundary.ts's
+   * probe, against `canon_lift`'s `trap_if(not candidates)`).
+   */
   readyCandidates(): SchedulableThread[] {
-    return this.waiting.filter((t) => t.ready());
+    return this.waiting.filter((t) =>
+      t.ready() && !isInstancePoisoned(t.task?.inst)
+    );
   }
 
   /**
@@ -1166,11 +1178,10 @@ export class Store {
     //
     // What is added is polyengine's per-instance poisoning divergence: a
     // poisoned instance is a corpse, its threads must never resume, and the
-    // MARKER is the whole test. `Thread.resumeWith` makes the same call on
-    // the tail path.
-    const candidates = this.readyCandidates().filter((t) =>
-      !isInstancePoisoned(t.task.inst)
-    );
+    // MARKER is the whole test. That filter lives in `readyCandidates` (so
+    // the drivers' deadlock probe reads the same candidate set this does).
+    // `Thread.resumeWith` makes the same call on the tail path.
+    const candidates = this.readyCandidates();
     if (candidates.length === 0) return false;
     const thread = chooseCandidate(candidates);
     const inst = thread.task.inst;
