@@ -273,6 +273,25 @@ export function createTranscoder(
   from: TranscodeMemory,
   to: TranscodeMemory,
 ): (...args: number[]) => unknown {
+  const fn = createTranscoderInner(op, from, to);
+  // Core wasm delivers i32 params to a JS import as *signed* numbers, but
+  // every transcoder arg (ptr/len/flag) is a FACT-validated unsigned
+  // quantity (contracts/intrinsics.md §A/§B; wasmtime libcalls.rs takes
+  // unsigned guest pointers, and validate_guest_pointer does its bounds
+  // arithmetic unsigned). Normalize once here, at the single call boundary
+  // every one of the twelve arms shares, so none of them need to know about
+  // the signed/unsigned wasm calling-convention detail — matching the
+  // `>>> 0` normalization every other i32-taking intrinsic gets (see
+  // intrinsics/mod.ts resource-new/-rep/-drop, resource-transfer-*, and
+  // exec/boundary.ts).
+  return (...args: number[]) => fn(...args.map((a) => a >>> 0));
+}
+
+function createTranscoderInner(
+  op: TranscodeOp,
+  from: TranscodeMemory,
+  to: TranscodeMemory,
+): (...args: number[]) => unknown {
   switch (op) {
     // (srcPtr, srcLen, dstPtr) -> () --------------------------------------
     case "latin1-to-latin1":
