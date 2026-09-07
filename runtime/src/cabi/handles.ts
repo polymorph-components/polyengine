@@ -35,7 +35,9 @@ export class Table<T> {
   free: number[] = [];
 
   get(i: number): T {
-    trapIf(i >= this.array.length, "table index out of range");
+    // Indices are u32; a negative i is out of range, and JS `array[-1]` is
+    // `undefined`, not the `null` sentinel.
+    trapIf(i < 0 || i >= this.array.length, "table index out of range");
     trapIf(this.array[i] === null, "table entry empty");
     return this.array[i]!;
   }
