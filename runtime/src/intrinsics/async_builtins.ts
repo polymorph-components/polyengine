@@ -526,6 +526,7 @@ export function createSubtaskCancel(
       // subtask as claimed and trap in `canon_waitable_join`
       // (`trap_if(w.has_sync_waiter)`) — test/async/reentrance.wast:837.
       // `parked` hands the clear over to the park's `produce`/`onSettled`
+      // (the async form clears it at park entry instead — #295, below)
       // (#106: `abandon` never runs `produce`, so the flag needs the
       // `onSettled` backstop or it stays set forever and a later
       // `waitable.join` traps spuriously).
@@ -596,6 +597,17 @@ export function createSubtaskCancel(
         }
         if (!ready()) {
           parked = true;
+          // #295: the ASYNC form's claim ends where the reference's does —
+          // `canon_subtask_cancel` clears `has_sync_waiter` before returning
+          // BLOCKED (definitions.py:2459-2461), so the flag is held only
+          // across the synchronous claim window around `on_cancel()`. The
+          // #92 determinacy park below is not part of that window; holding
+          // the flag across it would trap a sibling thread's
+          // `waitable.join` on this subtask where the reference succeeds
+          // (#92 licenses a reordering, not a new trap condition). The SYNC
+          // form keeps it set across its wait, as the reference does
+          // (`thread.wait_until(subtask.resolved)` precedes the clear).
+          if (async_) st.hasSyncWaiter = false;
           return blockCurrentActivation({
             store: inst.store,
             task: currentTask(),
