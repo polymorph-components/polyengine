@@ -11,15 +11,17 @@ import { runWastJson, trapMatches } from "../src/runner.ts";
 
 // (module) - the empty core module, hand-encoded.
 const EMPTY_CORE_MODULE = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
-// Core preamble with a bogus version.
-const BAD_VERSION_MODULE = new Uint8Array([0, 0x61, 0x73, 0x6d, 9, 0, 0, 0]);
+// A core module with a valid preamble (sniffs as kind "module") but an
+// invalid trailing section byte (0xff is not a valid section id), so
+// WebAssembly.validate rejects it on content, not preamble.
+const INVALID_SECTION_MODULE = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 0xff]);
 // (component) - the empty component: core preamble with version 0x0d,
 // layer 0x0001.
 const EMPTY_COMPONENT = new Uint8Array([0, 0x61, 0x73, 0x6d, 0x0d, 0, 1, 0]);
 
 const artifacts = new Map<string, Uint8Array<ArrayBuffer>>([
   ["ok.0.wasm", EMPTY_CORE_MODULE],
-  ["bad.0.wasm", BAD_VERSION_MODULE],
+  ["bad.0.wasm", INVALID_SECTION_MODULE],
   ["comp.0.wasm", EMPTY_COMPONENT],
 ]);
 
@@ -41,7 +43,7 @@ function assertEq(actual: unknown, expected: unknown, what: string) {
 
 Deno.test("environment: V8 validates core modules but no component binaries", () => {
   assertEq(WebAssembly.validate(EMPTY_CORE_MODULE), true, "core valid");
-  assertEq(WebAssembly.validate(BAD_VERSION_MODULE), false, "bad version");
+  assertEq(WebAssembly.validate(INVALID_SECTION_MODULE), false, "invalid section");
   // The load-bearing fact behind skip("pending-runtime"): the JS API rejects
   // the component layer preamble outright, so `validate === false` carries
   // no information about a component's actual validity.
@@ -56,14 +58,12 @@ Deno.test("core module command executes via the JS WebAssembly API", async () =>
         line: 1,
         filename: "ok.0.wasm",
         module_type: "binary",
-        kind: "module",
       },
       {
         type: "assert_invalid",
         line: 2,
         filename: "bad.0.wasm",
         module_type: "binary",
-        kind: "module",
         text: "whatever",
       },
     ]),
@@ -85,7 +85,6 @@ Deno.test("core invoke and definition instantiation are pending-runtime", async 
         line: 1,
         filename: "ok.0.wasm",
         module_type: "binary",
-        kind: "module",
       },
       {
         type: "assert_return",
@@ -116,14 +115,12 @@ Deno.test("component-layer commands are pending-runtime", async () => {
         line: 1,
         filename: "comp.0.wasm",
         module_type: "binary",
-        kind: "component",
       },
       {
         type: "assert_invalid",
         line: 2,
         filename: "comp.0.wasm",
         module_type: "binary",
-        kind: "component",
         text: "whatever",
       },
     ]),
@@ -145,7 +142,6 @@ Deno.test("text artifacts are unsupported-directive", async () => {
         line: 1,
         filename: "x.0.wat",
         module_type: "text",
-        kind: "component",
         text: "whatever",
       },
     ]),
@@ -167,7 +163,6 @@ Deno.test("a genuinely invalid core module fails assert-free module command", as
         line: 1,
         filename: "bad.0.wasm",
         module_type: "binary",
-        kind: "module",
       },
     ]),
     load,

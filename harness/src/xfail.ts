@@ -36,7 +36,7 @@ export const XFAIL: XfailEntry[] = [
   // upstream-component-model-repo-findings.md (#246/#247). ---
   {
     file: "validation/kebab.json",
-    line: 149,
+    line: 150,
     reason:
       'expected assert_invalid ("import name `foobar` conflicts with ' +
       'previous name `foo-bar`"), but it validated — wasmtime does not ' +
@@ -47,35 +47,35 @@ export const XFAIL: XfailEntry[] = [
   },
   {
     file: "validation/kebab.json",
-    line: 154,
+    line: 155,
     reason:
       'expected assert_invalid ("import name `FOOBAR` conflicts with ' +
       'previous name `foo-bar`"), but it validated — same name-rules-nyi ' +
-      "gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
+      "gap as line 150, https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/kebab.json",
-    line: 159,
+    line: 160,
     reason:
       'expected assert_invalid ("import name `foob-ar` conflicts with ' +
       'previous name `foo-bar`"), but it validated — same name-rules-nyi ' +
-      "gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
+      "gap as line 150, https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/kebab.json",
-    line: 164,
+    line: 165,
     reason:
       'expected assert_invalid ("import name `[static]foo-bar.FO-ob-AR` ' +
       'conflicts with previous name `foo-bar`"), but it validated — same ' +
-      "name-rules-nyi gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
+      "name-rules-nyi gap as line 150, https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/kebab.json",
-    line: 169,
+    line: 170,
     reason:
       'expected assert_invalid ("import name `[method]foo-bar.foobar` ' +
       'conflicts with previous name `foo-bar`"), but it validated — same ' +
-      "name-rules-nyi gap as line 149, https://github.com/polymorph-components/polyengine/issues/248",
+      "name-rules-nyi gap as line 150, https://github.com/polymorph-components/polyengine/issues/248",
   },
   // --- validation/max-value-size.json: CM#688 ("max-value-size", pulled in
   // by the CM#705 pin advance polyengine#173) added the elem_size(t, i64) <
@@ -92,7 +92,7 @@ export const XFAIL: XfailEntry[] = [
   // tied to pointer width. ---
   {
     file: "validation/max-value-size.json",
-    line: 25,
+    line: 26,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
       "validated — wasmtime does not implement CM#688's elem_size < 2^28 " +
@@ -103,52 +103,52 @@ export const XFAIL: XfailEntry[] = [
   },
   {
     file: "validation/max-value-size.json",
-    line: 31,
+    line: 32,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-nyi gap as line 25 (fixed list " +
+      "validated — same max-value-size-nyi gap as line 26 (fixed list " +
       "whose product exceeds MAX: `(list u64 33554432)`), " +
       "https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/max-value-size.json",
-    line: 37,
+    line: 38,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-nyi gap as line 25 (u32-wrap class: " +
+      "validated — same max-value-size-nyi gap as line 26 (u32-wrap class: " +
       "real byte size is 2^32 but a naive u32 multiply wraps to 0: " +
       "`(list u64 536870912)`), https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/max-value-size.json",
-    line: 43,
+    line: 44,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-nyi gap as line 25 (compound sum " +
+      "validated — same max-value-size-nyi gap as line 26 (compound sum " +
       "exceeds MAX via a tuple), https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/max-value-size.json",
-    line: 48,
+    line: 49,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-nyi gap as line 25 (compound sum " +
+      "validated — same max-value-size-nyi gap as line 26 (compound sum " +
       "exceeds MAX via a record), https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/max-value-size.json",
-    line: 57,
+    line: 58,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-nyi gap as line 25 (nested fixed " +
+      "validated — same max-value-size-nyi gap as line 26 (nested fixed " +
       "list), https://github.com/polymorph-components/polyengine/issues/248",
   },
   {
     file: "validation/max-value-size.json",
-    line: 63,
+    line: 64,
     reason:
       'expected assert_invalid ("exceeds maximum byte size"), but it ' +
-      "validated — same max-value-size-nyi gap as line 25; this is the " +
+      "validated — same max-value-size-nyi gap as line 26; this is the " +
       "dispatch-flagged pointer-width-sensitive row (`(list string " +
       "16777216)`, the i32-vs-i64 elem-size boundary noted in the wast " +
       "source comment) — observed identically to the other rows on this " +
@@ -934,90 +934,8 @@ export const XFAIL: XfailEntry[] = [
   // needs a host trampoline for `thread-new-indirect`, which this executor
   // does not implement yet, so every `module_instance` command against it
   // is pending-capability/SKIPPED (no xfail entry needed) and every assert
-  // cascades with "no current instance". The file grew (CM#715) so the
-  // cascade now extends past the pre-existing 281-305 entries below to
-  // 307-327 (new entries added at the end of this block). Also listed in
-  // upstream's own third_party/component-model/test/nyi.txt at this pin. ---
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 281,
-    reason:
-      "cascade: this file's component was declined earlier, so " +
-      "every later command against the instance fails; see the " +
-      "first entry for this file",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 283,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 285,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 287,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 289,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 291,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 293,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 295,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 297,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
-  {
-    file: "async/trap-if-sync-and-waitable-set.json",
-    line: 299,
-    reason:
-      "cascade of this file's first failure: the component was " +
-      "declined at instantiation, so no instance exists for this " +
-      "command",
-  },
+  // cascades with "no current instance". Also listed in upstream's own
+  // third_party/component-model/test/nyi.txt at this pin. ---
   {
     file: "async/trap-if-sync-and-waitable-set.json",
     line: 301,

@@ -18,6 +18,7 @@ import { isInstancePoisoned } from "../../src/task/scheduler.ts";
 import { Translator } from "../../src/shim/mod.ts";
 import { instantiateComponent } from "../../src/exec/mod.ts";
 import { TranslateError } from "../../src/plan/mod.ts";
+import { artifactKind } from "../../../harness/src/runner.ts";
 
 const root = new URL("../../../", import.meta.url);
 
@@ -384,7 +385,6 @@ interface WastCommand {
   type: string;
   line: number;
   filename?: string;
-  kind?: string;
   module_type?: string;
 }
 
@@ -423,20 +423,20 @@ async function commandsOf(dir: string): Promise<[string, WastCommand[]][]> {
 const KNOWN_ACCEPTANCE_GAPS: ReadonlySet<string> = new Set([
   // name-rules-nyi (https://github.com/polymorph-components/polyengine/issues/248): kebab-case name-folding import
   // conflicts wasmparser 0.258 does not detect.
-  "kebab.json:149",
-  "kebab.json:154",
-  "kebab.json:159",
-  "kebab.json:164",
-  "kebab.json:169",
+  "kebab.json:150",
+  "kebab.json:155",
+  "kebab.json:160",
+  "kebab.json:165",
+  "kebab.json:170",
   // max-value-size-nyi (https://github.com/polymorph-components/polyengine/issues/248): the elem_size(t, i64) < 2^28
   // check wasmparser 0.258 does not enforce.
-  "max-value-size.json:25",
-  "max-value-size.json:31",
-  "max-value-size.json:37",
-  "max-value-size.json:43",
-  "max-value-size.json:48",
-  "max-value-size.json:57",
-  "max-value-size.json:63",
+  "max-value-size.json:26",
+  "max-value-size.json:32",
+  "max-value-size.json:38",
+  "max-value-size.json:44",
+  "max-value-size.json:49",
+  "max-value-size.json:58",
+  "max-value-size.json:64",
 ]);
 
 /**
@@ -462,9 +462,10 @@ Deno.test({
           if (cmd.type !== "assert_invalid" && cmd.type !== "assert_malformed") {
             continue;
           }
-          if (cmd.kind !== "component" || cmd.module_type !== "binary") continue;
-          if (KNOWN_ACCEPTANCE_GAPS.has(`${file}:${cmd.line}`)) continue;
+          if (cmd.module_type !== "binary") continue;
           const bytes = await Deno.readFile(new URL(cmd.filename!, base));
+          if (artifactKind(bytes) !== "component") continue;
+          if (KNOWN_ACCEPTANCE_GAPS.has(`${file}:${cmd.line}`)) continue;
           checked++;
           try {
             translator!.translate(bytes);
@@ -507,8 +508,9 @@ Deno.test({
           if (cmd.type !== "module" && cmd.type !== "module_definition") {
             continue;
           }
-          if (cmd.kind !== "component" || cmd.module_type !== "binary") continue;
+          if (cmd.module_type !== "binary") continue;
           const bytes = await Deno.readFile(new URL(cmd.filename!, base));
+          if (artifactKind(bytes) !== "component") continue;
           try {
             translator!.translate(bytes);
             ok++;

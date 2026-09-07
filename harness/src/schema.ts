@@ -1,8 +1,12 @@
 // JSON schema for testgen-generated command files (see harness/README.md).
-// Mirrors `wasm-tools json-from-wast` / wast2json, with a `kind` extension
-// distinguishing core modules from components.
+// Mirrors the subset of upstream `json-from-wast`'s schema (the
+// `wasm-tools json-from-wast` subcommand) this suite exercises — no local
+// extensions. Authority: `json-from-wast-0.258.0/src/lib.rs`
+// (Command/WasmFile/Action/CoreConst/ComponentConst serde derives).
 
-/** Layer of an extracted artifact. */
+/** Layer of an extracted artifact, sniffed from the binary preamble at load
+ * time (upstream's JSON carries no `kind` field — see `runner.ts`
+ * `artifactKind`). */
 export type Kind = "module" | "component";
 
 /** Artifact file flavor: `.wasm` binary or raw `.wat` text. */
@@ -13,10 +17,13 @@ export interface WastJson {
   commands: Command[];
 }
 
+/** `WasmFile` (lib.rs): `#[serde(flatten)]`ed into artifact-bearing
+ * commands. `binary_filename` is only present for quote forms that also
+ * encode (never for `assert_malformed` quote forms). */
 export interface ArtifactRef {
   filename: string;
   module_type: ModuleType;
-  kind: Kind;
+  binary_filename?: string;
 }
 
 export interface ModuleCommand extends ArtifactRef {
@@ -143,35 +150,33 @@ export interface GetAction {
 export type Action = InvokeAction | GetAction;
 
 /**
- * A core or component value.
- *
- * - scalars (`bool,u8..s64,i32,i64,f32,f64,char,string,enum`): `value` is a
- *   string; floats are decimal *bit patterns* (or `nan:canonical` /
- *   `nan:arithmetic` in expectations);
- * - `list`/`tuple`: `value` is `Value[]`;
- * - `record`: `value` is `{name, value}[]`;
- * - `variant`: `case` is set, `value` is payload `Value` or null;
- * - `option`: `value` is payload `Value` or null (none);
- * - `result`: `status` is "ok"|"err", `value` is payload `Value` or null;
- * - `flags`: `value` is `string[]`;
- * - `v128`: `lane_type` is set, `value` is `string[]` of lanes.
+ * A component-model value (`ComponentConst`, `#[serde(tag="type",
+ * content="value")]`, lib.rs). This is the only `Const` variant this harness
+ * executes today (see `CoreValue` below for the executed subset of the
+ * core-wasm side of the untagged `Const` union).
  */
-export interface Value {
-  type: string;
-  lane_type?: string;
-  case?: string;
-  status?: "ok" | "err";
-  value: ValuePayload;
-}
+export type ComponentValue =
+  | { type: "bool"; value: boolean }
+  | { type: "u8" | "s8" | "u16" | "s16" | "u32" | "s32" | "u64" | "s64"; value: string }
+  | { type: "f32" | "f64"; value: string }
+  | { type: "char" | "string" | "enum"; value: string }
+  | { type: "list" | "tuple"; value: Value[] }
+  | { type: "record"; value: [name: string, value: Value][] }
+  | { type: "variant"; value: { case: string; payload?: Value } }
+  | { type: "option"; value: Value | null }
+  | { type: "result"; value: { Ok: Value | null } | { Err: Value | null } }
+  | { type: "flags"; value: string[] };
 
-export type ValuePayload =
-  | string
-  | null
-  | string[]
-  | Value[]
-  | RecordField[];
+/**
+ * The executed subset of `CoreConst` (`#[serde(tag="type",
+ * rename_all="lowercase")]`, lib.rs): plain numeric/float scalars. The
+ * harness does not execute core-wasm actions with ref-typed
+ * (funcref/externref/anyref/v128/...) arguments or results — keep parity
+ * with today's supported set, do not expand without a corpus need.
+ */
+export type CoreValue =
+  | { type: "i32" | "i64"; value: string }
+  | { type: "f32" | "f64"; value: string };
 
-export interface RecordField {
-  name: string;
-  value: Value;
-}
+/** Untagged `Const` union (lib.rs): `Core(CoreConst) | Component(ComponentConst)`. */
+export type Value = CoreValue | ComponentValue;

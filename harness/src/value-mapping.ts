@@ -1,13 +1,17 @@
-// Bidirectional mapping between wast-JSON `Value` (harness/src/schema.ts —
-// scalars as decimal strings, floats as bit patterns) and the runtime's
-// `ComponentValue` (runtime/src/cabi/types.ts — definitions.py's semantics in
-// our own representation, contracts/descriptor-ir.md §"Host value shapes":
-// variant/enum/option/result as `{kind: label, value: payload}` objects with
-// despecialized labels `none`/`some`/`ok`/`error`, tuple as despecialized
-// record `{"0": v, ...}`, flags as `{label: boolean}`).
+// Bidirectional mapping between wast-JSON `Value` (harness/src/schema.ts,
+// mirroring upstream `json-from-wast`'s `ComponentConst`/`CoreConst` —
+// scalars as decimal strings, floats as bit patterns, bool as a JSON
+// boolean, record as `[name, Value][]`, variant as `{case, payload?}`,
+// option as `Value | null`, result as `{Ok: Value|null} | {Err: Value|null}`)
+// and the runtime's `ComponentValue` (runtime/src/cabi/types.ts —
+// definitions.py's semantics in our own representation,
+// contracts/descriptor-ir.md §"Host value shapes": variant/enum/option/result
+// as `{kind: label, value: payload}` objects with despecialized labels
+// `none`/`some`/`ok`/`error`, tuple as despecialized record `{"0": v, ...}`,
+// flags as `{label: boolean}`).
 //
-// Every wast-JSON `Value` is self-describing (`type`/`case`/`status` fields
-// carry the type), so converting an *argument* list needs no separate
+// Every wast-JSON `Value` is self-describing (the `type` field carries the
+// tag — nested inside `value` for compound cases, e.g. `variant`'s `case`), so converting an *argument* list needs no separate
 // FuncType — the value's own tag says how to build the ComponentValue.
 // Comparing an *actual* ComponentValue against an `assert_return` expected
 // value works the same way: the expected value's tag drives the comparison
@@ -17,7 +21,7 @@
 // ever seeing a `FuncType` itself (see `runtime/src/exec/boundary.ts`
 // `createLiftedFunction`, which resolves it internally).
 
-import type { RecordField, Value } from "./schema.ts";
+import type { Value } from "./schema.ts";
 
 const scratch = new DataView(new ArrayBuffer(8));
 
@@ -66,7 +70,7 @@ function isArithmeticNan64(bits: bigint): boolean {
 export function toComponentValue(v: Value): any {
   switch (v.type) {
     case "bool":
-      return v.value === "true";
+      return v.value;
     case "u8":
     case "u16":
     case "u32":
@@ -74,23 +78,23 @@ export function toComponentValue(v: Value): any {
     case "s16":
     case "s32":
     case "i32":
-      return Number(v.value as string);
+      return Number(v.value);
     case "u64":
     case "s64":
     case "i64":
-      return BigInt(v.value as string);
+      return BigInt(v.value);
     case "f32":
-      return f32FromBits(BigInt(v.value as string));
+      return f32FromBits(BigInt(v.value));
     case "f64":
-      return f64FromBits(BigInt(v.value as string));
+      return f64FromBits(BigInt(v.value));
     case "char":
     case "string":
-      return v.value as string;
+      return v.value;
     case "enum":
-      return { kind: v.value as string, value: null };
+      return { kind: v.value, value: null };
     case "list":
     case "tuple": {
-      const items = (v.value as Value[]).map(toComponentValue);
+      const items = v.value.map(toComponentValue);
       if (v.type === "tuple") {
         const record: Record<string, unknown> = {};
         items.forEach((it, i) => record[String(i)] = it);
@@ -100,37 +104,45 @@ export function toComponentValue(v: Value): any {
     }
     case "record": {
       const record: Record<string, unknown> = {};
-      for (const f of v.value as RecordField[]) {
-        record[f.name] = toComponentValue(f.value);
+      for (const [name, value] of v.value) {
+        record[name] = toComponentValue(value);
       }
       return record;
     }
     case "variant": {
-      const payload = v.value === null
+      const payload = v.value.payload === undefined
         ? null
-        : toComponentValue(v.value as unknown as Value);
-      return { kind: v.case as string, value: payload };
+        : toComponentValue(v.value.payload);
+      return { kind: v.value.case, value: payload };
     }
     case "option":
       return v.value === null
         ? { kind: "none", value: null }
-        : { kind: "some", value: toComponentValue(v.value as unknown as Value) };
+        : { kind: "some", value: toComponentValue(v.value) };
     case "result": {
-      const payload = v.value === null
-        ? null
-        : toComponentValue(v.value as unknown as Value);
       // Internal spelling of the error case is "error", not "err"
       // (contracts/descriptor-ir.md §"Host value shapes").
-      return { kind: v.status === "ok" ? "ok" : "error", value: payload };
+      if ("Ok" in v.value) {
+        return {
+          kind: "ok",
+          value: v.value.Ok === null ? null : toComponentValue(v.value.Ok),
+        };
+      }
+      return {
+        kind: "error",
+        value: v.value.Err === null ? null : toComponentValue(v.value.Err),
+      };
     }
     case "flags": {
-      const set = new Set(v.value as string[]);
+      const set = new Set(v.value);
       const record: Record<string, boolean> = {};
       for (const label of set) record[label] = true;
       return record;
     }
     default:
-      throw new Error(`toComponentValue: unsupported value type '${v.type}'`);
+      throw new Error(
+        `toComponentValue: unsupported value type '${(v as { type: string }).type}'`,
+      );
   }
 }
 
@@ -148,7 +160,7 @@ export function compareValue(
   const where = path || "<root>";
   switch (expected.type) {
     case "bool": {
-      const want = expected.value === "true";
+      const want = expected.value;
       return actual === want
         ? undefined
         : `${where}: expected bool ${want}, got ${JSON.stringify(actual)}`;
@@ -160,7 +172,7 @@ export function compareValue(
     case "s16":
     case "s32":
     case "i32": {
-      const want = Number(expected.value as string);
+      const want = Number(expected.value);
       return actual === want
         ? undefined
         : `${where}: expected ${expected.type} ${want}, got ${
@@ -170,7 +182,7 @@ export function compareValue(
     case "u64":
     case "s64":
     case "i64": {
-      const want = BigInt(expected.value as string);
+      const want = BigInt(expected.value);
       return actual === want
         ? undefined
         : `${where}: expected ${expected.type} ${want}, got ${
@@ -182,7 +194,7 @@ export function compareValue(
         return `${where}: expected f32 number, got ${typeof actual}`;
       }
       const bits = f32ToBits(actual);
-      const raw = expected.value as string;
+      const raw = expected.value;
       if (raw === "nan:canonical") {
         return isCanonicalNan32(bits)
           ? undefined
@@ -209,7 +221,7 @@ export function compareValue(
         return `${where}: expected f64 number, got ${typeof actual}`;
       }
       const bits = f64ToBits(actual);
-      const raw = expected.value as string;
+      const raw = expected.value;
       if (raw === "nan:canonical") {
         return isCanonicalNan64(bits)
           ? undefined
@@ -249,7 +261,7 @@ export function compareValue(
         : `${where}: expected enum '${expected.value}', got '${label}'`;
     }
     case "list": {
-      const items = expected.value as Value[];
+      const items = expected.value;
       // list<u8> lifts as a Uint8Array (docs/architecture.md §7); accept both.
       const arr = actual instanceof Uint8Array
         ? Array.from(actual)
@@ -267,7 +279,7 @@ export function compareValue(
       return undefined;
     }
     case "tuple": {
-      const items = expected.value as Value[];
+      const items = expected.value;
       if (typeof actual !== "object" || actual === null) {
         return `${where}: expected tuple record, got ${JSON.stringify(actual)}`;
       }
@@ -279,13 +291,13 @@ export function compareValue(
       return undefined;
     }
     case "record": {
-      const fields = expected.value as RecordField[];
+      const fields = expected.value;
       if (typeof actual !== "object" || actual === null) {
         return `${where}: expected record object, got ${JSON.stringify(actual)}`;
       }
       const rec = actual as Record<string, unknown>;
-      for (const f of fields) {
-        const m = compareValue(f.value, rec[f.name], `${where}.${f.name}`);
+      for (const [name, value] of fields) {
+        const m = compareValue(value, rec[name], `${where}.${name}`);
         if (m !== undefined) return m;
       }
       return undefined;
@@ -301,12 +313,12 @@ export function compareValue(
           JSON.stringify(actual)
         }`;
       }
-      if (label !== expected.case) {
-        return `${where}: expected variant case '${expected.case}', got '${label}'`;
+      if (label !== expected.value.case) {
+        return `${where}: expected variant case '${expected.value.case}', got '${label}'`;
       }
-      if (expected.value === null) return undefined;
+      if (expected.value.payload === undefined) return undefined;
       return compareValue(
-        expected.value as unknown as Value,
+        expected.value.payload,
         rec.value,
         `${where}.${label}`,
       );
@@ -324,32 +336,32 @@ export function compareValue(
       if (rec.kind !== "some") {
         return `${where}: expected some(...), got ${JSON.stringify(actual)}`;
       }
-      return compareValue(expected.value as unknown as Value, rec.value, `${where}.some`);
+      return compareValue(expected.value, rec.value, `${where}.some`);
     }
     case "result": {
       if (typeof actual !== "object" || actual === null) {
         return `${where}: expected result object, got ${JSON.stringify(actual)}`;
       }
       const rec = actual as Record<string, unknown>;
-      if (expected.status === "ok") {
+      if ("Ok" in expected.value) {
         if (rec.kind !== "ok") {
           return `${where}: expected ok(...), got ${JSON.stringify(actual)}`;
         }
-        if (expected.value === null) return undefined;
-        return compareValue(expected.value as unknown as Value, rec.value, `${where}.ok`);
+        if (expected.value.Ok === null) return undefined;
+        return compareValue(expected.value.Ok, rec.value, `${where}.ok`);
       }
       if (rec.kind !== "error") {
         return `${where}: expected error(...), got ${JSON.stringify(actual)}`;
       }
-      if (expected.value === null) return undefined;
+      if (expected.value.Err === null) return undefined;
       return compareValue(
-        expected.value as unknown as Value,
+        expected.value.Err,
         rec.value,
         `${where}.error`,
       );
     }
     case "flags": {
-      const want = new Set(expected.value as string[]);
+      const want = new Set(expected.value);
       if (typeof actual !== "object" || actual === null) {
         return `${where}: expected flags object, got ${JSON.stringify(actual)}`;
       }
@@ -365,7 +377,9 @@ export function compareValue(
       return undefined;
     }
     default:
-      return `${where}: unsupported expected value type '${expected.type}'`;
+      return `${where}: unsupported expected value type '${
+        (expected as { type: string }).type
+      }'`;
   }
 }
 

@@ -618,10 +618,11 @@ There is no single official conformance suite; the corpus is assembled:
 | experiment-mosh gates + minimized repros (`compose-async-tdz`) | composed 3-component client: mixed sync/async exports, background pumps, resources re-exported across interfaces, componentize-go guest | strongest known real-workload exercisers — this family surfaced ≥5 distinct jco defect classes no WAST corpus expresses (`tools/smoke-c0/`) |
 
 Harness pipeline: an offline Rust step (`crates/testgen`) converts `.wast`
-into JSON commands + `.wasm` binaries — the core-spec `wast2json` model. It
-uses the `wast` crate directly (the pinned wasm-tools CLI's bundled parser
-predates current suite syntax; owning the emitter also lets us tag every
-artifact `core` vs `component`, which the harness needs since V8 cannot even
+into JSON commands + `.wasm` binaries by driving the `wast` and
+`json-from-wast` crates (the `wasm-tools json-from-wast` implementation) as
+libraries — the same conversion wasmtime's own wast runner performs
+in-process; the schema is upstream's, unmodified. The harness classifies
+each binary as core module vs component from its preamble (V8 cannot even
 validate component binaries). The TS harness executes the JSON identically
 under `deno test` and in browsers (`tools/browser/run-lane.ts`: static
 server + automated Chromium / Firefox-with-pref / WebKit, with per-lane
