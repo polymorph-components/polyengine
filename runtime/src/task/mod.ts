@@ -146,6 +146,27 @@ export class Task {
   state: TaskState = "initial";
   /** TaskBorrowScope (cabi/context.ts): live borrows lowered into this task. */
   numBorrows = 0;
+
+  /**
+   * Fired once, when this task's LAST thread unregisters (#292).
+   *
+   * The reference has no such hook: `canon_lift` for an async-typed export
+   * returns to the embedder right after the first `thread.resume()`
+   * (definitions.py line 2189 — the driving loop with the empty-candidate-set
+   * `trap_if` is guarded by `if not ft.async_`), and the embedder's own
+   * `Store.tick` never traps on idle. Polyengine surfaces such an export as a
+   * Promise, so it needs the one thing a Python generator embedding gets for
+   * free: a signal for "the task is over" once its driver has gone home. Set
+   * only by exec/boundary.ts, only on the background path — a lifted async
+   * export whose driver exited idle with the task unresolved — and only ever
+   * once per task.
+   *
+   * Fires AFTER `unregisterThread`'s `trapIf(state !== "resolved")`, so a
+   * task that finished without resolving traps there as before and this never
+   * runs. Must not throw: it is called from inside guest-driven thread exit,
+   * under some OTHER call's driver.
+   */
+  onFinished: (() => void) | null = null;
   implicitThread: Thread | null = null;
   readonly threads: Thread[] = [];
   /**
@@ -308,6 +329,14 @@ export class Task {
     assert_(thread.index !== null, "unregister of an unindexed thread");
     this.inst.threads.remove(thread.index);
     thread.index = null;
+    if (this.threads.length === 0 && this.onFinished !== null) {
+      // Last, and after the table removal: the callback resolves a host-facing
+      // Promise off this task's results, so everything this task owns must
+      // already be released when it runs. One-shot (see `onFinished`).
+      const f = this.onFinished;
+      this.onFinished = null;
+      f();
+    }
   }
 
   /**

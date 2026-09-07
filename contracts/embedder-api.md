@@ -200,6 +200,20 @@ self-driving. Bounds: an operation waiting on the *embedder's* half of a
 host stream/future hangs until the embedder acts (never a trap), and a
 settlement-time failure surfaces on the next call into the instance.
 
+**An async-typed export's Promise may stay pending indefinitely** (#292).
+When its task parks with no ready thread and no host call outstanding —
+the long-poll shape: `next: async func() -> event` woken by a later
+`push` — the Promise stays pending; it settles when a later call (any
+export, a host stream/future operation) runs the task to completion, and
+rejects with the poisoning cause if the instance is poisoned first. This
+is definitions.py `canon_lift`, whose trapping driving loop runs only for
+sync-typed exports (line 2189), and wasmtime `call_concurrent` under
+`run_concurrent`; the embedder's event loop is always dwelling, so the
+blocking `call_async` shape (trap on idle) has no JS analogue and is not
+offered. An async guest that genuinely can never progress therefore
+hangs rather than traps, as it does under `run_concurrent`. **Sync-typed
+exports keep the spec's deadlock trap** in every mode.
+
 ### Import marks
 
 Three marks, each a `Symbol.for` brand defined in and imported from

@@ -164,6 +164,30 @@ export function setOnInstancePoisoned(
 }
 
 /**
+ * Additional poisoning observers, appended to the single `onInstancePoisoned`
+ * hook above (#292). Separate from it for the same evaluation-order reason
+ * the hook exists at all — the registrant (exec/boundary.ts, rejecting the
+ * pending Promises of async-typed lifts whose task will now never finish)
+ * already imports this module, and we must not import it back — but a Set
+ * rather than a second single slot, because "the" poisoning action is
+ * streams.ts's and this is strictly extra.
+ *
+ * Ordering is deliberate: the primary hook (stream/future-end retirement,
+ * #66) runs FIRST, so a listener that settles host-visible Promises observes
+ * ends already retired rather than ends about to be.
+ */
+const instancePoisonedListeners = new Set<
+  (inst: { handles: Iterable<unknown> }, cause: unknown) => void
+>();
+
+/** @internal — see `instancePoisonedListeners`. */
+export function addInstancePoisonedListener(
+  f: (inst: { handles: Iterable<unknown> }, cause: unknown) => void,
+): void {
+  instancePoisonedListeners.add(f);
+}
+
+/**
  * @internal — invoke the poisoning hook. For the bracket-break sites that
  * live outside this module (`Thread.resumeWith`, exec/boundary.ts `poison`):
  * one seam, all sites.
@@ -178,6 +202,7 @@ export function notifyInstancePoisoned(
   // (polyengine#145 ask 1).
   if (!poisonedInstances.has(inst)) poisonedInstances.set(inst, cause);
   onInstancePoisoned?.(inst, cause);
+  for (const f of instancePoisonedListeners) f(inst, cause);
 }
 
 /** Poisoned instances → poisoning cause, for late-settle retirement

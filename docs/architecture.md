@@ -318,7 +318,7 @@ Mapping the reference model onto the web platform:
 | scheduler | JS event loop + explicit ready queues; cooperative, matching the CM model — no preemption exists or is needed |
 | `Waitable` / `WaitableSet` | host-side event structures; `wait` = suspension (stackful) or the callback return-code protocol (stackless) |
 | callback ABI | no suspension at all: the scheduler invokes the callback export with events |
-| sync `canon_lift` driving loop | same scheduler: pump ready threads until resolved, with the spec's deadlock trap |
+| sync `canon_lift` driving loop | same scheduler: pump ready threads until resolved, with the spec's deadlock trap. Async-typed exports have no such loop in the reference (`canon_lift` returns after the first resume, line 2189), so their driver exits on idle and the Promise stays pending for a later driver to settle — wasmtime `call_concurrent`, not `call_async` (#292; contracts/embedder-api.md §"Functions and async") |
 | `Subtask`, backpressure, cancellation | direct ports of the reference structures |
 
 JSPI's three roles, precisely:
