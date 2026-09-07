@@ -34,6 +34,7 @@ import {
   EventCode,
   withActivation,
   hasRealHostCall,
+  isInstancePoisoned,
   type EventTuple,
   NeedsJspi,
   needsJspi,
@@ -443,6 +444,24 @@ function drive(
   done: () => boolean,
   what: string,
 ): void | Promise<void> {
+  try {
+    return driveLoop(store, done, what);
+  } catch (e) {
+    // EXIT BY EXCEPTION IS STILL AN EXIT. A trap unwinds this call, but the
+    // sibling work this loop already started — a registered host call, a
+    // queued tail (which gates `Store.tick`) — does not unwind with it. The
+    // `done()` path hands both to the settlement pump; so must this one.
+    ensureSettlementPump(store);
+    throw e;
+  }
+}
+
+/** `drive`'s loop proper; see `drive` for the exception-exit hand-off. */
+function driveLoop(
+  store: Store,
+  done: () => boolean,
+  what: string,
+): void | Promise<void> {
   for (;;) {
     traceDrive("drive", store, done, "top");
     // The synchronous drain must not run while a thread is parked on a
@@ -833,6 +852,18 @@ function fireSettlementNudge(store: Store): void {
 }
 
 /**
+ * What an exiting driver must hand over: real host calls it was watching, a
+ * queued activation tail (which gates `Store.tick` for every later driver),
+ * or a hop-parked thread — the #280 rule ("a driver is not done while ANY
+ * thread of ANY task is hop-parked") applied to the exits that cannot
+ * evaluate their `done` predicate, i.e. the exception exits.
+ */
+function pumpWork(store: Store): boolean {
+  return hasRealHostCall(store) || store.settled.length > 0 ||
+    entryHopThreads(store).length > 0;
+}
+
+/**
  * Ensure a settlement pump is watching `store`'s real outstanding host calls.
  * Idempotent and cheap; called at every driver exit. Never throws.
  */
@@ -844,7 +875,7 @@ export function ensureSettlementPump(store: Store): void {
     return;
   }
   if (store.hostFailure !== undefined) return;
-  if (!hasRealHostCall(store)) return;
+  if (!pumpWork(store)) return;
   settlementPumps.add(store);
   void settlementPumpLoop(store);
 }
@@ -863,20 +894,32 @@ async function settlementPumpLoop(store: Store): Promise<void> {
       // it in a loop.
       if (store.hostFailure !== undefined) return;
       const real = realHostCalls(store);
-      if (real.length === 0) return;
-      const nudge = armSettlementNudge(store);
-      // The host-call arrival one-shot does NOT ride here, deliberately: a
-      // registration this snapshot misses always reaches `ensureSettlementPump`
-      // (which fires the nudge) — `driveAsync`'s finally, `drive`'s synchronous
-      // completion, and `HostActivity.pump()`'s async half is itself a
-      // `driveStoreAsync`. Any driver live meanwhile is what we stand down for.
-      // Rejections are not this pump's to report: the registration site's
-      // own continuation parks them on `store.hostFailure`.
-      await Promise.race([
-        ...real.map((p) => p.then(() => {}, () => {})),
-        nudge,
-      ]);
-      if (storeDriverDepth(store) > 0) continue;
+      // A queued tail is serviceable RIGHT NOW: drive without parking. A
+      // hop-parked thread lands on the engine's own schedule, so its promise
+      // is raced alongside the host calls — that is how an exception exit's
+      // orphaned hop (F4/#280) gets an owner.
+      const hops = store.settled.length > 0
+        ? []
+        : entryHopThreads(store).map((t) => t.awaiting).filter((
+          p,
+        ): p is Promise<unknown> => p !== null);
+      if (store.settled.length === 0) {
+        if (real.length === 0 && hops.length === 0) return;
+        const nudge = armSettlementNudge(store);
+        // The host-call arrival one-shot does NOT ride here, deliberately: a
+        // registration this snapshot misses always reaches `ensureSettlementPump`
+        // (which fires the nudge) — `driveAsync`'s finally, `drive`'s synchronous
+        // completion, and `HostActivity.pump()`'s async half is itself a
+        // `driveStoreAsync`. Any driver live meanwhile is what we stand down for.
+        // Rejections are not this pump's to report: the registration site's
+        // own continuation parks them on `store.hostFailure`.
+        await Promise.race([
+          ...real.map((p) => p.then(() => {}, () => {})),
+          ...hops.map((p) => p.then(() => {}, () => {})),
+          nudge,
+        ]);
+        if (storeDriverDepth(store) > 0) continue;
+      }
       // Drive unconditionally after a wake: `storeQuiescent` cannot see a
       // READY waiting thread (the usual product of a settlement — the
       // continuation readied the guest and deleted its own host call), so
@@ -906,7 +949,7 @@ async function settlementPumpLoop(store: Store): Promise<void> {
     // fired the nudge after our last snapshot check must not be lost.
     if (
       !failed && store.hostFailure === undefined &&
-      storeDriverDepth(store) === 0 && hasRealHostCall(store)
+      storeDriverDepth(store) === 0 && pumpWork(store)
     ) {
       ensureSettlementPump(store);
     }
@@ -1237,8 +1280,13 @@ async function driveAsync(
       // resumption site here re-checks membership and promise identity
       // synchronously — mechanisms (a) and (b), which is where that note
       // already puts the weight.
+      // ONLY IF WE ADDED IT (issue #158, same rule as the `finally` below):
+      // `pendingResumptions` is a Set by identity, so a genuine entry for
+      // `chosen` minted meanwhile — or already held — collapses with ours,
+      // and removing "ours" would drop the genuine one.
       const sole = storeDriverDepth(store) === 1;
-      if (sole) store.addPendingResumption(chosen);
+      const added = sole && !store.pendingResumptions.has(chosen);
+      if (added) store.addPendingResumption(chosen);
       let winner: AwaitWinner | null;
       try {
         // `armDriverArrival` rides the race for every driver, not just the one
@@ -1257,7 +1305,7 @@ async function driveAsync(
           armHostCallArrival(store),
         ]);
       } finally {
-        if (sole) store.removePendingResumption(chosen);
+        if (added) store.removePendingResumption(chosen);
       }
       // Resume whichever thread actually settled -- not necessarily the one we
       // claimed. Resuming only the claimed thread would spin: its promise may
@@ -1271,10 +1319,18 @@ async function driveAsync(
       // promise, after which its OLD promise settles late — membership is
       // true again but the tag's value belongs to a settlement this thread
       // has already consumed. Compare promise identity too.
+      // ONE SETTLEMENT, ONE DELIVERY (definitions.py `Thread.resume` is
+      // atomic). `noteAwaiting` records settlements EAGERLY, so this
+      // promise's `store.settled` entry is already queued; left there, a
+      // body that re-parks SYNCHRONOUSLY inside `resumeWith` gets the OLD
+      // value delivered against its NEW park by the next `serviceSettled`.
       if (
         winner !== null && store.awaiting.has(winner.t) &&
         winner.t.awaiting === winner.p
       ) {
+        for (let i = store.settled.length - 1; i >= 0; i--) {
+          if (store.settled[i].t === winner.t) store.settled.splice(i, 1);
+        }
         winner.t.resumeWith(winner.value, winner.failure);
       }
       continue;
@@ -2505,7 +2561,9 @@ export function createLoweredImport(input: {
           // subtask that never started") and park that AssertionError on
           // `store.hostFailure`, poisoning whatever unrelated embedder call
           // came next.
-          if (subtask.resolved()) return;
+          // POISONED is the same discard (arch §6 #173): no addressee, and
+          // lowering would write into the corpse's memory via its `realloc`.
+          if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
           try {
             onResolve(toResults(v));
           } catch (e) {
@@ -2517,8 +2575,9 @@ export function createLoweredImport(input: {
           // Same guard, different reason: a rejection of a RENOUNCED call is
           // not a host failure. The guest cancelled and was told so; surfacing
           // the rejection would fail an unrelated later call with the error of
-          // an operation nobody is waiting for.
-          if (subtask.resolved()) return;
+          // an operation nobody is waiting for. POISONED is the same discard
+          // (arch §6 #173): it would fail a HEALTHY sibling's export call.
+          if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
           store.hostFailure = e;
         },
       );
