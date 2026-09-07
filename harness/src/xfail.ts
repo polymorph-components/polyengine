@@ -353,30 +353,6 @@ export const XFAIL: XfailEntry[] = [
   //     shim decoder gap).
   // =====================================================================
   // --- async/builtin-trap-poisons-instance.json: root cause: STREAMS ---
-  // --- async/cancel-and-exclusive-lock.json: CM#707 "always deliver
-  // cancellation as soon as possible" (third_party/component-model commit
-  // 1af0b35, pulled in by the CM#705 pin advance polyengine#173) changed
-  // when a pending cancellation must be delivered; polyengine's task
-  // scheduler still implements the pre-#707 delivery timing, so the
-  // cross-instance exclusive-lock scenario this file drives deadlocks
-  // instead of the callee observing cancellation. Classed `cm707-cancel`,
-  // https://github.com/polymorph-components/polyengine/issues/250.
-  //
-  // NOTE on hang risk (dispatch warning): this file does NOT wedge the
-  // harness. It completes crisply with our OWN "deadlock detected: event
-  // loop cannot make further progress" trap rather than looping forever —
-  // the pre-#707 runtime deadlock manifests as a clean trap, not a stall.
-  // No harness-visible skip mechanism was needed. ---
-  {
-    file: "async/cancel-and-exclusive-lock.json",
-    line: 196,
-    reason:
-      "expected return, got trap: wasm trap: deadlock detected: event " +
-      "loop cannot make further progress — polyengine has not implemented " +
-      "CM#707's immediate-cancellation-delivery timing yet, so the " +
-      "callee never observes the pending cancellation and the scheduler " +
-      "finds no ready thread; cm707-cancel, https://github.com/polymorph-components/polyengine/issues/250",
-  },
   // --- async/cancel-stream.json: root cause: STREAMS ---
   // --- async/closed-stream.json: root cause: STREAMS ---
   // --- async/cross-abi-calls.json: root cause: FACT-ASYNC ---

@@ -63,7 +63,14 @@ export class Thread implements SchedulableThread {
   /** Slot in `inst.threads`, assigned by `Task.registerThread`. */
   index: number | null = null;
 
-  /** definitions.py `Thread.cancellable` — set at each block point. */
+  /**
+   * definitions.py `Thread.cancellable` — set at each block point, cleared
+   * while the thread runs. The reference evaluates it as a live predicate
+   * (`cancellable = lock_available` in the callback loop, line 2167), so a
+   * thread that is not parked is never a `request_cancellation` candidate;
+   * clearing on resume gives the same answer for the only shape that differs
+   * (a running implicit thread that still holds the exclusive slot).
+   */
   cancellable = false;
 
   #state: ThreadState = "suspended";
@@ -196,6 +203,7 @@ export class Thread implements SchedulableThread {
 
   #resumeInternal(sendValue: unknown, failure?: { error: unknown }): void {
     this.#state = "running";
+    this.cancellable = false;
     pushCurrentThread(this);
     let step: IteratorResult<BlockRequest, void>;
     try {
@@ -258,7 +266,23 @@ export class Thread implements SchedulableThread {
   ): Generator<BlockRequest, Cancelled, Cancelled> {
     assert_(this.running(), "waitUntil on a non-running thread");
     if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
-    const cancelled = yield { readyFunc, cancellable };
+    // definitions.py `ready_or_cancelled` (line 369): a cancel that arrived
+    // while this task was not cancellable (parked as `pending-cancel`) makes
+    // the thread ready on its own — otherwise the wakeup is lost until some
+    // unrelated event happens to satisfy `readyFunc`. The reference's
+    // `cancellable()` is a live predicate; ours is the static flag AND
+    // `Task.implicitThreadCancellable` (the "lock is free" conjunct the
+    // callback loop's `lock_available` supplies there).
+    const readyOrCancelled = () =>
+      readyFunc() ||
+      (cancellable && this.task.hasPendingCancel() &&
+        (this !== this.task.implicitThread ||
+          this.task.implicitThreadCancellable()));
+    const cancelled = yield { readyFunc: readyOrCancelled, cancellable };
+    // AFTER the block (line 372): converts a plain wakeup taken through the
+    // pending-cancel disjunct into Cancelled.TRUE, and wins over any event
+    // that became pending in the meantime.
+    if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
     return cancelled;
   }
 
