@@ -9,9 +9,80 @@
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 import { InvalidHandleError } from "@polyengine/protocol";
+import { ResourceTypeInfo } from "../../src/cabi/types.ts";
+import {
+  GuestResource,
+  makeWrapper,
+  takeRep,
+  wrapperState,
+} from "../../src/embedder/resources.ts";
 
 const ready = await haveFixture(guest("resources"));
 const IFACE = "polyengine:resources/counters";
+
+Deno.test("resources: identity and ownership rejection leave a wrapper intact", async () => {
+  const rt = new ResourceTypeInfo(null, null);
+  const other = new ResourceTypeInfo(null, null);
+  const owned = makeWrapper(GuestResource, 7, rt, true);
+  for (const own of [false, true]) {
+    const e = await caught(() => takeRep(owned, other, own, "resource"));
+    assertEq(e instanceof InvalidHandleError, true);
+    assertEq(String(e).includes("resource type mismatch"), true);
+    assertEq(wrapperState(owned)?.valid, true);
+  }
+  assertEq(takeRep(owned, rt, true, "own<R>"), 7);
+  assertEq(wrapperState(owned)?.valid, false);
+
+  const borrowed = makeWrapper(GuestResource, 7, rt, false);
+  const e = await caught(() => takeRep(borrowed, rt, true, "own<R>"));
+  assertEq(e instanceof InvalidHandleError, true);
+  assertEq(String(e).includes("borrowed"), true);
+  assertEq(wrapperState(borrowed)?.valid, true);
+  assertEq(takeRep(borrowed, rt, false, "borrow<R>"), 7);
+  borrowed.drop();
+});
+
+Deno.test({
+  name:
+    "resources: foreign instantiation owns and borrows are rejected before entry",
+  ignore: !ready,
+  fn: async () => {
+    const a = await counters();
+    const b = await counters();
+    using x = new a.Counter(11n);
+    using y = new b.Counter(22n);
+    for (const call of [() => b.bump(x, 1n), () => b.consume(x)]) {
+      const e = await caught(call);
+      assertEq(e instanceof InvalidHandleError, true);
+      assertEq(String(e).includes("resource type mismatch"), true);
+      assertEq(await x.get(), 11n, "source wrapper remains live");
+      assertEq(await y.get(), 22n, "target guest was not entered");
+      assertEq(await a.liveCounters(), 1);
+      assertEq(await b.liveCounters(), 1);
+    }
+  },
+});
+
+Deno.test({
+  name:
+    "resources: own-lowering refuses a live borrowed wrapper before consumption",
+  ignore: !ready,
+  fn: async () => {
+    const c = await counters();
+    using owned = new c.Counter(11n);
+    const state = wrapperState(owned)!;
+    // Same wrapper producer as the incoming-borrow bridge, followed by the
+    // production export own-lowering path. Not a guest-to-host borrow fixture.
+    using borrowed = makeWrapper(c.Counter, state.rep, state.rt, false);
+    const e = await caught(() => c.consume(borrowed));
+    assertEq(e instanceof InvalidHandleError, true);
+    assertEq(String(e).includes("borrowed"), true);
+    assertEq(wrapperState(borrowed)?.valid, true);
+    assertEq(await c.bump(borrowed, 1n), 12n, "reborrowing remains legal");
+    assertEq(await owned.get(), 12n, "the actual owner was not consumed");
+    assertEq(await c.liveCounters(), 1);
+  },
+});
 
 // deno-lint-ignore no-explicit-any
 async function counters(): Promise<any> {

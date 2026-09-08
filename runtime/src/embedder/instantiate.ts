@@ -15,6 +15,8 @@ import type { LoadedPlan } from "../plan/loader.ts";
 import { loadEnvelope, loadPlan, PlanError } from "../plan/loader.ts";
 import type { FuncType, ResourceTypeInfo, ValType } from "../cabi/types.ts";
 import type { ComponentValue, VariantValue } from "../cabi/types.ts";
+import { despecialize } from "../cabi/types.ts";
+import { hostFutureFor, hostStreamFor } from "../exec/host_streams.ts";
 import { Trap } from "../cabi/trap.ts";
 import {
   type ComponentHandle,
@@ -392,7 +394,7 @@ class Facade {
       // The rt is supplied per wrapper, so an anonymous class needs none here.
       { impl: null, dtor: null } as unknown as ResourceTypeInfo,
       () => () => Promise.reject(new TypeError("no methods")),
-      () => [],
+      () => ({ lowered: [], release: () => {} }),
     );
     return b.cls;
   }
@@ -448,21 +450,16 @@ class Facade {
       lowerOwn(v, t) {
         const b = self.#binding(t.rt);
         if (b.kind === "host") return b.registry.repFor(v);
-        return takeRep(v, true, `own<${b.name}>`);
+        return takeRep(v, t.rt, true, `own<${b.name}>`);
       },
       lowerBorrow(v, t) {
         const b = self.#binding(t.rt);
         if (b.kind === "host") {
-          // Contract 2x4 table, bottom-right: "a never-registered instance
-          // gets a rep allocated **for the call's duration**". A rep minted
-          // here is call-scoped, so it is released when the call returns —
-          // otherwise it would sit in the registry's STRONG rep->instance map
-          // forever, since a guest dropping a borrow handle runs no dtor.
-          const known = b.registry.hasInstance(v);
-          const rep = b.registry.repFor(v);
-          if (!known) {
-            self.#lowerScope?.push(() => b.registry.releaseIfPresent(rep));
-          }
+          // Each overlapping call retains the rep; the final borrow release
+          // removes only temporary mappings, never a guest-owned registration.
+          const { rep, release } = b.registry.borrowFor(v);
+          if (self.#lowerScope === null) release();
+          else self.#lowerScope.push(release);
           return rep;
         }
         // Host `own` wrapper lowered as `borrow<R>` (#86): record the lend
@@ -471,7 +468,7 @@ class Facade {
         // definitions.py `lift_borrow` -> `Subtask.add_lender` (line 890);
         // `#lowerScope` is released where that subtask delivers its
         // resolution, i.e. when the call ends.
-        const rep = takeRep(v, false, `borrow<${b.name}>`);
+        const rep = takeRep(v, t.rt, false, `borrow<${b.name}>`);
         const release = lendWrapper(v as object);
         if (self.#lowerScope === null) {
           // No enclosing lowering scope (a raw/one-off lowering): the lend
@@ -1053,7 +1050,7 @@ class Facade {
         (raw, params, results, async, where) =>
           this.#wrapExportFn(raw, { params, results, async }, where),
         (args, params, where) =>
-          args.map((a, i) => fromHost(a, params[i], this.#opts(where))),
+          this.#lowerParams(params, args, this.#opts(where)),
       );
       obj[claim(pascalCase(name), name)] = cls;
       const index = this.#tokenIndex.get(rt);
@@ -1078,26 +1075,93 @@ class Facade {
     o: AdapterOptions,
   ): { lowered: ComponentValue[]; release: () => void } {
     const scope: (() => void)[] = [];
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
+      let failed = false;
+      let error: unknown;
+      for (const r of scope) {
+        try {
+          r();
+        } catch (e) {
+          if (!failed) error = e;
+          failed = true;
+        }
+      }
+      if (failed) throw error;
+    };
     const outer = this.#lowerScope;
     this.#lowerScope = scope;
     let lowered: ComponentValue[];
     try {
       lowered = params.map((p, i) => fromHost(args[i], p, o));
     } catch (e) {
-      for (const r of scope) r();
-      throw e;
+      try {
+        release();
+      } finally {
+        throw e;
+      }
     } finally {
       this.#lowerScope = outer;
     }
-    let released = false;
-    return {
-      lowered,
-      release: () => {
-        if (released) return;
-        released = true;
-        for (const r of scope) r();
-      },
-    };
+    return { lowered, release };
+  }
+
+  /** Cleanup cannot abandon a result already transferred out of the guest. */
+  #finishCall(
+    release: () => void,
+    succeeded: boolean,
+    raw: unknown,
+    type: ValType | null,
+  ): void {
+    try {
+      release();
+    } catch (e) {
+      if (!succeeded) return; // Preserve the original call failure.
+      if (type !== null) this.#dropResult(raw as ComponentValue, type);
+      throw e;
+    }
+  }
+
+  #dropResult(raw: ComponentValue, type: ValType): void {
+    // Already failing cleanup: retire every owned leaf, preserving that error
+    // even when a result destructor also throws.
+    try {
+      const t = despecialize(type);
+      switch (t.kind) {
+        case "own":
+          this.#bridge.dropOwn(raw as number, t);
+          break;
+        case "future":
+          hostFutureFor(raw).drop();
+          break;
+        case "stream":
+          hostStreamFor(raw).readable.drop();
+          break;
+        case "list":
+          for (const v of raw as ComponentValue[]) {
+            this.#dropResult(v, t.element);
+          }
+          break;
+        case "record":
+          for (const f of t.fields) {
+            this.#dropResult(
+              (raw as Record<string, ComponentValue>)[f.label],
+              f.type,
+            );
+          }
+          break;
+        case "variant": {
+          const v = raw as VariantValue;
+          const payload = t.cases.find((c) => c.label === v.kind)?.type;
+          if (payload != null) this.#dropResult(v.value, payload);
+          break;
+        }
+      }
+    } catch {
+      // The argument cleanup error remains primary.
+    }
   }
 
   /**
@@ -1136,13 +1200,14 @@ class Facade {
         try {
           pending = Promise.resolve(fn(...lowered)) as Promise<ComponentValue>;
         } catch (e) {
-          release();
+          this.#finishCall(release, false, undefined, resultType);
           throw e;
         }
-        void pending.then(release, release);
         return Future.deferred(
           pending,
           elementCodec(element, o),
+          (succeeded, raw) =>
+            this.#finishCall(release, succeeded, raw, resultType),
         ) as unknown as Promise<unknown>;
       };
     } else {
@@ -1156,11 +1221,11 @@ class Facade {
         let raw: unknown;
         try {
           raw = await fn(...lowered);
-        } finally {
-          // Call-scoped reps minted for `borrow<R>` arguments of a
-          // host-implemented resource live exactly as long as the call.
-          release();
+        } catch (e) {
+          this.#finishCall(release, false, undefined, resultType);
+          throw e;
         }
+        this.#finishCall(release, true, raw, resultType);
         if (resultType === null) return undefined;
         if (resultType.kind === "result") {
           // Internal result: `{kind: "ok"|"error", value}` (cabi/types.ts
@@ -1243,9 +1308,11 @@ class Facade {
         let raw: unknown;
         try {
           raw = entry(...lowered);
-        } finally {
-          release();
+        } catch (e) {
+          this.#finishCall(release, false, undefined, resultType);
+          throw e;
         }
+        this.#finishCall(release, true, raw, resultType);
         if (isThenable(raw)) unreachableThenable(raw);
         return Future.fromLifted(
           raw as ComponentValue,
@@ -1263,9 +1330,11 @@ class Facade {
       let raw: unknown;
       try {
         raw = entry(...lowered);
-      } finally {
-        release();
+      } catch (e) {
+        this.#finishCall(release, false, undefined, resultType);
+        throw e;
       }
+      this.#finishCall(release, true, raw, resultType);
       if (isThenable(raw)) unreachableThenable(raw);
       if (resultType === null) return undefined;
       if (resultType.kind === "result") {

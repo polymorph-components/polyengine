@@ -330,11 +330,11 @@ Deno.test("#86: transferring a lent handle as own<R> is refused (lift_own)", () 
   const release = lendWrapper(w);
   let msg = "";
   try {
-    takeRep(w, true, "own<r>");
+    takeRep(w, rt, true, "own<r>");
   } catch (e) {
     msg = (e as Error).message;
   }
   assert(msg.includes("still lent out"), `expected a lend refusal, got ${msg}`);
   release();
-  assertEq(takeRep(w, true, "own<r>"), 26);
+  assertEq(takeRep(w, rt, true, "own<r>"), 26);
 });

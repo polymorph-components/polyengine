@@ -73,6 +73,7 @@ import type { ComponentInstanceState } from "../task/mod.ts";
 import type { CoreFn, ResolvedOptions } from "../exec/boundary.ts";
 import { cabiOptions, normalizeCoreValues } from "../exec/boundary.ts";
 import { traceCopy } from "./stream_builtins.ts";
+import { removeHandleWithUnwind } from "../task/scheduler.ts";
 
 /** Services these built-ins need from the executor. */
 export interface AsyncTrampolineContext {
@@ -385,12 +386,13 @@ export function createWaitableSetDrop(inst: ComponentInstanceState): CoreFn {
       !inst.mayLeave,
       "waitable-set.drop: cannot leave component instance",
     );
-    const wset = inst.handles.remove(i);
-    trapIf(
-      !(wset instanceof WaitableSet),
-      "waitable-set.drop: handle is not a waitable set",
-    );
-    (wset as WaitableSet).drop();
+    removeHandleWithUnwind(inst, i, (wset) => {
+      trapIf(
+        !(wset instanceof WaitableSet),
+        "waitable-set.drop: handle is not a waitable set",
+      );
+      (wset as WaitableSet).drop();
+    });
   };
 }
 
@@ -429,16 +431,17 @@ export function createSubtaskDrop(inst: ComponentInstanceState): CoreFn {
   return (i?: number) => {
     i = (i ?? 0) >>> 0;
     trapIf(!inst.mayLeave, "subtask.drop: cannot leave component instance");
-    const s = inst.handles.remove(i);
-    trapIf(!(s instanceof Subtask), "subtask.drop: handle is not a subtask");
-    (s as Subtask).drop();
+    removeHandleWithUnwind(inst, i, (s) => {
+      trapIf(!(s instanceof Subtask), "subtask.drop: handle is not a subtask");
+      (s as Subtask).drop();
+    });
   };
 }
 
 /**
  * definitions.py `canon_subtask_cancel` (line 2469).
  *
- * The synchronous form blocks (`subtask.wait_for_pending_event()`) when the
+ * The synchronous form blocks (`thread.wait_until(subtask.resolved)`) when the
  * callee does not resolve promptly; from a stackless guest that is JSPI
  * territory. The async form returns `BLOCKED` instead of blocking, and is
  * fully supported.
@@ -591,8 +594,7 @@ export function createSubtaskCancel(
         // (lit), mirroring SITE 4 (stream_builtins.ts) and
         // `Waitable.waitForPendingEvent`. The ASYNC form answers BLOCKED as
         // soon as the callee is determinate and still unresolved.
-        const ready = (): boolean =>
-          determinate() && (async_ || st.hasPendingEvent());
+        const ready = (): boolean => determinate() && (async_ || st.resolved());
 
         if (mode !== "jspi") {
           if (st.resolved()) return finish();

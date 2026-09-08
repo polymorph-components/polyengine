@@ -479,19 +479,35 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
    * chunk a BORROW until the returned promise settles; mutating it in that
    * window is misuse. Plain-array chunks are lowered (copied) up front.
    */
-  async write(values: Chunk<T>): Promise<number> {
+  write(values: Chunk<T>): Promise<number> {
+    return this.#write(values, false);
+  }
+
+  async #write(values: Chunk<T>, all: boolean): Promise<number> {
     await this.#stream.whenBound();
     const host = hostOf(this.#stream);
     const where = this.#stream.codec?.where ?? "stream write";
     throwIfFailed(host.value, where);
-    const n = await host.writable.write(
-      packChunk(values, this.#stream.codec!) as unknown as T[],
-    );
-    // A short take normally means "re-offer later" / "reader done"; when the
-    // reader's instance trapped it means the retirement walk settled us —
-    // reject, carrying the delivered count (§"Streams and futures"). A full take
-    // genuinely completed before the trap and stays a success.
-    if (n < values.length) throwIfPeerTrapped(host.value, where, n);
+    const codec = this.#stream.codec!;
+    const lowered = packChunk(values, codec);
+    const info = codec.release === undefined ? undefined : { progress: 0 };
+    let n: number;
+    try {
+      n = await host.writable[all ? "writeAll" : "write"](
+        lowered as unknown as T[],
+        info,
+      );
+      // Full takes completed before a later peer fault and keep their result.
+      if (n < values.length) throwIfPeerTrapped(host.value, where, n);
+    } catch (e) {
+      try {
+        releaseUntaken(lowered, info?.progress ?? 0, codec);
+      } catch {
+        // Cleanup attempted every tail element; preserve the write failure.
+      }
+      throw e;
+    }
+    releaseUntaken(lowered, n, codec);
     return n;
   }
 
@@ -536,16 +552,8 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
   }
 
   /** Offer values until all are taken or the reader goes away. */
-  async writeAll(values: Chunk<T>): Promise<number> {
-    await this.#stream.whenBound();
-    const host = hostOf(this.#stream);
-    const where = this.#stream.codec?.where ?? "stream write";
-    throwIfFailed(host.value, where);
-    const n = await host.writable.writeAll(
-      packChunk(values, this.#stream.codec!) as unknown as T[],
-    );
-    if (n < values.length) throwIfPeerTrapped(host.value, where, n);
-    return n;
+  writeAll(values: Chunk<T>): Promise<number> {
+    return this.#write(values, true);
   }
 
   cancelWrite(): void {
@@ -636,11 +644,16 @@ export class Future<T> implements ProtocolFuture<T> {
   static deferred<T>(
     pending: Promise<ComponentValue>,
     codec: ElemCodec<T>,
+    finish?: (succeeded: boolean, raw: unknown) => void,
   ): Future<T> {
     const hostP = pending.then((v) => {
+      finish?.(true, v);
       const h = hostFutureFor<T>(v);
       (f as unknown as { adopt(h: HostFuture<T>): void }).adopt(h);
       return h;
+    }, (e) => {
+      finish?.(false, e);
+      throw e;
     });
     // Backstop (issue #182): a deferred handle that is never awaited,
     // dropped, or cancelled still has `#hostP` sitting there uninspected — if
@@ -857,13 +870,18 @@ function packChunk<T>(
   codec: ElemCodec<T>,
 ): ComponentValue[] | Uint8Array {
   const u8 = isU8Element(codec.element);
-  if (values instanceof Uint8Array) {
-    if (u8) return values;
-    return Array.from(values as ArrayLike<unknown>).map((v) =>
-      codec.fromHost(v as T)
-    ) as ComponentValue[];
+  if (values instanceof Uint8Array && u8) return values;
+  const lowered: ComponentValue[] = [];
+  try {
+    for (const v of values) lowered.push(codec.fromHost(v as T));
+  } catch (e) {
+    try {
+      releaseUntaken(lowered, 0, codec);
+    } catch {
+      // Preserve the invalid element's error after releasing the prefix.
+    }
+    throw e;
   }
-  const lowered = (values as readonly T[]).map((v) => codec.fromHost(v));
   return u8
     ? Uint8Array.from(lowered as number[])
     : (lowered as ComponentValue[]);
@@ -879,6 +897,7 @@ async function pump<T>(
 ): Promise<void> {
   const where = codec.where ?? "stream producer";
   let failure: unknown;
+  let failed = false;
   let produced = 0;
   // resource stream cancellation companion: the pump learns of the reader dropping
   // through short writes, but a producer PARKED on an external event (an
@@ -894,33 +913,36 @@ async function pump<T>(
       // Lowering is the likeliest failure (a value of the wrong shape) and it
       // must be attributed to the site, not swallowed into a short stream.
       const lowered = packChunk(batch, codec) as unknown as T[];
+      const info = codec.release === undefined ? undefined : { progress: 0 };
       let n: number;
       try {
-        n = await host.writable.writeAll(lowered);
+        n = await host.writable.writeAll(lowered, info);
+        if (n < lowered.length) throwIfPeerTrapped(host.value, where, n);
       } catch (e) {
-        // resource stream: elements past the fault's progress point were lowered but
-        // will never be taken — destroy them (an `own` element may hold a
-        // live platform resource). `PeerTrappedError.progress` reports
-        // delivered-before-the-fault; anything else delivered nothing.
-        releaseUntaken(
-          lowered as unknown as ComponentValue[],
-          e instanceof PeerTrappedError ? e.progress ?? 0 : 0,
-          codec,
-        );
+        try {
+          releaseUntaken(
+            lowered as unknown as ComponentValue[],
+            info?.progress ?? 0,
+            codec,
+          );
+        } catch {
+          // Preserve the producer/peer failure after attempting every release.
+        }
         throw e;
       }
+      releaseUntaken(lowered as unknown as ComponentValue[], n, codec);
       produced += n;
       if (n < lowered.length) {
         // The reader went away: a clean end — but the un-taken tail of this
         // chunk was already lowered and must be destroyed, not leaked.
-        releaseUntaken(lowered as unknown as ComponentValue[], n, codec);
         break;
       }
     }
   } catch (e) {
     failure = e;
+    failed = true;
   }
-  if (failure !== undefined) {
+  if (failed) {
     void produced;
     // Report BEFORE dropping: the drop is what lets the guest see
     // end-of-stream and resolve, and the driving loop checks `hostFailure`
@@ -946,7 +968,17 @@ function releaseUntaken<T>(
 ): void {
   const release = codec.release;
   if (release === undefined || lowered instanceof Uint8Array) return;
-  for (let i = taken; i < lowered.length; i++) release(lowered[i]);
+  let failure: unknown;
+  let failed = false;
+  for (let i = taken; i < lowered.length; i++) {
+    try {
+      release(lowered[i]);
+    } catch (e) {
+      if (!failed) failure = e;
+      failed = true;
+    }
+  }
+  if (failed) throw failure;
 }
 
 /**

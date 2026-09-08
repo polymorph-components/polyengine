@@ -66,9 +66,9 @@ export interface InstanceLike {
  * in lazily for tokens built directly. It returns `undefined` or a Promise,
  * so it is NOT callable from inside a guest activation.
  *
- * Guest-initiated drops (`callDtorGated`) always use `dtor` directly: they
- * must complete synchronously (reference lifts the dtor with
- * `async_ = False`), and any thenable there is a trap.
+ * Guest-initiated drops (`callDtorGated`) lift `dtor` through the same
+ * machinery with a fresh synchronous task/thread, the guest caller identity,
+ * and no host-wide drive. Any thenable there is a trap.
  */
 export class ResourceTypeInfo {
   constructor(

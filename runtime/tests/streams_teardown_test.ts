@@ -30,11 +30,22 @@
 import { assertEq } from "./support/asserts.ts";
 import { AssertionError, Trap } from "../src/cabi/mod.ts";
 import {
+  createErrorContextDrop,
+  createFutureDropReadable,
+  createFutureDropWritable,
   createFutureRead,
+  createFutureTransfer,
+  createFutureWrite,
+  createStreamDropReadable,
+  createStreamDropWritable,
   createStreamRead,
+  createStreamTransfer,
+  createStreamWrite,
 } from "../src/intrinsics/stream_builtins.ts";
 import {
   BLOCKED,
+  createSubtaskDrop,
+  createWaitableSetDrop,
   createWaitableSetWait,
 } from "../src/intrinsics/async_builtins.ts";
 import type { ResolvedOptions } from "../src/exec/boundary.ts";
@@ -62,6 +73,12 @@ import {
   WritableStreamEnd,
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
+import { liftFuture, liftStream } from "../src/cabi/async_values.ts";
+import { LiftLowerContext, mkCanonicalOptions } from "../src/cabi/context.ts";
+import { createLiftedFunction, newStats } from "../src/exec/boundary.ts";
+import { poisonFailureOf } from "../src/task/streams.ts";
+import { Stream } from "../src/embedder/streams.ts";
+import { PeerTrappedError } from "@polyengine/protocol";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
@@ -716,3 +733,320 @@ Deno.test("#100: a host peer parked on a poisoned guest's end is still notified"
   notifyInstancePoisoned(guest, new Trap("unreachable"));
   assertEq(result, CopyResult.DROPPED);
 });
+
+for (const future of [false, true]) {
+  for (const writable of [false, true]) {
+    Deno.test(`removed busy ${future ? "future" : "stream"} ${writable ? "writer" : "reader"} cannot copy stale guest bytes`, async () => {
+      const inst = new ComponentInstanceState(0, new Store());
+      const { memory, view } = mkMemory();
+      const u8 = { kind: "u8" } as const;
+      const shared = future
+        ? new SharedFutureImpl(u8)
+        : new SharedStreamImpl(u8);
+      const end = future
+        ? writable
+          ? new WritableFutureEnd(shared as SharedFutureImpl)
+          : new ReadableFutureEnd(shared as SharedFutureImpl)
+        : writable
+        ? new WritableStreamEnd(shared as SharedStreamImpl)
+        : new ReadableStreamEnd(shared as SharedStreamImpl);
+      const i = inst.handles.add(end);
+      const ctx = {
+        ...mkCtx(inst, view),
+        streamElem: () => u8,
+        futureElem: () => u8,
+      };
+      const copy = future
+        ? (writable ? createFutureWrite : createFutureRead)(
+          { futureTable: 0, options: 0 },
+          ctx,
+          inst,
+        )
+        : (writable ? createStreamWrite : createStreamRead)(
+          { streamTable: 0, options: 0 },
+          ctx,
+          inst,
+        );
+      const bytes = new Uint8Array(memory.buffer, 64, 4);
+      bytes.set([1, 2, 3, 4]);
+      assertEq(copy(i, 64, 4), BLOCKED);
+      const buffer = shared.pendingBuffer!;
+      const drop = future
+        ? (writable ? createFutureDropWritable : createFutureDropReadable)(
+          { futureTable: 0 },
+          ctx,
+          inst,
+        )
+        : (writable ? createStreamDropWritable : createStreamDropReadable)(
+          { streamTable: 0 },
+          ctx,
+          inst,
+        );
+      const call = createLiftedFunction({
+        name: "busy-drop",
+        ft: { params: [], results: [] },
+        opts: {
+          ...ctx.options(),
+          async: false,
+          coreType: { params: [], results: [] },
+        },
+        stats: newStats(),
+        core: () => drop(i),
+      });
+      const trap = caughtSync(call);
+      assert(
+        trap instanceof Trap,
+        "busy drop traps through the export boundary",
+      );
+      assertEq(isInstancePoisoned(inst), true);
+      assertEq(inst.handles.array[i], null, "reference removal is destructive");
+      assertEq(shared.pendingBuffer, null);
+      assertEq(
+        end.hasPendingEvent(),
+        false,
+        "removed end gets no phantom event",
+      );
+      assertEq(poisonFailureOf(shared)?.cause, trap);
+      const peer = new HostBuffer(u8, writable ? null : new Uint8Array([9]), 1);
+      let result: CopyResult | undefined;
+      if (future) {
+        if (writable) {
+          assertAbandonTrap(
+            caughtSync(() =>
+              (shared as SharedFutureImpl).read({}, peer as never, () => {})
+            ),
+            "trapped while it held an end",
+          );
+        } else {(shared as SharedFutureImpl).write({}, peer as never, (r) =>
+            result = r);}
+      } else if (writable) {
+        (shared as SharedStreamImpl).read(
+          {},
+          peer as never,
+          () => {},
+          (r) => result = r,
+        );
+      } else {
+        (shared as SharedStreamImpl).write(
+          {},
+          peer as never,
+          () => {},
+          (r) => result = r,
+        );
+      }
+      if (!future || !writable) assertEq(result, CopyResult.DROPPED);
+      assertEq(buffer.progress, 0);
+      assertEq(peer.progress, 0);
+      assertEq(
+        bytes,
+        new Uint8Array([1, 2, 3, 4]),
+        "no later write reaches guest memory",
+      );
+    });
+  }
+}
+
+for (
+  const path of [
+    "drop-type",
+    "drop-element",
+    "lift-busy",
+    "lift-set",
+    "lift-type",
+    "transfer-busy",
+    "transfer-element",
+    "error-context",
+    "waitable-set",
+    "subtask",
+  ] as const
+) {
+  Deno.test(`invalid removed endpoint retires on ${path}, without prematurely retiring its instance`, () => {
+    const inst = new ComponentInstanceState(0, new Store());
+    const dst = new ComponentInstanceState(1, inst.store);
+    const shared = new SharedStreamImpl(null);
+    const end = new ReadableStreamEnd(shared);
+    const i = inst.handles.add(end);
+    const untouched = new SharedStreamImpl(null);
+    inst.handles.add(new WritableStreamEnd(untouched));
+    const ctx = {
+      ...mkCtx(inst, null),
+      streamTableInstance: (table: number) => table === 0 ? inst : dst,
+      futureTableInstance: (table: number) => table === 0 ? inst : dst,
+      streamElem: (table: number) =>
+        path.endsWith("element") && table === 1
+          ? { kind: "u8" } as const
+          : null,
+    };
+    let notified = false;
+    let dropped = 0;
+    shared.whenDropped(() => dropped++);
+    shared.write(
+      {},
+      new HostBuffer(null, [null], 1) as never,
+      () => {},
+      (r) => {
+        assertEq(r, CopyResult.DROPPED);
+        assertEq(poisonFailureOf(shared) !== undefined, true);
+        notified = true;
+        throw new Error("peer notification must not hide validation trap");
+      },
+    );
+    const cx = new LiftLowerContext(mkCanonicalOptions(), inst);
+    let run: () => unknown;
+    switch (path) {
+      case "drop-type":
+        run = () => createFutureDropReadable({ futureTable: 0 }, ctx, inst)(i);
+        break;
+      case "drop-element":
+        run = () => createStreamDropReadable({ streamTable: 1 }, ctx, inst)(i);
+        break;
+      case "lift-busy":
+        end.state = CopyState.COPYING;
+        run = () => liftStream(cx, i, { kind: "stream", element: null });
+        break;
+      case "lift-set":
+        end.join(new WaitableSet());
+        run = () => liftStream(cx, i, { kind: "stream", element: null });
+        break;
+      case "lift-type":
+        run = () => liftFuture(cx, i, { kind: "future", element: null });
+        break;
+      case "transfer-busy":
+        end.state = CopyState.COPYING;
+        run = () => createStreamTransfer(ctx)(i, 0, 1);
+        break;
+      case "transfer-element":
+        run = () => createStreamTransfer(ctx)(i, 0, 1);
+        break;
+      case "error-context":
+        run = () => createErrorContextDrop(inst)(i);
+        break;
+      case "waitable-set":
+        run = () => createWaitableSetDrop(inst)(i);
+        break;
+      case "subtask":
+        run = () => createSubtaskDrop(inst)(i);
+        break;
+    }
+    const trap = caughtSync(run);
+    assert(
+      trap instanceof Trap,
+      "original validation failure survives peer throw",
+    );
+    assertEq(notified, true);
+    assertEq(inst.handles.array[i], null);
+    assertEq(shared.dropped, true);
+    assertEq(shared.pendingBuffer, null);
+    assertEq(dropped, 1, "peer failure cannot skip drop observers");
+    assertEq(poisonFailureOf(shared)?.cause, trap);
+    assertEq(isInstancePoisoned(inst), false);
+    assertEq(
+      untouched.dropped,
+      false,
+      "local unwind does not retire the whole instance",
+    );
+    notifyInstancePoisoned(inst, trap);
+    assertEq(untouched.dropped, true, "later poison walk still runs");
+    shared.notifyDropped();
+    assertEq(dropped, 1, "drop observers fire exactly once");
+  });
+}
+
+Deno.test("an invalid unwritten future drop notifies a healthy guest reader with the fault", () => {
+  const f = mkFutureSplit();
+  assertEq(f.run(() => f.read(f.ri, 0)), BLOCKED);
+  const trap = caughtSync(() =>
+    createFutureDropWritable({ futureTable: 0 }, f.ctx, f.writer)(f.wi)
+  );
+  assert(trap instanceof Trap, "unwritten future drop traps");
+  assertEq(f.writer.handles.array[f.wi], null);
+  assertEq(f.readEnd.hasPendingEvent(), true);
+  assertAbandonTrap(
+    caughtSync(() => f.readEnd.getPendingEvent()),
+    "trapped while it held an end",
+  );
+});
+
+Deno.test("a removed invalid end reports PeerTrappedError to parked and later host readers", async () => {
+  const inst = new ComponentInstanceState(0, new Store());
+  const u8 = { kind: "u8" } as const;
+  const shared = new SharedStreamImpl(u8);
+  const i = inst.handles.add(new WritableStreamEnd(shared));
+  const stream = Stream.fromLifted<number>(shared as never, {
+    element: u8,
+    toHost: (v) => v as number,
+    fromHost: (v) => v,
+  });
+  const pending = caughtAsync(stream.read(1));
+  const trap = caughtSync(() => createErrorContextDrop(inst)(i));
+  const error = await pending;
+  assert(error instanceof PeerTrappedError, "parked peer sees branded fault");
+  assertEq((error.cause as Error).cause, trap);
+  assert(
+    await caughtAsync(stream.read(1)) instanceof PeerTrappedError,
+    "later peer sees branded fault",
+  );
+});
+
+for (const future of [false, true]) {
+  for (const transfer of [false, true]) {
+    Deno.test(`successful ${future ? "future" : "stream"} ${transfer ? "FACT transfer" : "lift"} keeps its parked peer live`, () => {
+      const src = new ComponentInstanceState(0, new Store());
+      const dst = new ComponentInstanceState(1, src.store);
+      const shared = future
+        ? new SharedFutureImpl(null)
+        : new SharedStreamImpl(null);
+      const end = future
+        ? new ReadableFutureEnd(shared as SharedFutureImpl)
+        : new ReadableStreamEnd(shared as SharedStreamImpl);
+      const i = src.handles.add(end);
+      let notified = false;
+      const buffer = new HostBuffer(null, [null], 1);
+      if (future) {
+        (shared as SharedFutureImpl).write(
+          {},
+          buffer as never,
+          () => notified = true,
+        );
+      } else {(shared as SharedStreamImpl).write({}, buffer as never, () =>
+          notified = true, () =>
+          notified = true);}
+      if (transfer) {
+        const ctx = {
+          ...mkCtx(src, null),
+          streamTableInstance: (t: number) => t ? dst : src,
+          futureTableInstance: (t: number) => t ? dst : src,
+        };
+        const index = (future ? createFutureTransfer : createStreamTransfer)(
+          ctx,
+        )(i, 0, 1) as number;
+        assertEq(
+          (dst.handles.get(index) as ReadableStreamEnd).shared === shared,
+          true,
+        );
+      } else {
+        const cx = new LiftLowerContext(mkCanonicalOptions(), src);
+        const value = future
+          ? liftFuture(cx, i, { kind: "future", element: null })
+          : liftStream(cx, i, { kind: "stream", element: null });
+        assertEq(value === shared, true);
+      }
+      assertEq(src.handles.array[i], null);
+      notifyInstancePoisoned(src, new Trap("after transfer"));
+      assertEq(notified, false);
+      assertEq(shared.dropped, false);
+      assertEq(shared.pendingBuffer === (buffer as unknown), true);
+      assertEq(poisonFailureOf(shared), undefined);
+      const out = new HostBuffer(null, null, 1);
+      if (future) (shared as SharedFutureImpl).read({}, out as never, () => {});
+      else {(shared as SharedStreamImpl).read(
+          {},
+          out as never,
+          () => {},
+          () => {},
+        );}
+      assertEq(out.progress, 1);
+      assertEq(notified, true);
+    });
+  }
+}

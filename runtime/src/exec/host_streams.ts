@@ -845,7 +845,8 @@ export interface HostWritableEnd<T> {
    * stay parked across several partial reads); mutating it in that window is
    * misuse. Readers always receive their own copy.
    */
-  write(values: T[]): Promise<number>;
+  // Internal out-parameter: transferred prefix, including on rejection.
+  write(values: T[], info?: { progress: number }): Promise<number>;
   /**
    * Offer `values` repeatedly until all of them have been taken or the reader
    * goes away. Convenience over `write`, and the shape most embedders want.
@@ -860,7 +861,7 @@ export interface HostWritableEnd<T> {
    * Resolves with the total accepted, which is less than `values.length` only
    * if the reader dropped.
    */
-  writeAll(values: T[]): Promise<number>;
+  writeAll(values: T[], info?: { progress: number }): Promise<number>;
   /**
    * Park a **direct session** on this end (`stream<u8>` only — embedder-api
    * §"Streams and futures" ("Direct-access byte edges") (polyengine#128)).
@@ -1040,6 +1041,7 @@ function mkStreamEnds<T>(
   // `SharedBase.cancel` retires whatever is parked, so cancelling is only
   // legal (and only meaningful) while the parked side is ours.
   const parked = { read: false, write: false };
+  let writeAll: "active" | "cancelled" | null = null;
   /**
    * Settle bookkeeping for a completed copy. `DROPPED` means the peer end is
    * gone: no further host activity on this end is possible, so the activity
@@ -1167,9 +1169,45 @@ function mkStreamEnds<T>(
     activity.notify();
     activity.pump();
   };
+  const write = (values: T[], info?: { progress: number }): Promise<number> => {
+    const start = info?.progress ?? 0;
+    const buf = new HostBuffer(
+      shared.t,
+      values as unknown as ComponentValue[],
+      values.length,
+    );
+    return new Promise<number>((resolve, reject) => {
+      parked.write = true;
+      const done = (result: CopyResult): void => {
+        parked.write = false;
+        if (info !== undefined) info.progress = start + buf.progress;
+        settle(result);
+        resolve(buf.progress);
+      };
+      try {
+        shared.write(
+          writeInst,
+          buf as never,
+          (reclaim) => {
+            // A host offer stays parked across partial peer reads.
+            if (buf.remain() > 0) return;
+            reclaim();
+            done(CopyResult.COMPLETED);
+          },
+          done,
+        );
+        activity.notify();
+        activity.pump();
+      } catch (e) {
+        if (info !== undefined) info.progress = start + buf.progress;
+        reject(e);
+        withdraw("write", buf);
+      }
+    });
+  };
   return {
     writable: {
-      write(values: T[]): Promise<number> {
+      write(values: T[], info?: { progress: number }): Promise<number> {
         // One in-flight operation per end — the host-side spelling of the
         // `CopyEnd` busy trap guests get from the table. Without it a second
         // write would find the FIRST write's buffer in the shared object's
@@ -1178,70 +1216,47 @@ function mkStreamEnds<T>(
         // write resolving `1` against a peer that no longer exists — the
         // #66 repro). Reading while a write is parked stays legal: that is
         // the pass-through data plane (two different ends).
-        if (parked.write) {
+        if (parked.write || writeAll !== null) {
           throw new TypeError(
             "a write is already in flight on this stream's writable end; " +
               "await it or cancelWrite() first",
           );
         }
-        const buf = new HostBuffer(
-          shared.t,
-          values as unknown as ComponentValue[],
-          values.length,
-        );
-        return new Promise<number>((resolve) => {
-          parked.write = true;
-          shared.write(
-            writeInst,
-            buf as never,
-            // `on_copy`: a partial rendezvous happened. A guest end would be
-            // handed a COMPLETED event here and decide for itself whether to
-            // re-offer; a host end has no event loop, so we make the useful
-            // choice and **stay parked** until the offer is exhausted. That is
-            // exactly the shape wit-bindgen's `wit_stream::new()` produces —
-            // a background write that the reader drains a few elements at a
-            // time — and it is why `reclaim` is deliberately not called while
-            // values remain: reclaiming retires the pending buffer and the
-            // next guest read would find nothing.
-            (reclaim) => {
-              if (buf.remain() > 0) return; // still parked; more to give
-              reclaim();
-              parked.write = false;
-              activity.notify();
-              resolve(buf.progress);
-            },
-            (result: CopyResult) => {
-              parked.write = false;
-              settle(result);
-              resolve(buf.progress);
-            },
-          );
-          activity.notify();
-          try {
-            activity.pump();
-          } catch (e) {
-            withdraw("write", buf);
-            throw e;
-          }
-        });
+        return write(values, info);
       },
-      async writeAll(values: T[]): Promise<number> {
-        let sent = 0;
-        while (sent < values.length && !shared.dropped) {
-          // Re-offers keep `write`'s borrow semantics: the first round is the
-          // chunk itself and later rounds a `subarray` VIEW for typed chunks
-          // (review F1: a `slice` here cost a second full copy on the very
-          // path the one-copy contract names), a `slice` for plain arrays.
-          const rest = sent === 0
-            ? values
-            : values instanceof Uint8Array
-            ? values.subarray(sent) as unknown as T[]
-            : values.slice(sent);
-          const n = await this.write(rest);
-          if (n === 0) break; // reader gone; nothing more will be taken
-          sent += n;
+      async writeAll(
+        values: T[],
+        info?: { progress: number },
+      ): Promise<number> {
+        if (parked.write || writeAll !== null) {
+          throw new TypeError(
+            "a write is already in flight on this stream's writable end; " +
+              "await it or cancelWrite() first",
+          );
         }
-        return sent;
+        writeAll = "active";
+        let sent = 0;
+        try {
+          while (
+            sent < values.length && !shared.dropped && writeAll === "active"
+          ) {
+            // Re-offers keep `write`'s borrow semantics: the first round is the
+            // chunk itself and later rounds a `subarray` VIEW for typed chunks
+            // (review F1: a `slice` here cost a second full copy on the very
+            // path the one-copy contract names), a `slice` for plain arrays.
+            const rest = sent === 0
+              ? values
+              : values instanceof Uint8Array
+              ? values.subarray(sent) as unknown as T[]
+              : values.slice(sent);
+            const n = await write(rest, info);
+            if (n === 0) break; // reader gone; nothing more will be taken
+            sent += n;
+          }
+          return sent;
+        } finally {
+          writeAll = null;
+        }
       },
       writeDirect(
         produce: (dest: DirectDestination) => DirectVerdict,
@@ -1249,7 +1264,7 @@ function mkStreamEnds<T>(
       ): Promise<number> {
         // Same one-in-flight-per-end rule, same wording shape as `write`:
         // `writeDirect` participates in it exactly as `write` does.
-        if (parked.write) {
+        if (parked.write || writeAll !== null) {
           throw new TypeError(
             "a write is already in flight on this stream's writable end; " +
               "await it or cancelWrite() first",
@@ -1265,6 +1280,8 @@ function mkStreamEnds<T>(
         });
       },
       cancelWrite() {
+        // Cancellation owns the whole helper, including gaps between offers.
+        if (writeAll !== null) writeAll = "cancelled";
         if (!parked.write) return;
         const session = direct.write;
         if (session !== null) return cancelDirect(session);
@@ -1497,27 +1514,26 @@ function mkFuture<T>(
   // Distinct rendezvous identities per end — see `hostEndInstance`.
   const writeInst = hostEndInstance("write");
   const readInst = hostEndInstance("read");
-  const parked = { any: false };
+  const parked = { read: false, write: false };
   /** Set once the future's one value has actually crossed (#90). */
   let delivered = false;
-  const settle = (result: CopyResult): void => {
-    parked.any = false;
+  const settle = (side: "read" | "write", result: CopyResult): void => {
+    parked[side] = false;
     if (result === CopyResult.COMPLETED) delivered = true;
     if (result === CopyResult.DROPPED) activity.close();
     else activity.notify();
   };
   /** See `mkStreamEnds`' `withdraw`: the pump-trap unwind path (F1). */
-  const withdraw = (buf: unknown): void => {
-    if (!parked.any) return;
-    parked.any = false;
+  const withdraw = (side: "read" | "write", buf: unknown): void => {
+    if (!parked[side]) return;
+    parked[side] = false;
     if (shared.pendingBuffer === buf as never) shared.cancel();
     activity.notify();
   };
   const self: HostFuture<T> = {
     write(v: T): Promise<void> {
-      // One in-flight operation per wrapper — see mkStreamEnds' guards: a
-      // second op would rendezvous against our own parked buffer.
-      if (parked.any) {
+      // Opposite ends may rendezvous after a guest round trip.
+      if (parked.write) {
         throw new TypeError(
           "an operation is already in flight on this future; " +
             "await it or cancel() first",
@@ -1526,24 +1542,24 @@ function mkFuture<T>(
       // definitions.py `SharedFutureImpl.write` asserts `remain() == 1`: a
       // future carries exactly one element.
       const buf = new HostBuffer(shared.t, [v as unknown as ComponentValue], 1);
-      return new Promise<void>((resolve) => {
-        parked.any = true;
-        shared.write(writeInst, buf as never, (result: CopyResult) => {
-          settle(result);
-          resolve();
-        });
-        activity.notify();
+      return new Promise<void>((resolve, reject) => {
+        parked.write = true;
         try {
+          shared.write(writeInst, buf as never, (result: CopyResult) => {
+            settle("write", result);
+            resolve();
+          });
+          activity.notify();
           activity.pump();
         } catch (e) {
-          withdraw(buf);
-          throw e;
+          reject(e);
+          withdraw("write", buf);
         }
       });
     },
     readResult(): Promise<{ value: T | undefined; result: CopyResult }> {
-      // One in-flight operation per wrapper — see write().
-      if (parked.any) {
+      // One in-flight operation per readable end — see write().
+      if (parked.read) {
         throw new TypeError(
           "an operation is already in flight on this future; " +
             "await it or cancel() first",
@@ -1559,21 +1575,21 @@ function mkFuture<T>(
         });
       }
       const buf = new HostBuffer(shared.t, null, 1);
-      return new Promise((resolve) => {
-        parked.any = true;
-        shared.read(readInst, buf as never, (result: CopyResult) => {
-          settle(result);
-          resolve({
-            value: buf.taken()[0] as unknown as T | undefined,
-            result,
-          });
-        });
-        activity.notify();
+      return new Promise((resolve, reject) => {
+        parked.read = true;
         try {
+          shared.read(readInst, buf as never, (result: CopyResult) => {
+            settle("read", result);
+            resolve({
+              value: buf.taken()[0] as unknown as T | undefined,
+              result,
+            });
+          });
+          activity.notify();
           activity.pump();
         } catch (e) {
-          withdraw(buf);
-          throw e;
+          reject(e);
+          withdraw("read", buf);
         }
       });
     },
@@ -1581,8 +1597,7 @@ function mkFuture<T>(
       return (await self.readResult()).value;
     },
     cancel(): void {
-      if (!parked.any) return;
-      parked.any = false;
+      if (!parked.read && !parked.write) return;
       shared.cancel();
       activity.notify();
       activity.pump();

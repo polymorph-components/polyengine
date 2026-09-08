@@ -42,6 +42,7 @@ use wasmtime_environ::{ScopeVec, Tunables, wasmparser};
 pub const WASMTIME_ENVIRON_VERSION: &str = "49.0.0-dev+4675ee1";
 
 pub mod error;
+mod fact_string_limits;
 pub mod plan;
 
 pub use error::{Phase, TranslateError};
@@ -244,7 +245,7 @@ fn map_translation(
             );
             adapters.push(AdapterArtifact {
                 file,
-                wasm: mt.wasm.to_vec(),
+                wasm: fact_string_limits::correct(mt.wasm)?,
             });
         }
     }

@@ -788,9 +788,7 @@ class Executor {
             if (table.kind === "concrete" && table.resource === resourceIndex) {
               const token = this.loaded.resourceTokens[tableIndex];
               token.impl = inst;
-              token.dtor = dtor === null ? null : (rep: number) => {
-                dtor(rep);
-              };
+              token.dtor = dtor;
               // #85/#160: the host-initiated-drop entry. A host-initiated
               // drop is a full canonical LIFT of the dtor (definitions.py
               // `canon_resource_drop`, line 2319), so it is built here with

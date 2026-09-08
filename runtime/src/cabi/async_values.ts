@@ -37,6 +37,7 @@ import {
   SharedFutureImpl,
   SharedStreamImpl,
 } from "../task/streams.ts";
+import { removeHandleWithUnwind } from "../task/scheduler.ts";
 
 /**
  * Diagnostic for a handle-table entry that carries the error-context brand
@@ -86,57 +87,60 @@ function liftAsyncValue(
   assert_(!containsBorrow(t), `${what} may not contain a borrow`);
   const inst = cx.inst;
   assert_(inst !== null, `${what} lift requires a component instance`);
-  const e = inst!.handles.remove(i);
-  trapIf(!(e instanceof EndT), `${what} lift: handle is not a ${what} end`);
-  const end = e as {
-    shared: SharedBase;
-    state: CopyState;
-    inWaitableSet(): boolean;
-  };
-  trapIf(
-    !sameElemType(end.shared.t, elem),
-    `${what} lift: element type mismatch`,
-  );
-  trapIf(
-    end.state === CopyState.DONE,
-    what === "future"
-      ? "cannot lift future after previous read succeeded"
-      : "cannot lift stream after being notified that the writable end dropped",
-  );
-  trapIf(end.state !== CopyState.IDLE, `cannot remove busy ${what}`);
-  trapIf(
-    end.inWaitableSet(),
-    `cannot lift ${what} while it's in a waitable set`,
-  );
-  // Remember the driving store so a host wrapper can pump the guest later.
-  // Single-store only: a shared object crossing into a SECOND store is
-  // unsupported misuse — fail loudly rather than silently pumping the first
-  // (review advisory, host-streams round). Class field initializes to null;
-  // != null covers both sentinels.
-  const holder = end.shared as { boundStore?: unknown };
-  const store = (inst as unknown as { store?: unknown }).store;
-  if (holder.boundStore != null && store != null) {
-    // module identity: when several runtime copies are loaded, "a second store" is very
-    // often "a second COPY" — the shared object was minted by one runtime and
-    // is being driven by another. The two stores are indistinguishable from
-    // here (stores carry no copy identity), so the census is appended as the
-    // hypothesis it is, rather than asserted (issue #83).
-    const census = copyCensus();
-    assert_(
-      holder.boundStore === store,
-      `${what} crossed into a second store; multi-store is unsupported` +
-        (census === ""
-          ? ""
-          : ` (${census} — a value from one copy cannot be lowered through ` +
-            `another)`),
+  return removeHandleWithUnwind(inst!, i, (e) => {
+    trapIf(!(e instanceof EndT), `${what} lift: handle is not a ${what} end`);
+    const end = e as {
+      shared: SharedBase;
+      state: CopyState;
+      inWaitableSet(): boolean;
+    };
+    trapIf(
+      !sameElemType(end.shared.t, elem),
+      `${what} lift: element type mismatch`,
     );
-  }
-  holder.boundStore ??= store;
-  // Host-wrapper re-arm hook (#162, contracts/embedder-api.md §"Streams and futures"): the readable
-  // end just left a guest table, so whoever receives it can act on it again.
-  // See `bindOnLower` in exec/host_streams.ts for the retention rule.
-  (end.shared as { onLifted?: ((i: unknown) => void) | null }).onLifted?.(inst);
-  return end.shared;
+    trapIf(
+      end.state === CopyState.DONE,
+      what === "future"
+        ? "cannot lift future after previous read succeeded"
+        : "cannot lift stream after being notified that the writable end dropped",
+    );
+    trapIf(end.state !== CopyState.IDLE, `cannot remove busy ${what}`);
+    trapIf(
+      end.inWaitableSet(),
+      `cannot lift ${what} while it's in a waitable set`,
+    );
+    // Remember the driving store so a host wrapper can pump the guest later.
+    // Single-store only: a shared object crossing into a SECOND store is
+    // unsupported misuse — fail loudly rather than silently pumping the first
+    // (review advisory, host-streams round). Class field initializes to null;
+    // != null covers both sentinels.
+    const holder = end.shared as { boundStore?: unknown };
+    const store = (inst as unknown as { store?: unknown }).store;
+    if (holder.boundStore != null && store != null) {
+      // module identity: when several runtime copies are loaded, "a second store" is very
+      // often "a second COPY" — the shared object was minted by one runtime and
+      // is being driven by another. The two stores are indistinguishable from
+      // here (stores carry no copy identity), so the census is appended as the
+      // hypothesis it is, rather than asserted (issue #83).
+      const census = copyCensus();
+      assert_(
+        holder.boundStore === store,
+        `${what} crossed into a second store; multi-store is unsupported` +
+          (census === ""
+            ? ""
+            : ` (${census} — a value from one copy cannot be lowered through ` +
+              `another)`),
+      );
+    }
+    holder.boundStore ??= store;
+    // Host-wrapper re-arm hook (#162, contracts/embedder-api.md §"Streams and futures"): the readable
+    // end just left a guest table, so whoever receives it can act on it again.
+    // See `bindOnLower` in exec/host_streams.ts for the retention rule.
+    (end.shared as { onLifted?: ((i: unknown) => void) | null }).onLifted?.(
+      inst,
+    );
+    return end.shared;
+  });
 }
 
 export function liftStream(

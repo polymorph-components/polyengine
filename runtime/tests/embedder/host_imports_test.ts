@@ -14,8 +14,10 @@ import {
   instantiateFixture,
   testdata,
 } from "./support.ts";
-import { ComponentException, Trap } from "@polyengine/protocol";
+import { ComponentException, suspending, Trap } from "@polyengine/protocol";
 import { INTERNAL_HOST_REGISTRIES } from "../../src/embedder/instantiate.ts";
+import { HostResourceRegistry } from "../../src/embedder/resources.ts";
+import { sync } from "../../src/embedder/sync.ts";
 
 const ready = await haveFixture(testdata("imports"));
 
@@ -338,6 +340,288 @@ Deno.test({
 const borrowReady = await haveFixture(
   "runtime/tests/embedder/host-borrow.wasm",
 );
+
+const overlapFixture = "runtime/tests/embedder/resource-overlap.wasm";
+const overlapReady = await haveFixture(overlapFixture);
+
+for (const mode of ["constructor", "promise", "sync"] as const) {
+  Deno.test({
+    name:
+      `host resources: ${mode} successful own result is dropped when cleanup throws`,
+    ignore: !overlapReady,
+    fn: async () => {
+      const boom = new Error("borrow cleanup failed");
+      let drops = 0;
+      class R {
+        [Symbol.dispose]() {
+          drops++;
+          throw boom;
+        }
+      }
+      let registry: HostResourceRegistry;
+      let rep: number;
+      const c = await instantiateFixture(overlapFixture, {
+        "host:api/res": {
+          R,
+          value: () => {
+            registry.dtor(rep);
+            return 7;
+          },
+        },
+      });
+      registry =
+        (c as unknown as Record<symbol, Map<number, HostResourceRegistry>>)[
+          INTERNAL_HOST_REGISTRIES
+        ].get(0)!;
+      const cell = new R();
+      rep = registry.repFor(cell);
+      const e = await caught(() =>
+        mode === "constructor"
+          ? new c.exports.Ticket(cell)
+          : mode === "sync"
+          ? sync(c.exports.makeTicket)(cell)
+          : c.exports.makeTicket(cell)
+      );
+      assertEq(e, boom);
+      assertEq(drops, 1);
+      assertEq(registry.liveCount, 0);
+      assertEq(
+        await c.exports.ticketDrops(),
+        1,
+        "undeliverable result dropped once",
+      );
+    },
+  });
+}
+
+for (const mode of ["constructor", "promise", "sync"] as const) {
+  Deno.test({
+    name: `host resources: ${mode} original failure survives throwing cleanup`,
+    ignore: !overlapReady,
+    fn: async () => {
+      const primary = new Trap("guest call failed");
+      class R {
+        [Symbol.dispose]() {
+          throw new Error("secondary disposal");
+        }
+      }
+      let registry: HostResourceRegistry;
+      let rep: number;
+      const c = await instantiateFixture(overlapFixture, {
+        "host:api/res": {
+          R,
+          value: () => {
+            registry.dtor(rep);
+            throw primary;
+          },
+        },
+      });
+      registry =
+        (c as unknown as Record<symbol, Map<number, HostResourceRegistry>>)[
+          INTERNAL_HOST_REGISTRIES
+        ].get(0)!;
+      const cell = new R();
+      rep = registry.repFor(cell);
+      const e = await caught(() =>
+        mode === "constructor"
+          ? new c.exports.Ticket(cell)
+          : mode === "sync"
+          ? sync(c.exports.makeTicket)(cell)
+          : c.exports.makeTicket(cell)
+      );
+      assertEq(e, primary);
+      assertEq(registry.liveCount, 0);
+    },
+  });
+}
+
+Deno.test("host resources: borrow releases retain overlapping and owned mappings", () => {
+  for (const ownAt of ["never", "before", "during"] as const) {
+    const registry = new HostResourceRegistry("Cell");
+    const cell = new Cell(7);
+    if (ownAt === "before") registry.repFor(cell);
+    const first = registry.borrowFor(cell);
+    const second = registry.borrowFor(cell);
+    assertEq(first.rep, second.rep);
+    if (ownAt === "during") assertEq(registry.repFor(cell), first.rep);
+    first.release();
+    first.release();
+    assertEq(registry.lookup(second.rep) === cell, true);
+    second.release();
+    assertEq(registry.liveCount, ownAt === "never" ? 0 : 1);
+    if (ownAt !== "never") {
+      assertEq(registry.release(first.rep) === cell, true);
+      assertEq(registry.liveCount, 0);
+    }
+  }
+});
+
+Deno.test("host resources: returning an own does not remove an overlapping borrow", () => {
+  const registry = new HostResourceRegistry("Cell");
+  const cell = new Cell(7);
+  const rep = registry.repFor(cell);
+  const borrow = registry.borrowFor(cell);
+  assertEq(registry.release(rep) === cell, true);
+  assertEq(registry.lookup(rep) === cell, true);
+  borrow.release();
+  assertEq(registry.liveCount, 0);
+});
+
+for (const reverse of [false, true]) {
+  for (const throwing of [false, true]) {
+    Deno.test({
+      name:
+        `host resources: deferred drop, reverse=${reverse}, throwing=${throwing}`,
+      ignore: !overlapReady,
+      fn: async () => {
+        const boom = new Error("host destructor failed");
+        class Droppable {
+          drops = 0;
+          [Symbol.dispose]() {
+            this.drops++;
+            if (throwing) throw boom;
+          }
+        }
+        const resolvers: (() => void)[] = [];
+        const bothEntered = Promise.withResolvers<void>();
+        const c = await instantiateFixture(overlapFixture, {
+          "host:api/res": {
+            R: Droppable,
+            value: suspending((r: Droppable) => {
+              assertEq(r.drops, 0, "no lookup reaches a disposed object");
+              if (resolvers.length >= 2) return 7;
+              return new Promise<number>((resolve) => {
+                resolvers.push(() => resolve(7));
+                if (resolvers.length === 2) bothEntered.resolve();
+              });
+            }),
+          },
+        }, { jspi: true });
+        const registry = (c as unknown as Record<
+          symbol,
+          Map<number, HostResourceRegistry>
+        >)[INTERNAL_HOST_REGISTRIES].get(0)!;
+        const cell = new Droppable();
+        const other = new Droppable();
+        const persistent = new Droppable();
+        const held = await c.exports.hold(cell);
+        const persistentHeld = await c.exports.hold(persistent);
+        // The second argument needs cleanup even if the first's final release
+        // runs a throwing destructor. It is temporary in both overlapping calls.
+        const calls = [
+          c.exports.peekTwo(cell, other),
+          c.exports.peekTwo(cell, other),
+        ];
+        const outcomes = calls.map((p) => caught(() => p));
+        await bothEntered.promise;
+        await c.exports.dropHeld(held);
+        assertEq(cell.drops, 0);
+        const reacquire = await caught(() => c.exports.hold(cell));
+        assertEq(String(reacquire).includes("pending drop"), true);
+        const first = reverse ? 1 : 0;
+        resolvers[first]();
+        assertEq(await outcomes[first], undefined);
+        assertEq(cell.drops, 0, "one remaining borrow still protects disposal");
+        assertEq(registry.hasInstance(cell), true);
+        resolvers[1 - first]();
+        assertEq(await outcomes[1 - first], throwing ? boom : undefined);
+        assertEq(cell.drops, 1);
+        assertEq(registry.hasInstance(cell), false);
+        assertEq(
+          registry.hasInstance(other),
+          false,
+          "later releases still run",
+        );
+        assertEq(registry.hasInstance(persistent), true);
+        assertEq(registry.liveCount, 1);
+        // With no borrow, disposal still happens in the guest call itself.
+        const drop = c.exports.dropHeld(persistentHeld);
+        assertEq(persistent.drops, 1);
+        const dropError = await caught(() => drop);
+        assertEq(dropError === undefined, !throwing);
+        assertEq(registry.liveCount, 0);
+      },
+    });
+  }
+}
+
+for (const ownAt of ["never", "before", "during"] as const) {
+  Deno.test({
+    name:
+      `host resources: overlapping JSPI borrows preserve ${ownAt}-owned mapping`,
+    ignore: !overlapReady,
+    fn: async () => {
+      const resolvers: (() => void)[] = [];
+      const bothEntered = Promise.withResolvers<void>();
+      const c = await instantiateFixture(overlapFixture, {
+        "host:api/res": {
+          R: Cell,
+          value: suspending((r: Cell) => {
+            if (resolvers.length >= 2) return r.v;
+            return new Promise<number>((resolve) => {
+              resolvers.push(() => resolve(r.v));
+              if (resolvers.length === 2) bothEntered.resolve();
+            });
+          }),
+        },
+      }, { jspi: true });
+      const registry = (c as unknown as Record<
+        symbol,
+        Map<number, HostResourceRegistry>
+      >)[INTERNAL_HOST_REGISTRIES].get(0)!;
+      Cell.disposed = [];
+      const cell = new Cell(7);
+      let held: number | undefined;
+      if (ownAt === "before") held = await c.exports.hold(cell);
+      const first = c.exports.peek(cell);
+      const second = c.exports.peek(cell);
+      const secondOutcome = caught(() => second);
+      await bothEntered.promise;
+      if (ownAt === "during") held = await c.exports.hold(cell);
+      resolvers[0]();
+      assertEq(await first, 7);
+      const liveDuringSecond = registry.hasInstance(cell);
+      resolvers[1]();
+      const error = await secondOutcome;
+      assertEq(liveDuringSecond, true, "the second borrow keeps its mapping");
+      assertEq(error, undefined);
+      assertEq(await second, 7, "the second guest lookup succeeds");
+      assertEq(registry.liveCount, ownAt === "never" ? 0 : 1);
+      assertEq(Cell.disposed, [], "ending a borrow never disposes");
+      if (held !== undefined) {
+        await c.exports.dropHeld(held);
+        assertEq(registry.liveCount, 0);
+        assertEq(Cell.disposed, [7]);
+      }
+    },
+  });
+}
+
+Deno.test({
+  name:
+    "host resources: constructor borrow mappings last through the call only",
+  ignore: !overlapReady,
+  fn: async () => {
+    const cell = new Cell(7);
+    let seen: Cell | undefined;
+    const c = await instantiateFixture(overlapFixture, {
+      "host:api/res": {
+        R: Cell,
+        value: (r: Cell) => {
+          seen = r;
+          return r.v;
+        },
+      },
+    });
+    const registry = (c as unknown as Record<
+      symbol,
+      Map<number, HostResourceRegistry>
+    >)[INTERNAL_HOST_REGISTRIES].get(0)!;
+    using ticket = new c.exports.Ticket(cell);
+    assertEq(seen === cell, true);
+    assertEq(registry.liveCount, 0);
+  },
+});
 
 Deno.test({
   name:

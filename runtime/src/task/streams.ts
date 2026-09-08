@@ -1037,19 +1037,18 @@ export function dropSharedForTeardown(
 ): void {
   if (shared.dropped) return;
   shared.dropped = true;
-  if (shared.pendingBuffer) {
-    const pi = shared.pendingInst;
-    const parkedInDeadGuest = typeof pi === "object" && pi !== null &&
-      (isInstancePoisoned(pi) || retiredInstances.has(pi));
-    if (parkedInDeadGuest) shared.resetPending();
-    else shared.resetAndNotifyPending(CopyResult.DROPPED);
+  try {
+    if (shared.pendingBuffer) {
+      const pi = shared.pendingInst;
+      const parkedInDeadGuest = typeof pi === "object" && pi !== null &&
+        (isInstancePoisoned(pi) || retiredInstances.has(pi));
+      if (parkedInDeadGuest) shared.resetPending();
+      else shared.resetAndNotifyPending(CopyResult.DROPPED);
+    }
+  } finally {
+    // Release producer/host retention even if the peer's notification throws.
+    shared.notifyDropped();
   }
-  // The drop observers also fire on the teardown path: a stream producer
-  // parked behind a trap-poisoned reader must be cancelled the same as behind
-  // a cleanly-dropped one, and a host wrapper's activity arm must be
-  // released the same way (#162, §"Streams and futures"). Both classes carry the
-  // observer machinery, so this is unconditional.
-  shared.notifyDropped();
 }
 
 /**
@@ -1097,12 +1096,20 @@ export function retireInstanceAsyncEnds(
 ): void {
   if (retiredInstances.has(inst)) return;
   retiredInstances.add(inst);
-  const where = inst.index !== undefined
-    ? `component instance ${inst.index}`
-    : "a component instance";
   // Snapshot: the notifications below can run peer code that mutates tables.
   const ends: CopyEnd[] = [];
   for (const e of inst.handles) if (e instanceof CopyEnd) ends.push(e);
+  retireAsyncEnds(inst, ends, cause);
+}
+
+function retireAsyncEnds(
+  inst: PoisonedInstanceLike,
+  ends: CopyEnd[],
+  cause: unknown,
+): void {
+  const where = inst.index !== undefined
+    ? `component instance ${inst.index}`
+    : "a component instance";
 
   // Pass 1: record the failure, and mark abandoned every future this table
   // owes a value on. Done before ANY notification, so the reader-side trap
@@ -1147,7 +1154,14 @@ export function retireInstanceAsyncEnds(
 // `Store.tick`'s poisoning site reaches the walk through this seam (its
 // module cannot import ours — see `setOnInstancePoisoned`); the sync-lift
 // site (exec/boundary.ts `poison`) imports it directly.
-setOnInstancePoisoned(retireInstanceAsyncEnds);
+setOnInstancePoisoned(retireInstanceAsyncEnds, (inst, entry, cause) => {
+  if (!(entry instanceof CopyEnd)) return;
+  const shared = entry.shared as SharedStreamImpl | SharedFutureImpl;
+  // The removed end is unreachable even before boundary poisoning. Retract
+  // its buffer silently without marking the whole instance dead or retired.
+  if (shared.pendingInst === inst) shared.resetPending();
+  retireAsyncEnds(inst, [entry], cause);
+});
 
 // ---------------------------------------------------------------------------
 // error-context (definitions.py `class ErrorContext`, line 2775)

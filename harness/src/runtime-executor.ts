@@ -13,7 +13,7 @@
 // understood but the capability plainly doesn't exist yet — precise
 // hand-off to whichever track builds it.
 
-import { loadPlan, PlanError } from "@polyengine/runtime/plan";
+import { loadPlan, PlanError, TranslateError } from "@polyengine/runtime/plan";
 import type { LoadedPlan } from "@polyengine/runtime/plan";
 import type { WireExport } from "@polyengine/runtime/plan";
 import { Translator } from "@polyengine/runtime/shim";
@@ -21,11 +21,15 @@ import {
   type ComponentHandle,
   instantiateComponent,
 } from "../../runtime/src/exec/mod.ts";
-import { AssertionError, NotImplemented, Trap } from "../../runtime/src/cabi/mod.ts";
+import {
+  AssertionError,
+  NotImplemented,
+  Trap,
+} from "../../runtime/src/cabi/mod.ts";
 import {
   type Artifact,
-  CoreOnlyExecutor,
   type CommandExecutor,
+  CoreOnlyExecutor,
   type InstanceRef,
   type InstantiateExpectation,
   type InvokeOutcome,
@@ -132,8 +136,9 @@ export class RuntimeExecutor implements CommandExecutor {
       this.#translator.translate(artifact.bytes);
       return Promise.resolve({ valid: true });
     } catch (e) {
+      if (!(e instanceof TranslateError) || !e.isValidationVerdict) throw e;
       return Promise.resolve(
-        { valid: false, error: e instanceof Error ? e.message : String(e) },
+        { valid: false, error: e.message },
       );
     }
   }
@@ -142,7 +147,9 @@ export class RuntimeExecutor implements CommandExecutor {
     artifact: Artifact,
     expect: InstantiateExpectation,
   ): Promise<InstanceRef> {
-    if (artifact.kind === "module") return this.#core.instantiate(artifact, expect);
+    if (artifact.kind === "module") {
+      return this.#core.instantiate(artifact, expect);
+    }
     return await this.#instantiateComponent(artifact.bytes, expect);
   }
 

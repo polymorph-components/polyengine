@@ -12,6 +12,7 @@
 import { assertEq } from "../support/asserts.ts";
 import {
   artifactsOf,
+  caught,
   guest,
   haveFixture,
   instantiateFixture,
@@ -353,8 +354,7 @@ Deno.test({
     // The read genuinely happened while the host owned the end; only reads
     // STARTED after the transfer are refused. Modelled on a LIFTED future
     // (the host holds the readable end) with a guest-shaped write completing
-    // the rendezvous — a host-created future cannot read and write through
-    // one wrapper (one in-flight operation per wrapper).
+    // the rendezvous.
     const codec = {
       element: { kind: "u32" } as ValType,
       toHost: (v: ComponentValue) => v as number,
@@ -390,3 +390,71 @@ Deno.test({
     assertEq(await pending, 7, "the pre-transfer read resolves");
   },
 });
+
+const streamHostFixture = "runtime/tests/embedder/stream-host.wasm";
+const streamHostReady = await haveFixture(streamHostFixture);
+
+for (const delayed of [false, true]) {
+  Deno.test({
+    name: `future pass-through: ${
+      delayed ? "reader" : "producer"
+    } arrives first`,
+    ignore: !streamHostReady,
+    async fn() {
+      const c = await instantiateFixture(streamHostFixture, {
+        "host:streams/api": { ticket: class {} },
+      });
+      let resolve!: (n: number) => void;
+      const source = delayed
+        ? new Promise<number>((r) => resolve = r)
+        : Promise.resolve(7);
+      const f = c.exports.passFuture(source) as Future<number>;
+      const result = Promise.resolve(f);
+      if (delayed) {
+        await new Promise((r) => setTimeout(r, 0));
+        resolve(7);
+      }
+      assertEq(await result, 7);
+      f.drop();
+    },
+  });
+}
+
+Deno.test("future ends: same-direction exclusion, cancellation and retry", async () => {
+  const h = hostFuture<number>({ kind: "u32" });
+  const write = h.write(1);
+  assertEq(await caught(() => h.write(2)) instanceof TypeError, true);
+  h.cancel();
+  await write;
+  const read = h.readResult();
+  assertEq(await caught(() => h.readResult()) instanceof TypeError, true);
+  h.cancel();
+  assertEq((await read).value, undefined);
+  const retried = h.read();
+  await h.write(3);
+  assertEq(await retried, 3);
+  h.drop();
+});
+
+for (const side of ["read", "write"] as const) {
+  Deno.test(`future ${side}: a throwing shared operation clears only its end`, async () => {
+    const h = hostFuture<number>({ kind: "u32" });
+    const shared = h.value as SharedFutureImpl;
+    const original = shared[side];
+    const error = new Error("shared operation failed");
+    shared[side] = (...args: Parameters<typeof original>) => {
+      original.apply(shared, args);
+      throw error;
+    };
+    assertEq(
+      await caught(() => side === "read" ? h.read() : h.write(1)),
+      error,
+    );
+    assertEq(shared.pendingBuffer, null, "the failed operation was withdrawn");
+    shared[side] = original as typeof shared[typeof side];
+    const read = h.read();
+    await h.write(2);
+    assertEq(await read, 2);
+    h.drop();
+  });
+}

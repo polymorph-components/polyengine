@@ -147,7 +147,7 @@ Deno.test("module identity: a foreign resource wrapper is named cross-copy, not 
     owns: true,
   };
   assertEq(wrapperState(w), undefined, "a foreign wrapper has no state HERE");
-  const e = caught(() => takeRep(w, false, "export 'f'"));
+  const e = caught(() => takeRep(w, {} as never, false, "export 'f'"));
   const m = String((e as Error).message);
   assertEq((e as Error).name, "InvalidHandleError");
   assertTrue(m.includes("DIFFERENT polyengine runtime copy"), m);
@@ -168,11 +168,11 @@ Deno.test("module identity: this copy's own wrappers are unaffected", () => {
   });
   assertEq(wrapperState(w)?.rep, 3);
   assertEq(wrapperState(w)?.copyUrl, COPY_URL);
-  assertEq(takeRep(w, false, "export 'f'"), 3);
+  assertEq(takeRep(w, wrapperState(w)!.rt, false, "export 'f'"), 3);
 });
 
 Deno.test("module identity: a non-handle object still gets the plain diagnosis", () => {
-  const e = caught(() => takeRep({}, false, "export 'f'"));
+  const e = caught(() => takeRep({}, {} as never, false, "export 'f'"));
   assertTrue(String((e as Error).message).includes("not a resource handle"));
 });
 

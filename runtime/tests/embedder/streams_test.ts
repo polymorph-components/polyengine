@@ -18,6 +18,54 @@ const ready = await haveFixture(guest("async-probe")) &&
   await haveFixture(guest("stream-echo")) &&
   await haveFixture(guest("future-user"));
 
+for (const readerFirst of [false, true]) {
+  Deno.test({
+    name: `writeAll cancellation: ${
+      readerFirst ? "arriving" : "parked"
+    } writer retracts the whole tail`,
+    ignore: !(await haveFixture(guest("stream-pass"))),
+    async fn() {
+      const c = await instantiateFixture(guest("stream-pass"), {
+        sink: () => 0n,
+      });
+      const { stream, writer } = Stream.create<number>();
+      const out = await c.exports.passThrough(stream) as Stream<number>;
+      const read = readerFirst ? out.read(2) : null;
+      const pending = writer.writeAll(new Uint8Array([1, 2, 3, 4]));
+      assertEq([...(await (read ?? out.read(2)))], [1, 2]);
+      writer.cancelWrite();
+      assertEq(await pending, 2);
+      const retry = writer.writeAll(new Uint8Array([5, 6]));
+      assertEq(
+        [...(await out.read(4))],
+        [5, 6],
+        "cancelled tail is never reoffered",
+      );
+      assertEq(await retry, 2);
+      await writer.close();
+      out.drop();
+    },
+  });
+}
+
+Deno.test("writeAll: cancellation in a reoffer gap preserves per-end exclusion", async () => {
+  const h = hostStream<number>({ kind: "u8" });
+  const read = h.readable.read(1);
+  const pending = h.writable.writeAll([1, 2]);
+  // The first copy completed synchronously; the helper has not resumed yet.
+  let busy: unknown;
+  try {
+    h.writable.write([3]);
+  } catch (e) {
+    busy = e;
+  }
+  assertEq(busy instanceof TypeError, true);
+  h.writable.cancelWrite();
+  assertEq(await pending, 1);
+  assertEq([...(await read)], [1]);
+  h.writable.drop();
+});
+
 Deno.test({
   name: "async: an async export is Promise-shaped and suspends transparently",
   ignore: !ready,

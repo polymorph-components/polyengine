@@ -347,6 +347,14 @@ instance↔rep mapping; when the guest drops its last own handle the
 runtime calls `instance[Symbol.dispose]?.()`. Method `self` is the
 instance.
 
+Overlapping host-originated borrows retain the mapping until the last
+borrowing call ends. A guest drop during that interval defers disposal
+until the final borrow ends; the pending-drop instance cannot be passed
+as own again. A deferred disposal error is reported by the last borrowing
+call, after all its borrow mappings are released. An existing call failure
+remains primary; results that cannot be delivered because cleanup failed
+are released rather than abandoned.
+
 **Constructors are synchronous** (a JS constructor cannot await). A guest
 constructor that does not complete synchronously raises a named error
 rather than half-constructing; its plain entry is one instance of

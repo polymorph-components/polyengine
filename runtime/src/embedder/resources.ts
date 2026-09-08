@@ -299,14 +299,27 @@ export function invalidateWrapper(w: object): void {
 }
 
 /** Read a wrapper's rep for a lowering site, applying the ownership rule. */
-export function takeRep(w: unknown, own: boolean, what: string): number {
+export function takeRep(
+  w: unknown,
+  rt: ResourceTypeInfo,
+  own: boolean,
+  what: string,
+): number {
   if (typeof w !== "object" || w === null) {
     throw new InvalidHandleError(
       `${what}: expected a resource class instance, got ${typeof w}`,
     );
   }
   const s = requireLive(w, what);
+  if (s.rt !== rt) {
+    throw new InvalidHandleError(`${what}: resource type mismatch`);
+  }
   if (own) {
+    if (!s.owns) {
+      throw new InvalidHandleError(
+        `${what}: a borrowed ${s.className} handle cannot be transferred as own`,
+      );
+    }
     // definitions.py `lift_own` (line 1508): `trap_if(h.num_lends != 0)`. A
     // handle currently lent to an in-flight call cannot be transferred away.
     if (s.lends > 0) {
@@ -377,7 +390,11 @@ export function buildGuestResourceClass(
   spec: GuestResourceSpec,
   rt: ResourceTypeInfo,
   wrapExport: ExportWrapper,
-  lowerArgs: (args: unknown[], params: ValType[], where: string) => unknown[],
+  lowerArgs: (
+    args: unknown[],
+    params: ValType[],
+    where: string,
+  ) => { lowered: unknown[]; release: () => void },
   // deno-lint-ignore no-explicit-any
 ): any {
   const className = pascalCase(spec.name);
@@ -390,8 +407,30 @@ export function buildGuestResourceClass(
         );
       }
       const where = `${className} constructor`;
-      const lowered = lowerArgs(args, spec.ctorParams ?? [], where);
-      const rep = spec.ctor(...lowered);
+      const { lowered, release } = lowerArgs(
+        args,
+        spec.ctorParams ?? [],
+        where,
+      );
+      let rep: unknown;
+      try {
+        rep = spec.ctor(...lowered);
+      } catch (e) {
+        try {
+          release();
+        } finally {
+          throw e;
+        }
+      }
+      try {
+        release();
+      } catch (e) {
+        try {
+          if (typeof rep === "number") hostDtorCall(rt, rep);
+        } finally {
+          throw e;
+        }
+      }
       if (rep !== null && typeof rep === "object" && "then" in rep) {
         throw new TypeError(
           `${where}: the guest constructor did not complete synchronously. ` +
@@ -501,14 +540,16 @@ export function makeWrapper(
  * a registry.
  */
 export class HostResourceRegistry {
-  readonly #byRep = new Map<number, object>();
+  readonly #byRep = new Map<
+    number,
+    { instance: object; owns: boolean; borrows: number; pendingDrop: boolean }
+  >();
   readonly #byInstance = new WeakMap<object, number>();
   #next = 1;
 
   constructor(readonly className: string) {}
 
-  /** The host is passing an instance to the guest: allocate (or reuse) a rep. */
-  repFor(instance: unknown): number {
+  #repFor(instance: unknown): number {
     if (instance === null || typeof instance !== "object") {
       throw new TypeError(
         `${this.className}: expected a class instance, got ${typeof instance}`,
@@ -517,9 +558,51 @@ export class HostResourceRegistry {
     const held = this.#byInstance.get(instance);
     if (held !== undefined && this.#byRep.has(held)) return held;
     const rep = this.#next++;
-    this.#byRep.set(rep, instance);
+    this.#byRep.set(rep, {
+      instance,
+      owns: false,
+      borrows: 0,
+      pendingDrop: false,
+    });
     this.#byInstance.set(instance, rep);
     return rep;
+  }
+
+  /** The host is passing an own to the guest: retain until release or drop. */
+  repFor(instance: unknown): number {
+    const rep = this.#repFor(instance);
+    const entry = this.#byRep.get(rep)!;
+    if (entry.pendingDrop) {
+      throw new InvalidHandleError(
+        `${this.className}: cannot transfer an instance pending drop as own`,
+      );
+    }
+    entry.owns = true;
+    return rep;
+  }
+
+  /** Retain a mapping for every overlapping call, independently of ownership. */
+  borrowFor(instance: unknown): { rep: number; release: () => void } {
+    const rep = this.#repFor(instance);
+    const entry = this.#byRep.get(rep)!;
+    entry.borrows += 1;
+    let released = false;
+    return {
+      rep,
+      release: () => {
+        if (released) return;
+        released = true;
+        entry.borrows -= 1;
+        if (entry.borrows === 0 && !entry.owns) {
+          this.#byRep.delete(rep);
+          if (entry.pendingDrop) {
+            entry.pendingDrop = false;
+            (entry.instance as { [Symbol.dispose]?: () => void })
+              [Symbol.dispose]?.();
+          }
+        }
+      },
+    };
   }
 
   /** Is this instance already registered with a live rep? */
@@ -534,11 +617,6 @@ export class HostResourceRegistry {
     return this.#byRep.has(rep);
   }
 
-  /** Release a rep if it is still live; no dtor, no error when already gone. */
-  releaseIfPresent(rep: number): void {
-    this.#byRep.delete(rep);
-  }
-
   /** A `borrow<R>` arrived from the guest: the host's own instance, mapping kept. */
   lookup(rep: number): object {
     const inst = this.#byRep.get(rep);
@@ -547,7 +625,7 @@ export class HostResourceRegistry {
         `${this.className}: no live instance for rep ${rep}`,
       );
     }
-    return inst;
+    return inst.instance;
   }
 
   /**
@@ -556,7 +634,9 @@ export class HostResourceRegistry {
    */
   release(rep: number): object {
     const inst = this.lookup(rep);
-    this.#byRep.delete(rep);
+    const entry = this.#byRep.get(rep)!;
+    entry.owns = false;
+    if (entry.borrows === 0) this.#byRep.delete(rep);
     return inst;
   }
 
@@ -565,9 +645,14 @@ export class HostResourceRegistry {
    * `HostResourceType` dtor the executor calls from `canon_resource_drop`.
    */
   dtor(rep: number): void {
-    const inst = this.#byRep.get(rep);
-    if (inst === undefined) return;
-    this.#byRep.delete(rep);
+    const entry = this.#byRep.get(rep);
+    if (entry === undefined || !entry.owns) return;
+    if (entry.borrows > 0) {
+      entry.owns = false;
+      entry.pendingDrop = true;
+      return;
+    }
+    const inst = this.release(rep);
     (inst as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
   }
 

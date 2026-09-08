@@ -1621,6 +1621,9 @@ export function createLiftedFunction(input: {
    * Promise, which it can never advance, and declares a bogus deadlock.
    */
   allowAsyncCompletion?: boolean;
+  /** Nested guest destructor only: preserve the caller and use the reference
+   * sync lift drive, not the host's store-wide completion policy. */
+  guestDtorCaller?: ComponentInstanceState | null;
   /**
    * Refuse — synchronously, before entering — a call made while the instance
    * has HOP-parked activations, instead of deferring it (§"Functions and async",
@@ -1662,6 +1665,7 @@ export function createLiftedFunction(input: {
   const inst = opts.instance;
   const store = inst.store;
   const mode: SuspensionMode = input.suspensionMode ?? "plain";
+  const guestDtor = input.guestDtorCaller !== undefined;
   // Entry wrapping, half of jspi/bridge.ts's invariant: a lifted export's core
   // function is one of the three activations that can reach a blocking
   // built-in, so it is `promising`-wrapped exactly when the imports are
@@ -1701,7 +1705,7 @@ export function createLiftedFunction(input: {
     stats.liftedCalls++;
     // A trap remembered during an earlier call must never be attributed to
     // this one (see intrinsics `HostTrapState`).
-    if (trapState !== undefined) trapState.pending = undefined;
+    if (!guestDtor && trapState !== undefined) trapState.pending = undefined;
     // Depth of the sync-call scope stack on entry; see the `finally` below.
     const syncCallDepth = syncCallStack?.length ?? 0;
 
@@ -1713,7 +1717,7 @@ export function createLiftedFunction(input: {
     {
       const refusal = entryRefusal(
         inst,
-        null,
+        input.guestDtorCaller ?? null,
         `cannot enter component instance ${inst.index}`,
       );
       if (refusal !== null) trap(refusal);
@@ -1815,7 +1819,7 @@ export function createLiftedFunction(input: {
       // `poison` below) and must stay exactly as the trap left it. Restoring
       // its `may_leave` would be tidying the state of an instance that is no
       // longer allowed to run at all.
-      for (const i of allInstances?.() ?? []) {
+      for (const i of guestDtor ? [] : allInstances?.() ?? []) {
         if (i as unknown as ComponentInstanceState !== inst) {
           i.mayLeave = true;
         }
@@ -1911,6 +1915,9 @@ export function createLiftedFunction(input: {
       if (!ft.async && mode !== "jspi" && !input.allowAsyncCompletion) {
         driveSyncLift(task);
       }
+      // The dropping activation is still on the stack. In particular, its
+      // own JSPI hop must not turn this completed sync call into a Promise.
+      if (guestDtor) return finishHostEntry();
     } catch (e) {
       unwind();
       if (!isCapabilitySignal(e)) poison(e);
@@ -2282,8 +2289,11 @@ export function createDtorEntry(input: {
   trapState?: { pending: unknown };
   syncCallStack?: LenderScope[];
   allInstances?: () => Iterable<{ mayLeave: boolean }>;
+  /** Present only for guest drops; null is a guest call without a real caller. */
+  guestCaller?: ComponentInstanceState | null;
 }): (rep: number) => unknown {
-  const mode = input.suspensionMode ?? "plain";
+  const guest = input.guestCaller !== undefined;
+  const mode = guest ? "plain" : input.suspensionMode ?? "plain";
   const raw: CoreFn = input.dtor ?? (() => undefined);
   // A dtor's core type is `(i32) -> ()`, but the *host*-supplied dtors this
   // helper also serves (embedder test doubles, `ResourceTypeInfo` built
@@ -2295,6 +2305,10 @@ export function createDtorEntry(input: {
   // real wasm dtor returns nothing by construction).
   const core: CoreFn = mode === "jspi" ? raw : ((rep: number) => {
     const r = raw(rep);
+    trapIf(
+      guest && isPromiseLike(r),
+      "resource destructor did not complete synchronously",
+    );
     return isPromiseLike(r) ? r : undefined;
   });
   const lifted = createLiftedFunction({
@@ -2309,7 +2323,8 @@ export function createDtorEntry(input: {
     allInstances: input.allInstances,
     // The host does not wait for a destructor: `drop(): void` is
     // non-blocking, and an unfinished dtor's tail is driven by the store.
-    allowAsyncCompletion: true,
+    allowAsyncCompletion: !guest,
+    guestDtorCaller: input.guestCaller,
   });
   return (rep: number) => lifted(rep);
 }
