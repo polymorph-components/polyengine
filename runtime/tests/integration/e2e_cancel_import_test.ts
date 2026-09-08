@@ -1,18 +1,8 @@
-// Issue #239 end-to-end regression: `driveAsync` (runtime/src/exec/boundary.ts)
-// used to hold a store-wide scheduling gate (`Store.pendingResumptions`)
-// across an await bounded only by the HOST's answer, whenever two drivers
-// were live on the same store and one was parked in its awaiting-race. The
-// second driver spun at the top of its own loop and died in ~311ms with:
-//
-//   driveAsync: a resumed-activation claim was never released (the
-//   activation neither parked, finished, nor trapped)
-//
-// `runtime/tests/same_store_driver_test.ts` pins the store-level unit shape
-// of the fix. This file is the end-to-end proof against a real wit-bindgen
-// guest (`examples/guests/cancel-import`), covering every shape the guest
-// models: two concurrent export calls, a detached task parked mid-frame with
-// no export call outstanding, and a detached task cancelling an in-flight
-// async import (`subtask.cancel` via wit-bindgen's drop-to-cancel path).
+// Issue #239: a pending host answer must not hold the store-wide scheduling
+// gate against another driver. Complements same_store_driver_test.ts with a
+// wit-bindgen guest (examples/guests/cancel-import): concurrent exports,
+// detached tasks parked mid-frame, and cancellation of an in-flight import
+// via wit-bindgen's drop-to-cancel path.
 //
 // Requires build artifacts (both produced from source in this repo):
 //   - target/wasm32-unknown-unknown/release/translator_shim.wasm
@@ -51,10 +41,8 @@ function delay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Scoped per instantiation (per test), per the dispatch: abortable()'s `abortable()`
-// import must observe the abort exactly once per discard and never on a
-// natural-completion path, and giving each instance its own counter keeps
-// concurrently-run tests from bleeding into one another.
+// Per-instance counters isolate concurrent tests. The abortable import must
+// observe one abort per discard and none on natural completion.
 async function instantiate() {
   let abortsObserved = 0;
   const imports = {
@@ -62,13 +50,12 @@ async function instantiate() {
     // JSPI involved.
     sleep: (ms: bigint) => delay(Number(ms)),
     // Sync-typed import wrapped in `suspending()` (contracts/embedder-api.md
-    // §"Functions and async" §"Functions and async"): calling it parks the guest's
+    // §"Functions and async"): calling it parks the guest's
     // wasm frame mid-activation until the Promise settles — the #239 suspending mark
     // park shape.
     block: suspending((ms: bigint) => delay(Number(ms))),
-    // cancellation discard opt-out (contracts/embedder-api.md §"Functions and async"): branding an
-    // async-typed import `deferCancel` keeps the pre-cancellation discard run-to-completion
-    // behavior on cancel, per-declaration.
+    // `deferCancel` opts this declaration out of prompt cancellation discard;
+    // the host call must run to completion.
     "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
     // Interface-scoped sibling, exercising the raw executor's brand read at
     // an interface-member leaf (`buildLoweredImport` path walk).

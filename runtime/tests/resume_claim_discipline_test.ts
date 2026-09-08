@@ -1,25 +1,11 @@
 // Resume-time claim/pending-resumption discipline (issue #158).
 //
-// `SuspensionPoint.#resumeInner` (jspi/bridge.ts) has two arms — `produce`
-// returned a value, or `produce` threw a resume-time trap — and BOTH hand
-// control back to a wasm activation, so both record a pending resumption on
-// the store (`Store.addPendingResumption`). Both also call
-// `Store.consumePendingIfRunning()` first: when the code delivering the resume
-// is a RUNNING guest activation that itself has a pending entry (a
-// `subtask.cancel` settling a parked callee from inside its own frame), that
-// entry's window is closed. Mechanism A of #158 was the trap arm missing that
-// call; back then the gate was a single global slot with a one-claimant
-// assert, so the same delivery shape with a trapping `produce` tripped the
-// assert — and the assert preempted `#fail(e)`, so the parked guest received
-// an AssertionError instead of its trap. These tests pin the fixed symmetry.
-//
-// Mechanism B of #158 (a second engine-driven resumption in one turn, from an
-// activation that is NOT the entry holder) is RESOLVED, 2026-08-22: the gate
-// became the per-Store, multi-entry `Store.pendingResumptions` set and the
-// one-claimant assert is gone with the slot (the invariant it protected —
-// tier-3 ambient attribution unambiguity — no longer exists; see
-// `resolveAmbient`). The mechanism-B test below therefore pins the SUCCESS of
-// that shape, cross-store and same-store, where it used to pin the assert.
+// Both value and trap delivery in `SuspensionPoint.#resumeInner` hand control
+// back to wasm. Both must consume the running caller's pending entry before
+// recording the resumed activation with `Store.addPendingResumption`
+// (#158 mechanism A). This includes cancellation delivered inside a guest frame.
+// Multiple resumptions may be pending in one turn; the per-Store set must
+// preserve other activations' entries, within and across stores (mechanism B).
 //
 // Scaffolding follows park_state_settle_test.ts. NOTE: the AMBIENT state
 // (activationClaims, threadStack) is still MODULE-GLOBAL, so every test cleans
@@ -281,12 +267,8 @@ Deno.test("resume from an EMPTY bracket self-consumes via the claims-top fallbac
 });
 
 Deno.test("resume from a DIFFERENT running activation while a resumption is pending — cross-store (#158 mechanism B)", () => {
-  // FLIPPED 2026-08-22. This is issue #158's mechanism B. It used to assert:
-  // the resumed-ambient gate was a single global slot, so a resumption
-  // delivered by an activation that is NOT the entry holder could not be
-  // reconciled by `consumeClaimIfRunning` and tripped the one-claimant assert.
-  // The gate is now the per-Store, multi-entry `Store.pendingResumptions`;
-  // both resumptions are legitimately pending and nothing asserts.
+  // #158 mechanism B: delivery from a different running activation must
+  // preserve both pending resumptions in their respective stores.
   const x = mkWorld(); // the activation actually running (a dispatched tail's
   // guest chunk, under its own wasm-entry bracket)
   const y = mkWorld(); // the settled-but-not-yet-run activation

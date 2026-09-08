@@ -1,9 +1,6 @@
 // `parseLeafName` unit tests: the mangled export/import name grammar
-// (contracts/embedder-api.md §"Naming and casing") plus the unknown-bracket
-// refusal mandated by the getters/setters pre-ruling (§"Getters and setters
-// (pre-ruling, 2026-08-30 — not yet implementable)", final paragraph):
-// "the runtime refuses unknown bracket forms in mangled names loudly at
-// instantiation (rather than misbinding them as plain names…)".
+// (contracts/embedder-api.md §"Naming and casing"). Unknown bracket forms
+// must be refused rather than bound as plain names.
 //
 // The known forms are already pinned end-to-end against real fixtures in
 // `version_test.ts`; this file is the focused unit suite for the parser

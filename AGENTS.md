@@ -1,198 +1,129 @@
-# polyengine — development protocol
-
-Instructions for agents (and context for humans) working in this repo. The
-repo was built by a multi-agent workflow and its discipline is part of the
-project: unusually dense objective gates are what make delegated
-implementation safe.
+# polyengine development protocol
 
 ## Authorities
 
-- Semantic tie-breaker for runtime behavior: the Component Model spec +
-  `design/mvp/canonical-abi/definitions.py` (in the
-  `third_party/component-model` submodule), with wasmtime as corroborating
-  evidence — never the other way around. See
-  [docs/architecture.md](docs/architecture.md) §1 for the parity policy.
-- Interface contracts between workstreams live in `contracts/` (plan format,
-  descriptor IR, intrinsics, digest, embedder API). **Contract changes are
-  versioned events made only by the orchestrator**; implementation tracks
-  report contract friction, they never edit around it.
-- Design and decisions: [docs/architecture.md](docs/architecture.md).
-  Consumer track: [docs/consumers.md](docs/consumers.md). Upstream links:
-  [docs/references.md](docs/references.md).
+- Runtime semantics: the pinned Component Model spec and
+  `third_party/component-model/design/mvp/canonical-abi/definitions.py`.
+  Wasmtime is corroborating evidence, not the tie-breaker. The single named
+  corpus exception is defined in
+  [architecture §1](docs/architecture.md#1-goals).
+- Interfaces: `contracts/`. Semantic contract changes are versioned events owned
+  by the orchestrator; implementation tracks report conflicts rather than
+  changing the contract to fit their code.
+- Design: [architecture](docs/architecture.md). Consumer requirements:
+  [consumers](docs/consumers.md). Upstream sources:
+  [references](docs/references.md).
 
-## Gates (exact commands)
+## Gates
 
-The justfile is the command surface: recipe bodies are the exact commands,
-and each CI job runs exactly one `gha::` recipe (`just ci` = exactly CI;
-`.github/justfile` holds the job bodies). Run the recipes your change can
-affect; the full pass before commit is:
+The justfile is the command surface. `just ci` runs the CI recipes in
+`.github/justfile`; each CI job invokes one `gha::` recipe. `just gates` also
+includes local consumer smokes and is the full pre-commit gate:
 
 ```sh
-just gates    # everything below, in this order; see the justfile (or
-              # `just --list`) for the recipe list and per-gate one-liners
+just gates
 ```
 
-Conformance discipline: the harness fails loudly on unexpected failures *and*
-on stale xfails; per-browser deltas live in `harness/browser/expectations/`
-with stale-delta detection. Never absorb a regression into an xfail/overlay
-without a named class and a tracking issue.
+Use `just --list` for focused gates. Runtime formatting is checked by
+`just fmt-check`. Run gates with non-interactive stdin, as in CI; a terminal
+session may need `just gates < /dev/null` for WASI terminal-detection tests.
+
+Conformance gates reject unexpected failures and stale expected failures.
+Browser deltas live in `harness/browser/expectations/`. Never absorb a
+regression into an xfail or overlay without a named class and tracking issue.
+Passing with exclusions is not full spec conformance.
 
 ## Multi-agent protocol
 
-Work is parallelized across model-pinned subagents defined in the operator's
-**global** opencode config — deliberately not vendored into this repo, so all
-repo-specific context (contracts, spec authorities, gates) travels in each
-dispatch prompt.
+Agent definitions and model choices live in the operator's global config, not
+this repository. Honor session-specific model instructions.
 
-| Agent | Model | Role |
-|---|---|---|
-| orchestrator (primary session) | fable | planning, contracts, dispatch, integration, review, **all commits** |
-| `coder` | sonnet | implementation tracks against pinned contracts |
-| `coder-hard` | opus | subtle tracks: shim internals, CABI edge cases, scheduler periphery |
-| `reviewer` | fable | parallel code review when the orchestrator is the bottleneck |
-| `explore` | haiku | fast read-only codebase search |
+- Dispatches name owned paths, governing contracts/spec sections, and exact gate
+  commands. Concurrent implementation territories must be disjoint.
+- The scheduler core has one implementation owner. Parallelize peripheral work
+  rather than independently changing shared scheduling rules.
+- Subagents do not commit. The primary agent integrates, reviews, and commits.
+- Review every track against its named authorities. CABI/async reviews include
+  architecture §5-§7 and the pinned spec/reference. Flag missing authorities
+  rather than supplying rules from memory.
+- Resume revision rounds in the same agent session. After fan-out, reconcile
+  every launched track with its result; an absent response is not absent work.
+- Interrupted sessions retain context and filesystem effects. Resume first;
+  after two failed resumes, hand off to a new agent with the partial artifacts.
+  Repeated failure requires escalation, not repeated blind relaunches. The
+  operator's subagent-recovery instructions describe the tooling.
 
-Dispatch rules:
+## Repository and consumers
 
-- Every track prompt names: **territory** (paths owned), **governing
-  contracts** (`contracts/*.md` + design-doc sections), and **gates** (exact
-  commands). Territories are disjoint across concurrent tracks.
-- Subagents never commit (permission-enforced); the orchestrator commits
-  after review.
-- The task-scheduler **core** is single-owner (coherence risk):
-  `coder-hard` at most, under close orchestrator review; parallelism stays at
-  the periphery.
+- `main` is protected. Deliver through a PR and auto-merge after required `core`
+  checks. The `browser` job runs post-merge and gates prerelease artifacts; it
+  must not become a required PR check.
+- Do not run one-off `npm:` imports from the workspace root: Deno may write them
+  into `deno.lock`. Use an existing dependency or scratch work under `/tmp`;
+  inspect lockfile changes before staging.
+- Consumer checkouts under `~/p/polymorph/` are read-only. Check their git
+  status before and after verification. Put new build artifacts in `/tmp` or a
+  redirected `CARGO_TARGET_DIR`, never in consumer trees.
+- Findings against foreign repositories belong in
+  `upstream-component-model-repo-findings.md` or
+  `upstream-consumer-findings.md`. Public filing requires the operator's
+  authorization.
 
-Review protocol: every track is reviewed against its contracts before commit
-— by the orchestrator inline, or by `reviewer` subagents in parallel. A
-review dispatch **must** name the diff scope, the governing `contracts/*.md`,
-and — for anything touching CABI/async semantics —
-[docs/architecture.md](docs/architecture.md) §5–§7 plus the spec sources
-(`definitions.py` as tie-breaker): the reviewer judges only against named
-authorities and flags unnamed ones rather than filling gaps from memory.
-Revision rounds go back to the *same* coder session via `task_id` (context
-intact), not a fresh agent.
+## Versioning and publishing
 
-Failure recovery (content-filter false positives, driver interrupts): an
-aborted `task` call kills neither the child session (context persists in the
-opencode db) nor its effects (files/commands persist on disk). Ladder:
+`@polyengine/{runtime,translator,wasi,ct-runner}` version in lockstep. Their
+manifests carry the **next** release. Compatible changes leave versions alone;
+breaking changes move the lockstep minor. `@polyengine/protocol` versions
+independently, and changing its manifest publishes that version at the next cut.
+Runtime's `RUNTIME_VERSION` in `runtime/src/embedder/copy.ts` must match its
+manifest.
 
-1. Locate the orphan (`opencode-agent-sessions <parent-session-id>`, on
-   PATH); resume via `task_id` — "summarize status, then continue".
-2. Two failed resumes → assume poisoned context: fresh agent, handoff prompt
-   = original track + "partial work exists, audit state first" + artifact
-   pointers. Gates arbitrate what's already done.
-3. Repeated failures across fresh contexts → escalate to the human; the
-   trigger may live in the artifacts themselves.
+Declare breaking surfaces with `breaking/runtime`, `breaking/translator`,
+`breaking/wasi`, `breaking/ct-runner`, or `breaking/protocol` PR labels. Labels
+are read live: correcting a merged PR's label before a release is supported.
+Missing labels are not detectable by the mechanical guard; review the release
+window's diffs.
 
-Standing rules:
+`tools/version-guard/check.ts` has four modes (`just test-version-guard`):
 
-- After any fan-out, reconcile launched-vs-completed before proceeding — a
-  missing result is not missing work.
-- Never run one-off `npm:` specifiers (e.g. `deno run npm:yaml`) from the
-  workspace root: Deno records them into the root `deno.lock`, silently
-  dirtying the tree. Use python3 or
-  run from `/tmp`; check `git diff deno.lock` before staging.
-- `main` is branch-protected: required checks = the `core` CI matrix,
-  force-pushes and deletions blocked, auto-merge enabled. Admin direct
-  pushes still work (`enforce_admins: false`), but PR + auto-merge is the
-  preferred delivery: it gets the required checks for free. The `browser`
-  job is deliberately NOT a required PR check (it runs post-merge only,
-  gating the prerelease) — do not add it to the protection contexts or
-  PRs will never merge.
-- Versioning (README §Consuming): `@polyengine/{runtime,translator,wasi,
-  ct-runner}` version in **lockstep**, and the manifests always carry the
-  NEXT release. Still 0.x/unstable but caret-honest: a PR that breaks the
-  published surface bumps the lockstep minor in the same PR; compatible
-  work leaves the version alone. Releases are cut from a green `main`
-  commit via release.yml `workflow_dispatch` with `release=true` (guards:
-  lockstep, tag-exists, green `pre-<shorthash>` present), followed
-  immediately by a manifest-bump PR to the next patch — the four manifests
-  plus runtime's copy-identity constant `RUNTIME_VERSION`
-  (runtime/src/embedder/copy.ts; `just test-runtime` pins the sync).
-  `@polyengine/protocol`
-  versions independently; bumping its manifest publishes it for real at the
-  next cut. Prereleases (`pre-<shorthash>`, every green `main`) are GitHub
-  releases carrying artifacts only — JSR and npm are published by cut
-  releases exclusively.
-- Breaking changes are declared by PR **label**, one per package:
-  `breaking/{runtime,translator,wasi,ct-runner,protocol}`. A label asserts
-  that the PR breaks that package's published surface (caret-incompatible);
-  no label means compatible. The labels are read LIVE from the API wherever
-  they are consulted — never from an event payload — because retroactive
-  edits are expected and load-bearing: noticing at cut time that a merged PR
-  was mislabelled and fixing the label there is a supported workflow, and
-  the cut re-reads the whole window. `tools/version-guard/check.ts`
-  enforces them in four places (`just test-version-guard` covers its
-  logic): `local` mode, first in `just gates` and an unconditional
-  `gha::core` step (label-free tree checks — lockstep agreement,
-  monotonicity, the protocol byte-identity tear check — so pre-push runs
-  and direct pushes are covered without PR context);
-  `pr` mode in `gha::core` (lockstep agreement, monotonicity,
-  label ↔ minor-bump agreement both ways, protocol-tear warning — an early
-  warning only, since label edits deliberately do not re-trigger CI);
-  `publish` mode in release.yml's publish step, both modes (in-tree
-  protocol must be byte-identical to the published version its manifest
-  names — the authoritative tear guard, which PR-time
-  checks cannot own because they miss post-run label edits, direct pushes
-  to main, and their own staleness at cut time; on the prerelease path
-  nothing publishes, so it is early detection of a tear the next cut would
-  hit); and `cut` mode on
-  `release=true`, which turns the window's labels into the minor-bump
-  requirement and renders the release notes.
-- **The host ABI is versioned by `@polyengine/protocol`, gated by goldens**
-  (contracts/embedder-api.md §"The host-ABI surface and its version"). The
-  conventions suite
-  (`runtime/tests/conventions/`, rides `just test-runtime`; focused run:
-  `just test-conventions`) pins the host-facing lift/lower behavior as
-  committed transcripts under `runtime/tests/conventions/golden/`.
-  Modifying or deleting a golden asserts a host-ABI behavior change and
-  requires `breaking/protocol` in the same PR (the reviewed
-  behavior-neutral escape is the `conventions-fix` label); adding goldens
-  is free. version-guard enforces this in `pr` mode (advisory, live
-  labels) and authoritatively in `cut` mode (window-wide diff of the
-  goldens dir; M/D requires protocol on a later minor line than the last
-  cut, or a `conventions-fix` window PR). Host modules import
-  `@polyengine/protocol` at most — the runtime's exported surface is
-  application-only — so lockstep releases that leave the goldens
-  byte-identical cannot touch a host-provider package.
-- **Cutting a release.** (1) Sanity pass, the step no machine can do:
-  enumerate the window — `gh pr list --search "base:main merged:>=<date of
-  the last cut>"` (or `gh api repos/$R/compare/v<last>...main --jq
-  '.commits[].sha'`) plus `git log v<last>..origin/main --first-parent
-  --oneline` for direct pushes — and read titles and diffs against the
-  labels. Fix labels retroactively NOW; a MISSING breaking label is the one
-  failure mode every mechanical check here is blind to. (2) Verify the
-  manifests against the final label set (breaking ⇒ the lockstep minor must
-  already be ahead of the last cut) and that `RUNTIME_VERSION`
-  (runtime/src/embedder/copy.ts) matches; check protocol's manifest too if
-  protocol moved. (3) Confirm the sha you are cutting has its green
-  `pre-<shorthash>` release — release.yml refuses otherwise, and that
-  refusal is the green-pipeline proof. (4) Dispatch release.yml with
-  `release=true` (`gh workflow run release.yml -f release=true --ref main`).
-  (5) Land the post-cut manifest-bump PR to the next patch immediately: the
-  four lockstep manifests + `RUNTIME_VERSION`. (6) Confirm the
-  npm-publish.yml run release.yml dispatched, and spot-check the dist-tags
-  (`npm view @polyengine/runtime dist-tags`) — `latest` must name the cut.
-  (The `pre` dist-tag is retired with the prerelease-publishing flow and
-  stays frozen wherever it last pointed.)
-- Two registries, one version (protocol rides its own manifest version on
-  both). JSR is published inline by release.yml; npm
-  is published by npm-publish.yml, triggered by the GitHub release, from
-  packages built by `tools/npm-build/build.ts` (dnt). The npm side reads
-  name/version/exports out of the same `deno.json` manifests, so adding an
-  entry point or bumping a version needs no second edit — but `just
-  test-npm` is the gate that proves it, and the property it exists to pin
-  is that cross-package imports stay npm **dependencies** rather than
-  inlined source (duplicate copies are the multi-runtime-copy failure
-  mode the protocol brands exist to diagnose). npm auth is
-  OIDC trusted publishing keyed on the `npm-publish.yml` filename; there
-  is no npm token in the repository or its secrets.
-- Consumer checkouts (the polymorph family, under `~/p/polymorph/`) are
-  **strictly read-only**: verify `git status` in any consumer tree you ran
-  commands near, before and after. Build artifacts go to `/tmp` or a
-  redirected `CARGO_TARGET_DIR`, never into consumer trees.
-- Findings against foreign repos go in the tracker files
-  (`upstream-component-model-repo-findings.md`,
-  `upstream-consumer-findings.md`), not inline notes; filing them is the
-  operator's call.
+| Mode      | Checks                                                                                                            |
+| --------- | ----------------------------------------------------------------------------------------------------------------- |
+| `local`   | Label-free lockstep, monotonicity, and protocol byte identity; first in `just gates` and unconditional in core CI |
+| `pr`      | Live label/minor-bump agreement and golden-change labels; early warning because label edits do not rerun CI       |
+| `publish` | In-tree protocol is byte-identical to its named published version; runs for both prereleases and cuts             |
+| `cut`     | Release-window labels, required minor advances, golden changes, and release notes                                 |
+
+The host ABI belongs to protocol, not the runtime package. Its committed
+transcripts are in `runtime/tests/conventions/golden/`
+(`just test-conventions`): modifying/deleting one requires `breaking/protocol`
+and the protocol minor bump, unless reviewed as a suite correction under
+`conventions-fix`. Adding goldens is free. The cut guard checks the whole
+release window. Host modules import protocol at most; runtime exports are
+application machinery.
+
+Both JSR and npm use the same package manifests. JSR publishes in `release.yml`;
+npm packages are built by `tools/npm-build/build.ts` using dnt and published by
+`npm-publish.yml`. `just test-npm` verifies packaged exports, declarations, and
+cross-package dependencies: dependencies must not be inlined into duplicate
+runtime/protocol copies. npm uses OIDC trusted publishing keyed to the workflow
+filename, not a repository token.
+
+Every green main commit produces a GitHub `pre-<shorthash>` release containing
+artifacts only. Registry publishing happens only on cut releases; the old npm
+`pre` tag is frozen.
+
+## Cutting a release
+
+1. Enumerate changes since the last cut, including direct main commits. Use
+   `gh pr list --search "base:main merged:>=<last-cut-date>"` and
+   `git log v<last>..origin/main --first-parent --oneline`. Read diffs against
+   labels and correct missing breaking labels before proceeding.
+2. Check final lockstep versions, `RUNTIME_VERSION`, and protocol's version
+   against the release window. A breaking surface requires the appropriate minor
+   advance beyond the last cut.
+3. Confirm the target SHA has its green `pre-<shorthash>` release.
+4. Dispatch `gh workflow run release.yml -f release=true --ref main`.
+5. Immediately land a manifest-bump PR to the next patch for the four lockstep
+   manifests and `RUNTIME_VERSION`.
+6. Confirm the dispatched `npm-publish.yml` run and check
+   `npm view @polyengine/runtime dist-tags`: `latest` must name the cut.

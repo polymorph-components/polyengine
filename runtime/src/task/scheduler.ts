@@ -1,55 +1,19 @@
-// The 0.3 task scheduler (docs/architecture.md §6) — the `Store` of definitions.py plus
-// the current-thread context that every canonical built-in reads.
+// Scheduler and canonical built-in ambient (docs/architecture.md §6).
 //
-// ===========================================================================
-// SCHEDULING POLICY (orchestrator decision, docs/architecture.md §6)
-// ===========================================================================
+// The default chooses ready threads in waiting-list order and events in join
+// order. These are deterministic choices within definitions.py `Store.tick`
+// and `WaitableSet.get_pending_event`'s allowed nondeterminism, not ordering by
+// the instant a readiness predicate became true. POLYENGINE_SCHED_SEED selects
+// reproducible pseudo-random candidates; `Thread.waitUntil` always takes the
+// reference's deterministic-profile blocking path.
 //
-// definitions.py makes two explicitly nondeterministic choices:
-//
-//   * `Store.tick` (line 597):  `random.choice(list(candidates))` over ready
-//     threads;
-//   * `WaitableSet.get_pending_event` (line 821): `random.shuffle(self.elems)`
-//     before picking a waitable with a pending event;
-//   * `Thread.wait_until` (line 396): `if ready_func() and not
-//     DETERMINISTIC_PROFILE and random.randint(0,1): return` — an optional
-//     "don't block even though you could" fast path.
-//
-// All three are *allowed* nondeterminism, not required: any single consistent
-// choice is a conforming schedule. This scheduler therefore runs a
-// **deterministic FIFO ready queue** by default — candidates are resumed in
-// the order they became ready, waitable sets deliver events in join order,
-// and `wait_until` always blocks (the reference's `DETERMINISTIC_PROFILE`
-// branch). Reproducible schedules are worth a great deal when debugging a
-// concurrency bug, and FIFO is also the fairest of the cheap policies.
-//
-// Setting `POLYENGINE_SCHED_SEED=<integer>` switches to a **seeded shuffle**: the same
-// choice points become pseudo-random but reproducible from the seed, which is
-// how we explore the schedule space that the FIFO default deliberately pins.
-// A test that passes under FIFO but fails under some seed has found a real
-// order-dependence — in our runtime or in the guest. The seed is read once at
-// module load; `schedulerSeedForTesting` exists so tests can drive both modes
-// without a subprocess.
-//
-// ===========================================================================
-// THREADS WITHOUT STACK SWITCHING
-// ===========================================================================
-//
-// definitions.py implements `Thread` on real OS threads with lock handoff
-// (`cont_new`/`resume`/`block`, lines 270-305) purely to get one-shot
-// continuations. We get the same structure from **JS generators**: a thread
-// body is a generator function that `yield`s a block request and is resumed
-// by `next(cancelled)`. That is a faithful model precisely because the
-// stackless (callback-ABI) path never blocks *inside* a wasm frame — every
-// wasm call returns a callback code before the host decides to wait. Blocking
-// inside a wasm frame (stackful async lifts; a sync lower on an unresolved
-// subtask) genuinely requires JSPI; those sites fail loudly
-// rather than pretending (see `needsJspi`).
+// Generator bodies handle waits between wasm calls. Mid-wasm blocking requires
+// JSPI; the bridge presents suspended frames to the same scheduler.
 
 import { assert_, trapIf } from "../cabi/trap.ts";
 import type { ComponentInstanceLike } from "../cabi/context.ts";
 
-/** definitions.py `Cancelled` (line 248). */
+/** definitions.py `Cancelled`. */
 export const CANCELLED_FALSE = false;
 export const CANCELLED_TRUE = true;
 export type Cancelled = boolean;
@@ -64,18 +28,8 @@ export interface BlockRequest {
   /** Resumable once this returns true; `null` = only an explicit resume. */
   readyFunc: (() => boolean) | null;
   cancellable: boolean;
-  /**
-   * JSPI seam. When present the thread is not waiting on a scheduler
-   * condition at all — it is waiting for a **Promise**, namely the one a
-   * `promising`-wrapped wasm entry returned. The driving loop awaits it and
-   * resumes the body with the resolved value (or throws the rejection into
-   * the body, so a post-resume trap unwinds exactly like a synchronous one —
-   * jspi pin (e)).
-   *
-   * This is what lets one generator body serve both modes: in plain mode the
-   * core call returns a value and the body never yields such a request, so
-   * the synchronous path is bit-for-bit what it was before JSPI existed.
-   */
+  /** Promise park, separate from scheduler readiness. Settlement resumes the
+   * generator with a value or throws the rejection into its unwind path. */
   awaitValue?: Promise<unknown>;
 }
 
@@ -88,13 +42,9 @@ export interface BlockRequest {
 export type ThreadBody = Generator<BlockRequest, void, any>;
 
 /**
- * Failure raised where the reference genuinely needs to suspend a wasm frame.
- *
- * This is deliberately *not* a `Trap`: the component is not at fault and the
- * program is not ill-formed — our runtime is incomplete. Reporting it as a
- * trap would let a conformance run score a missing capability as a correct
- * rejection, which is the exact failure mode contracts/plan-format.md's
- * error-phase split exists to prevent.
+ * Missing wasm-frame suspension capability, not a component `Trap`.
+ * Keep capability failures distinct from valid conformance rejections
+ * (contracts/plan-format.md's error-phase split).
  */
 export class NeedsJspi extends Error {
   constructor(what: string) {
@@ -108,21 +58,10 @@ export function needsJspi(what: string): never {
 }
 
 /**
- * Failure raised when a synchronous entry into an instance would race a
- * pending lift (contracts/embedder-api.md §"Functions and async",
- * failure-ladder arm 2).
- *
- * In jspi mode a promising-wrapped entry settles through a microtask hop even
- * when nothing suspended, and the hop-quiescence gate (exec/boundary.ts)
- * defers Promise-surface calls that would enter during that window. A
- * synchronous caller — a resource constructor, or the embedder's `sync()`
- * adapter — cannot be deferred, so it refuses instead.
- *
- * Deliberately *not* a `Trap`, and deliberately raised BEFORE the instance is
- * entered: nothing was entered, so there is nothing to poison. The refusal is
- * transient — the instance stays enterable, and the call succeeds on retry
- * once the in-flight activity settles, or immediately through the
- * Promise-shaped surface, which defers rather than refusing.
+ * Transient, non-poisoning refusal before synchronous entry would race a
+ * pending JSPI result lift. Constructors and `sync()` cannot defer; retry
+ * after the hop settles or use the Promise-shaped surface, which waits
+ * (contracts/embedder-api.md §"Functions and async").
  */
 export class SyncEntryBusy extends Error {
   constructor(what: string) {
@@ -146,12 +85,8 @@ export class PendingCapability extends Error {
 }
 
 /**
- * Hook invoked when a trap breaks an instance's enter/leave bracket in
- * `Store.tick` (instance poisoning — see the comment at the call site).
- * task/streams.ts registers the stream/future-end retirement walk here
- * (#66). An injection seam rather than an import: streams.ts (via
- * waitable.ts) already imports this module, and a scheduler → streams import
- * would make `CopyEnd extends Waitable` evaluation-order-sensitive.
+ * Stream/future-end retirement on instance poisoning. Registration avoids a
+ * scheduler -> streams -> waitable -> scheduler evaluation-order cycle.
  */
 let onInstancePoisoned:
   | ((inst: { handles: Iterable<unknown> }, cause: unknown) => void)
@@ -195,17 +130,9 @@ export function setOnInstancePoisoned(
 }
 
 /**
- * Additional poisoning observers, appended to the single `onInstancePoisoned`
- * hook above (#292). Separate from it for the same evaluation-order reason
- * the hook exists at all — the registrant (exec/boundary.ts, rejecting the
- * pending Promises of async-typed lifts whose task will now never finish)
- * already imports this module, and we must not import it back — but a Set
- * rather than a second single slot, because "the" poisoning action is
- * streams.ts's and this is strictly extra.
- *
- * Ordering is deliberate: the primary hook (stream/future-end retirement,
- * #66) runs FIRST, so a listener that settles host-visible Promises observes
- * ends already retired rather than ends about to be.
+ * Additional observers, including pending-lift rejection in exec/boundary.ts.
+ * They run after stream/future retirement returns. A throwing retirement hook
+ * or listener stops notification; the diagnostic map still retains the first cause.
  */
 const instancePoisonedListeners = new Set<
   (inst: { handles: Iterable<unknown> }, cause: unknown) => void
@@ -227,21 +154,13 @@ export function notifyInstancePoisoned(
   inst: { handles: Iterable<unknown> },
   cause: unknown,
 ): void {
-  // First cause wins: a poisoned instance can collect follow-on failures
-  // (late settles retired against it, repeated bracket breaks), and the
-  // original trap is the one worth reporting on later entry refusals
-  // (polyengine#145 ask 1).
+  // Preserve the original cause across follow-on failures.
   if (!poisonedInstances.has(inst)) poisonedInstances.set(inst, cause);
   onInstancePoisoned?.(inst, cause);
   for (const f of instancePoisonedListeners) f(inst, cause);
 }
 
-/** Poisoned instances → poisoning cause, for late-settle retirement
- * (`Thread.resumeWith`) and entry-refusal diagnostics (`withPoisonCause`,
- * polyengine#145). A WeakMap mirror of streams.ts's `retiredInstances`, kept
- * here because thread.ts cannot import streams.ts (the same
- * evaluation-order constraint that made `setOnInstancePoisoned` an
- * injection seam). */
+/** Poison causes shared by late-settle retirement and entry diagnostics. */
 const poisonedInstances = new WeakMap<object, unknown>();
 
 export function isInstancePoisoned(inst: object): boolean {
@@ -249,25 +168,15 @@ export function isInstancePoisoned(inst: object): boolean {
 }
 
 /**
- * The recorded cause of an instance's poisoning: the original trap that
- * broke the enter/leave bracket (polyengine#145). `undefined` when the instance
- * is not poisoned — and, degenerately, when the poisoning cause itself was
- * a thrown `undefined`; use `isInstancePoisoned` for the predicate.
+ * Original poison cause. Use `isInstancePoisoned` to distinguish an unmarked
+ * instance from one whose cause was a thrown `undefined`.
  */
 export function instancePoisonCause(inst: object): unknown {
   return poisonedInstances.get(inst);
 }
 
 /**
- * Append the recorded poison cause to an entry-refusal trap message
- * (polyengine#145 ask 1). "cannot enter component instance" has exactly one
- * cause — a permanently poisoned instance, the corpse of an earlier trap —
- * and this
- * suffix names the trap that made it one. The call is kept unconditional at
- * the refusal sites (returning `base` unchanged for an unmarked instance) so
- * the message construction stays in one place; the suffix is
- * conformance-safe because the official suite matches trap messages by
- * substring (harness/src/runner.ts).
+ * Append the original poison cause, or leave `base` unchanged if unmarked.
  */
 export function withPoisonCause(inst: object, base: string): string {
   if (!poisonedInstances.has(inst)) return base;
@@ -276,26 +185,11 @@ export function withPoisonCause(inst: object, base: string): string {
 }
 
 /**
- * The entry-refusal decision, in one place: may `caller` enter `callee` right
- * now, and if not, what does the refusal trap say? Returns `null` when entry
- * is allowed, otherwise the exact trap message for `base`.
- *
- * POISONING IS THE WHOLE MECHANISM (CM#705). There is no transient
- * reentrance gate: at the pinned reference (definitions.py @ 2f13265)
- * `may_enter`, `entering_set`, `enter_from`, `leave_to` and
- * `ComponentInstance.parent` do not exist — `Store.lift` runs `canon_lift`
- * with no gate at all, so host-mediated reentrance into a live instance is
- * simply VALID.
- *
- * Against that, per-instance poisoning is polyengine's NAMED DIVERGENCE. A
- * trapped instance is a corpse — entry is refused permanently, with the
- * recorded cause appended (polyengine#145 ask 1) — where wasmtime instead
- * kills the whole store. The reference never faces the question because a
- * trap there is the end of the world.
- *
- * The `caller !== callee` guard keeps a self-call out of the refusal: a dtor
- * invoked from inside its own instance (cabi/handles.ts) is the live case —
- * it must not be refused by its own instance's marker.
+ * Return a refusal message for a poisoned callee, otherwise `null`.
+ * Live-instance reentry is allowed by definitions.py `Store.lift`; this
+ * runtime's per-instance poisoning policy is separate from task exclusivity
+ * and JSPI hop serialization. Same-instance calls, including guest self-drop
+ * destructors, bypass the poison refusal.
  */
 export function entryRefusal(
   callee: object,
@@ -347,11 +241,7 @@ export function schedulerSeedForTesting(value: number | null): void {
 }
 
 /**
- * Test hook: snapshot the module's current seed without mutating it. Used by
- * the `just sched-seeds` regression guard (sched_seed_guard_test.ts) to
- * confirm `readSeed()` actually picked up `POLYENGINE_SCHED_SEED` from the
- * environment at import time, rather than silently falling back to FIFO for
- * lack of `--allow-env`.
+ * Test hook: inspect the seed, including whether environment access succeeded.
  */
 export function schedulerSeedSnapshotForTesting(): number | null {
   return seed;
@@ -374,9 +264,7 @@ function nextRandom(): number {
 }
 
 /**
- * Pick one candidate. FIFO (index 0 — candidates are supplied in
- * ready-order) unless a seed is configured, in which case a seeded uniform
- * choice, mirroring the reference's `random.choice`.
+ * Pick the first supplied candidate, or a seeded pseudo-random candidate.
  */
 export function chooseCandidate<T>(candidates: readonly T[]): T {
   assert_(candidates.length > 0, "chooseCandidate on an empty candidate set");
@@ -385,17 +273,12 @@ export function chooseCandidate<T>(candidates: readonly T[]): T {
 }
 
 // ---------------------------------------------------------------------------
-// Current-thread context (definitions.py `current_thread`, line 306)
+// Current-thread context (definitions.py `current_thread`)
 // ---------------------------------------------------------------------------
 
 /**
- * The reference keeps the running thread in a thread-local
- * (`thread_local_handler`). A JS generator has no such ambient slot, so the
- * scheduler maintains an explicit stack: `resume()` pushes, and every
- * canonical built-in reads the top. It is a stack rather than a single slot
- * because a *host* import called from a guest can lift into another component
- * instance, nesting one activation inside another exactly as the reference's
- * recursive `store.lift` does.
+ * Synchronous execution brackets, innermost last. Nested host-mediated calls
+ * require a stack rather than a single current-thread slot.
  */
 // deno-lint-ignore no-explicit-any
 const threadStack: any[] = [];
@@ -419,13 +302,9 @@ export function popCurrentThread(t: CurrentThreadLike): void {
 }
 
 /**
- * Run `fn` with `t` as the ambient, for `fn`'s SYNCHRONOUS extent.
- *
- * This is the wasm-entry bracket (`awaitCore`). It is the same `threadStack`
- * the scheduler's own `resume()` bracket uses, deliberately: a wasm entry made
- * from *inside* an engine-driven resumption (a FACT callee reached from a
- * resumed activation — fact_calls.ts) has an empty scheduler bracket, and the
- * entry itself is then the most specific statement of who is running.
+ * Run `fn` with `t` as ambient for its synchronous extent only. Wasm entries
+ * and built-in bodies use this even during engine-driven resumptions, when
+ * no scheduler `resume()` bracket remains.
  */
 // deno-lint-ignore no-explicit-any
 export function withActivation<T>(t: any, fn: () => T): T {
@@ -441,26 +320,15 @@ export function withActivation<T>(t: any, fn: () => T): T {
 }
 
 /**
- * The WASM-ENTRY brackets alone — a subset of `threadStack`.
- *
- * Kept separately because it is the exact analogue of what the retired
- * async-context store held: the store was written by `withActivation` and by
- * nothing else, so a built-in reached under a scheduler `resume()` bracket
- * that had not (yet) entered wasm saw NO store, even though `threadStack`
- * named a thread. `Store.consumePendingIfRunning` — the driver-gate
- * release whose scheduling effects the corpus pins precisely — asked exactly
- * that question, so it must keep asking exactly that question — measured:
- * routing it through the full `threadStack` instead moved 64 conformance
- * commands. Ambient *resolution* is a different question and uses the full
- * `threadStack`.
+ * `withActivation` brackets only. Consuming a pending resumption requires
+ * evidence of activation execution, not merely a scheduler generator step.
+ * Ambient resolution uses the broader `threadStack` instead.
  */
 // deno-lint-ignore no-explicit-any
 const entryStack: any[] = [];
 
 /**
- * "Whose wasm frame are we lexically inside, or running on behalf of?" — the
- * async-context store's replacement, used only by
- * `Store.consumePendingIfRunning`.
+ * Activation execution evidence used only by `consumePendingIfRunning`.
  */
 // deno-lint-ignore no-explicit-any
 function activationOf(): any {
@@ -473,93 +341,22 @@ function activationOf(): any {
 // ---------------------------------------------------------------------------
 
 /**
- * ACTIVATIONS THE ENGINE IS RUNNING OUTSIDE OUR FRAMES — innermost last.
+ * Engine-driven activation claims, innermost last. JSPI resumptions and
+ * even plain-value `Suspending` returns can run after synchronous brackets
+ * unwind (`tests/jspi/fastpath_hop_test.ts`). The bridge captures the owner
+ * before the hop and reclaims it with continuation sentinels.
  *
- * ===========================================================================
- * WHAT REPLACED THE ASYNC-CONTEXT STORE, AND WHY IT NEEDS NO ENGINE MAGIC
- * ===========================================================================
- *
- * A wasm activation under JSPI does not stay inside our JS frames. Two
- * distinct mechanics take it outside them, and BOTH are ours to observe:
- *
- *   (i)  A GENUINE SUSPENSION. A `Suspending`-wrapped built-in returned a
- *        Promise; the engine parks the activation and resumes it in a
- *        microtask of its own when that Promise settles. There is exactly one
- *        source of such a Promise in this runtime — `blockCurrentActivation`
- *        mints it, `SuspensionPoint.resume`/`.abandon` settle it — so the
- *        moment of resumption is ours, including for a **background
- *        activation** whose lifted call already returned (that resumption
- *        still runs through `SuspensionPoint.resume`, from `Store.tick`).
- *
- *   (ii) THE MICROTASK HOP ON EVERY `Suspending` CALL — jspi pin (j),
- *        `tests/jspi/fastpath_hop_test.ts`. Even when the built-in produced
- *        its value synchronously and nothing suspended, the guest's frame
- *        resumes through a microtask, i.e. AFTER our `withActivation` bracket
- *        (and `callCore`, and the whole driving frame) has unwound. This one
- *        is easy to overlook because nothing looks asynchronous at the call
- *        site; it is nonetheless the dominant case, and the one that produced
- *        `exit-sync-call with an empty sync-call stack` when it was missed
- *        (trap-if-done.wast:448, big-interleaving-test.wast).
- *
- * Both are claimed explicitly — (i) in `SuspensionPoint.resume`, (ii) in the
- * wrapper `suspendingImport` puts around every blocking-capable trampoline —
- * naming the activation captured from the ambient while its bracket was still
- * live. That is exactly the value the async-context store used to
- * reproduce: the store was set by `withActivation` around the wasm entry, and
- * the engine restored it because it had captured the context when it
- * registered the continuation. We now record the same activation ourselves,
- * at the same instant, by construction — no Node `async_hooks` builtin, no
- * `AsyncContext` proposal, nothing beyond Promises (docs/architecture.md §4.3; M3A-1).
- *
- * NOTE ON ORDINARY `await`s. Nothing here needs a context to survive a plain
- * `await` any more, and nothing ever did on its own merits: the driving loops
- * (`drive`/`driveAsync` in exec/boundary.ts, the host-stream pump) run outside
- * every activation and read no ambient. What they do is *resume* threads, and
- * every resumption re-establishes the ambient explicitly — a scheduler-driven
- * one through `Thread.#resumeInternal`'s `pushCurrentThread` bracket, an
- * engine-driven one through this queue.
- *
- * LIFO, TOP-IS-CURRENT — and that direction is load-bearing, not incidental.
- * Activations NEST: an outer activation's built-in can synchronously enter an
- * inner activation's wasm (`async-start-call` running its callee through
- * `awaitCore`), and the inner one is the one executing. Reading the OLDEST
- * claim instead of the newest was measured at 45 conformance failures.
- *
- * The opposite shape — A settles B's suspension so B runs AFTER A — is
- * deliberately NOT represented here: `SuspensionPoint.resume` pushes only when
- * nothing is currently running, so B never shadows A. B is picked up by its
- * own first `Suspending` call. A driver's settle-time claim would name B
- * here, which is exactly why it is not an ambient tier — see `resolveAmbient`
- * and `Store.pendingResumptions`.
- *
- * An activation leaves this stack when it parks again
- * (`blockCurrentActivation`) or finishes (its `awaitValue` promise settles —
- * `Store.noteAwaiting`).
+ * Nested execution moves the running owner to the top. Settling B while A
+ * still runs must not shadow A: `SuspensionPoint.resume` claims B immediately
+ * only when no ambient exists. Parking releases the claim; `noteAwaiting`
+ * releases it on completion or rejection. Driver awaits carry no ambient.
  */
 // deno-lint-ignore no-explicit-any
 const activationClaims: any[] = [];
 
 /**
- * Record that the engine will run `t`'s wasm outside our frames.
- *
- * Idempotent in MEMBERSHIP but not in POSITION: re-claiming MOVES an
- * existing claim to the top. The stack's contract is "top = the innermost
- * activation the engine is running outside our frames", and a re-claim is
- * direct evidence that `t` is running RIGHT NOW (its Suspending import just
- * returned into its wasm). The previous early-return kept stale order: a
- * nested callee's claim whose release edge is a promise reaction
- * (`Store.noteAwaiting` -> `Store.releasePendingOf`) outlives the callee by a
- * microtask, and an outer activation's continuation chunk that resumed in
- * that window re-claimed itself as a NOOP — leaving the finished callee on
- * top, so every ambient read in the rest of the chunk (the next hop's
- * `owner` capture, and any unsafe intrinsic like `context.set`, which has
- * no hop to re-anchor on) answered the wrong thread. Found as issue #24:
- * wit-bindgen's callback epilogue restored its task pointer into another
- * thread's context slots, and the next disciplined callback invocation
- * panicked on a null slot (async_support.rs:578).
- *
- * A null/undefined activation is "no claim" — the instantiation-time shape
- * that has no thread at all.
+ * Move `t` to the top, including on re-claim: a nested callee's release
+ * reaction may lag behind the caller's next chunk. Nullish owners do nothing.
  */
 // deno-lint-ignore no-explicit-any
 export function claimActivationAmbient(t: any): void {
@@ -571,10 +368,10 @@ export function claimActivationAmbient(t: any): void {
   activationClaims.push(t);
 }
 
-// #24 probe.
+// Optional ambient tracing.
 // deno-lint-ignore no-explicit-any
 function traceAmbient(what: string, t: any): void {
-  // Lazy import avoidance: reuse context.ts's ids via a local map.
+  // Local diagnostic identities avoid another dependency on context.ts.
   console.error(
     `[amb] ${what} ${dbgId(t)} | stack=[${threadStack.map(dbgId).join(",")}] ` +
       `claims=[${activationClaims.map(dbgId).join(",")}]` +
@@ -594,13 +391,8 @@ export function dbgId(t: unknown): string {
 }
 
 /**
- * Drop `t`'s activation-ambient claim, if it holds one.
- *
- * The two closing edges: the activation PARKS on a fresh suspension
- * (`blockCurrentActivation`), or it FINISHES — its `awaitValue` promise
- * settles, normally or by rejection, and `Store.noteAwaiting`'s eager settle
- * continuation calls this. The `task.implicitThread` indirection covers the
- * second edge for claims taken against a task's implicit thread.
+ * Release on park or activation settlement, with an implicit-thread fallback
+ * for claims recorded through the task rather than this exact thread.
  */
 // deno-lint-ignore no-explicit-any
 export function releaseActivationAmbient(t: any): void {
@@ -618,14 +410,8 @@ export function releaseActivationAmbient(t: any): void {
 }
 
 // ---------------------------------------------------------------------------
-// The resumed-but-not-yet-run gate (a SEPARATE concern from the ambient above)
+// Ambient diagnostics
 // ---------------------------------------------------------------------------
-//
-// The gate answers one question for the DRIVER: "was a suspension settled
-// whose activation has not run yet — must I refrain from scheduling anything
-// else?" That is per-Store SET semantics, not a global identity slot, and it
-// is not an input to ambient resolution: see `Store.pendingResumptions`
-// below.
 
 const AMBIENT_TRACE = (() => {
   try {
@@ -635,7 +421,7 @@ const AMBIENT_TRACE = (() => {
   }
 })();
 
-/** Diagnostic (#24 probe): the full ambient state, for tracing. */
+/** Full ambient state for tracing. */
 export function ambientDebug(): {
   stack: unknown[];
   claims: unknown[];
@@ -647,9 +433,7 @@ export function ambientDebug(): {
 }
 
 /**
- * Diagnostic: module-scope AMBIENT state that must NOT survive a completed
- * call. The scheduling gate is no longer module-scope — a store's
- * `pendingResumptions` set is the per-Store analogue and is checked there.
+ * Module-scope ambient residue; scheduling gates live on each Store.
  */
 export function ambientResidue(): { stack: number; claim: boolean } {
   return {
@@ -659,48 +443,9 @@ export function ambientResidue(): { stack: number; claim: boolean } {
 }
 
 /**
- * THE ambient precedence, in one place. Every reader goes through this.
- *
- *   1. `threadStack` -- a synchronous bracket we pushed ourselves: either
- *      `Thread.#resumeInternal`'s `resume()` bracket, `withActivation`'s
- *      wasm-entry bracket, or `suspendingImport`'s built-in-call bracket.
- *      Most specific: we are literally inside that activation's execution.
- *   2. the TOP of `activationClaims` -- the innermost activation the engine
- *      is running outside our frames (a `Suspending` hop or a resumption).
- *      LIFO, because activations nest: an outer activation's built-in can
- *      synchronously enter an inner one's wasm.
- *
- * What tiers 1+2 state directly is "the innermost wasm activation currently
- * executing, across the engine's hops and resumptions" -- the same quantity
- * an async-context store written around the wasm entry would carry, without
- * depending on the engine to restore it on every continuation captured inside
- * that extent (M3A-1). The equivalence is not asserted from the armchair: it
- * was established differentially, against such a store, over the whole
- * conformance corpus, comparing at every read (zero disagreements over 1395
- * commands), and the corpus pins the result.
- *
- * Having TWO readers with different precedence orders is not a hypothetical
- * hazard: they disagree silently at exactly the sites that matter -- the FACT
- * bracket sites read `maybeCurrentThread`, so a divergent order there
- * attributes the bracket to the driver's claim instead of its own activation
- * (`exit-sync-call with an empty sync-call stack`), and a precedence fix
- * applied to the other reader measures as "no change" because the failing
- * sites never call it. Do not add a third reader; extend this one. (`activationOf` above is not a
- * second reader -- it answers a different question, "whose wasm frame are we
- * running on behalf of", and is used only by
- * `Store.consumePendingIfRunning`.)
- *
- * TWO TIERS ARE ENOUGH, and specifically a driver's settle-time claim is NOT
- * a third: such a claim names whichever activation was settled or claimed
- * across an await -- right for that one and wrong for every other in-flight
- * activation. It is not needed, because the sentinel discipline (tier 2's
- * claim/release edges, #24) always answers first: instrumented reads where
- * tiers 1-2 were empty and a settle-time claim was live decided NOTHING
- * across the conformance corpus, both seeded shuffles
- * (`POLYENGINE_SCHED_SEED` 1 and 4242), test-runtime and the smoke-tls
- * three-async-component #24 corpus. A driver's settle-time claim is a
- * SCHEDULING gate only, and lives as the per-Store `Store.pendingResumptions`
- * set (issue #158).
+ * Ambient precedence: innermost synchronous bracket, then newest engine
+ * activation claim. `pendingResumptions` is never an ambient source: it
+ * names work owed a turn, not necessarily the activation executing now.
  */
 function resolveAmbient(): CurrentThreadLike | undefined {
   return threadStack[threadStack.length - 1] ??
@@ -717,20 +462,9 @@ export function currentThread<T = CurrentThreadLike>(): T {
   }
   const t = resolveAmbient();
   if (t === undefined) {
-    // Reaching this is not an internal invariant violation, so it must not be
-    // an `AssertionError`: it is a *known incompleteness*. wasmtime lets a
-    // core module's start function call canonical built-ins during
-    // instantiation, before any task exists, and definitions.py has no model
-    // for that — `current_thread()` (line 306) simply presumes a running
-    // task, because in the reference a built-in is only ever reached from
-    // inside one.
-    //
-    // Instance-scoped built-ins already avoid this by taking their instance
-    // from the trampoline declaration (see intrinsics/async_builtins.ts). What
-    // lands here is a *task*-scoped built-in (task.return, task.cancel,
-    // thread.yield, subtask.*) called at instantiation time, which needs the
-    // instantiation-time task context the spec implies but does not spell out.
-    // Exercised by test/async/dont-block-start.wast:3.
+    // Task-scoped built-ins during core start need an instantiation-time
+    // task context this runtime does not implement. Instance-scoped built-ins
+    // can instead use their trampoline declaration.
     throw new PendingCapability(
       "instantiation-time task context — a task-scoped canonical built-in " +
         "ran outside any task (a core start function calling task.return / " +
@@ -746,48 +480,14 @@ export function maybeCurrentThread(): CurrentThreadLike | undefined {
 }
 
 /**
- * THE ambient, NARROWED BY THE INSTANCE WHOSE CORE FRAME IS EXECUTING.
- *
- * For a built-in whose declaration names a component instance, "who is
- * running" is not an open question about the whole store: the call arrived
- * from a core frame OF THAT INSTANCE, so the running activation is one of
- * that instance's. This narrows `resolveAmbient` accordingly — same tiers,
- * same order, candidates filtered — and falls back to the unscoped answer
- * when the instance has no candidate at all (the instantiation-time shape,
- * and any built-in reached before its instance has a task).
- *
- * WHY IT IS NEEDED (polyengine#24's residue; polyvisor#49 trap 1,
- * `runtime/tests/context_attribution_test.ts`). A JSPI continuation chunk —
- * the tail of a suspended activation, e.g. wit-bindgen's callback epilogue
- * restoring its task pointer with `context.set` (rt/async_support.rs:592) —
- * runs with an EMPTY `threadStack` and, unlike a hop, has no re-anchoring
- * edge of its own. Tier 2 then answers the newest claim, which is whichever
- * SIBLING activation suspended most recently. The attribution sentinels
- * (jspi/bridge.ts) plant that claim one microtask ahead of the chunk, which
- * is exact when the engine queues the resumption while the settle reaction
- * returns (measured so in Deno's V8) — and NOT exact in Chromium, where a
- * wider gap lets a sibling's sentinel land in between. Measured there 3/3:
- * one task's epilogue wrote its state pointer into another task's slots, and
- * the starved task's next callback entry hit `assert!(!state.is_null())`
- * (async_support.rs:578) -> unreachable.
- *
- * Ordering discipline cannot fix that class — engine chunk boundaries are not
- * observable, so every microtask-ordering scheme is a hope. Instance identity
- * is not a hope: it is static (the declaration), and it is decisive because
- * ONE INSTANCE CAN ONLY HAVE ONE ACTIVATION MID-FRAME AT A TIME — a callback
- * invocation holds `inst.exclusiveThread` for its whole extent, suspensions
- * included (definitions.py line 2187 / `runCallbackLoop`), and a sync or
- * stackful-async lift holds the entry gate. Two activations that can race for
- * an unbracketed read are therefore necessarily of different instances, which
- * is exactly what this discriminates.
- *
- * SPEC BASIS. `canon_context_get`/`canon_context_set` (definitions.py 2348 /
- * 2358) read `current_thread().storage`, and in the reference a built-in is
- * only ever reached from inside the activation that called it — the identity
- * is exact by construction, never inferred. This runtime has to reconstruct
- * it; narrowing the reconstruction to the declaring instance moves it TOWARD
- * the reference (it can only ever remove candidates the reference would never
- * have named), never away.
+ * Resolve using the declaring instance: a matching top synchronous bracket,
+ * then the newest matching activation claim, then the unscoped fallback.
+ * Engine continuation timing can interleave sibling-instance sentinels;
+ * static instance identity removes those candidates
+ * (`runtime/tests/context_attribution_test.ts`). It does not distinguish
+ * concurrent activations of the same instance; their order still depends on
+ * the brackets and claims. In definitions.py `canon_context_get` and
+ * `canon_context_set`, identity comes directly from `current_thread`.
  */
 // deno-lint-ignore no-explicit-any
 export function currentThreadForInstance<T = CurrentThreadLike>(
@@ -818,7 +518,7 @@ function instOf(t: any): unknown {
   return t?.task?.inst;
 }
 
-/** definitions.py `current_task()` (line 309). */
+/** definitions.py `current_task`. */
 // deno-lint-ignore no-explicit-any
 export function currentTask(): any {
   return currentThread().task;
@@ -833,14 +533,14 @@ export function maybeCurrentTask(): any | null {
   return maybeCurrentThread()?.task ?? null;
 }
 
-/** definitions.py `current_instance()` (line 312). */
+/** definitions.py `current_instance`. */
 // deno-lint-ignore no-explicit-any
 export function currentInstance(): any {
   return currentTask().inst;
 }
 
 // ---------------------------------------------------------------------------
-// Store (definitions.py `class Store`, line 562)
+// Store (definitions.py `Store`)
 // ---------------------------------------------------------------------------
 
 /** Structural view of a Thread, as the store's ready queue needs it. */
@@ -853,14 +553,8 @@ export interface SchedulableThread {
 }
 
 /**
- * The embedder-visible scheduler state (definitions.py `Store`). One per
- * instantiated component in this runtime — the reference shares one `Store`
- * across component instances of a linked graph, and so do we: `Executor`
- * creates a single `Store` and hands it to every `ComponentInstanceState`.
- *
- * `waiting` is kept as an **array, in insertion order**, which is what makes
- * the default policy FIFO: `readyCandidates()` preserves the order in which
- * threads started waiting.
+ * Scheduler state shared by the component instances of an Executor.
+ * `waiting` preserves insertion order for the default candidate policy.
  */
 export class Store {
   readonly waiting: SchedulableThread[] = [];
@@ -874,54 +568,23 @@ export class Store {
   readonly pendingHostCalls: Set<Promise<unknown>> = new Set();
 
   /**
-   * An exception raised by a host import's promise (a rejection, or a trap
-   * thrown while lowering its results). It cannot propagate out of the
-   * microtask that produced it, so it is parked here and rethrown by whoever
-   * is driving the store — which is the call the guest is blocked in.
+   * Asynchronous host or background-driver failure, parked for a driver to
+   * surface. The consuming driver need not belong to the originating call.
    */
   hostFailure: unknown = undefined;
 
   /**
-   * Resumed-but-not-yet-run activations of THIS store — the driver's
-   * scheduling gate, not an ambient.
-   *
-   * Keeping this distinct from `activationClaims` matters. This set answers
-   * "may I schedule something else right now?" (`Store.tick` and both driving
-   * loops refuse while it is non-empty, which is what forces a microtask yield
-   * so the resumed activation actually runs). `activationClaims` answers
-   * "whose code is this?". Conflating them — driving off the ambient queue —
-   * wedges the loops, because an activation that merely hopped legitimately
-   * holds an ambient while the scheduler is free to proceed.
-   *
-   * PER-STORE and MULTI-ENTRY (issues #158 mechanism B, #210), both load
-   * bearing. MULTI-ENTRY because two engine resumptions can legitimately be
-   * pending at once: a running activation X may deliver a resume to Z while
-   * Y's resumption is still outstanding, and a one-claimant gate cannot
-   * represent that. PER-STORE because a claim held store-wide makes every
-   * driver on EVERY store yield: an idle store's `driveStoreAsync` dies at
-   * the 10,000-hop assert (~311ms) while another store merely dwells on a
-   * slow host import.
-   *
-   * Cross-store de-serialization is safe by disjointness: an activation
-   * belongs to exactly one store. Same-store the set is conservative — the
-   * gate keeps refusing until EVERY pending entry has died.
-   *
-   * Release edges, per entry: the activation PARKS again
-   * (`blockCurrentActivation` -> `consumePendingIfRunning`), it FINISHES (its
-   * `awaitValue` promise settles -> `noteAwaiting` -> `releasePendingOf`), or
-   * the driver drops its own speculative entry (`removePendingResumption`).
+   * Per-store scheduling gate, not an ambient source. Several resumptions
+   * can be outstanding; `tick` waits until all entries are released, without
+   * blocking independent stores. An entry ends when its activation runs or
+   * parks (`consumePendingIfRunning`), finishes (`noteAwaiting`), or the
+   * driver removes its own speculative entry.
    */
   readonly pendingResumptions: Set<unknown> = new Set<unknown>();
 
   /**
-   * Record that a suspension of this store has been settled and its
-   * activation has not run yet. Idempotent; a null/undefined activation is
-   * "no entry" (the instantiation-time shape that has no thread at all).
-   *
-   * No one-claimant assert: two entries are legitimate (see
-   * `pendingResumptions`). Two SuspensionPoints of ONE task cannot be pending
-   * simultaneously — a task's single activation suspends at one point at a
-   * time — so collapsing entries by identity loses nothing.
+   * Record an activation owed a turn. Idempotent by identity; nullish values
+   * do not create entries.
    */
   addPendingResumption(t: unknown): void {
     if (t === null || t === undefined) return;
@@ -941,19 +604,8 @@ export class Store {
   }
 
   /**
-   * Drop the pending entry iff its activation is demonstrably RUNNING — i.e.
-   * the entry names the same thread the ACTIVATION AMBIENT names for the code
-   * calling us. An entry exists to cover the window between settling a
-   * suspension and the resumed activation running; once that activation's own
-   * code is on the stack the window is closed, and holding the entry would
-   * gate the store on an activation that has already had its turn — while a
-   * running activation's built-in settles ANOTHER activation's suspension
-   * (`subtask.cancel` delivering a cancellation to a parked callee,
-   * cancellable.wast) that other entry must legitimately stay.
-   *
-   * The comparison is against `activationOf()` — the wasm-ENTRY brackets,
-   * deliberately not the full `threadStack` (see `entryStack`: routing it
-   * through the full stack moved 64 conformance commands).
+   * Release only the executing activation's entry, not another activation
+   * it may have just resumed. `activationOf` excludes scheduler-only brackets.
    */
   consumePendingIfRunning(): void {
     const a = activationOf();
@@ -961,15 +613,8 @@ export class Store {
   }
 
   /**
-   * Drop the pending entry naming `t` — the settle-side half: an entry taken
-   * when `t`'s suspension was settled dies when `t`'s activation finishes (its
-   * `awaitValue` promise settles; `noteAwaiting` calls this from the eager
-   * settle continuation) or parks again (`blockCurrentActivation` consumes via
-   * `consumePendingIfRunning`).
-   *
-   * The `task.implicitThread` indirection covers entries taken against a
-   * task's implicit thread. `t` FINISHING also ends its activation ambient,
-   * so both are dropped here.
+   * Activation settlement ends both ambient and scheduling claims, including
+   * claims recorded against the task's implicit thread.
    */
   // deno-lint-ignore no-explicit-any
   releasePendingOf(t: any): void {
@@ -994,15 +639,8 @@ export class Store {
   }
 
   /**
-   * Ready waiting threads, in wait order (the FIFO of the default policy).
-   *
-   * A POISONED instance's threads are not candidates: they are a corpse's and
-   * must never resume (polyengine's per-instance poisoning divergence). The
-   * filter lives here, not in `tick` alone, because the answer is also a
-   * VERDICT elsewhere — the drivers' deadlock probe asks "did anything become
-   * ready?" and must get an answer that agrees with what `tick` will actually
-   * run, or it re-arms forever on a thread `tick` refuses (exec/boundary.ts's
-   * probe, against `canon_lift`'s `trap_if(not candidates)`).
+   * Ready, non-poisoned threads in wait order. Drivers use this same filter
+   * for deadlock probes so readiness agrees with what `tick` can resume.
    */
   readyCandidates(): SchedulableThread[] {
     return this.waiting.filter((t) =>
@@ -1019,20 +657,11 @@ export class Store {
   readonly awaiting: Set<any> = new Set();
 
   /**
-   * Settled-but-unserviced activation tails, in settle order.
-   *
-   * A settled `awaitValue` is the rest of an activation that already finished
-   * its wasm: result shaping, the callback loop, `exit_implicit_thread` (and
-   * with it the exclusive-thread release). The reference runs all of that
-   * atomically inside `Thread.resume`; under jspi it lands a few engine
-   * microtasks after the observable effects of the activation (`task.return`
-   * flips `resolved` DURING the wasm, the settle only afterwards — jspi
-   * pin (j)). Any scheduling decision taken in that window sees phantom
-   * state — a finished callee still "holding" its exclusive slot made
-   * cancellable.wast report STARTING for an entry the reference admits. So
-   * settlement is recorded EAGERLY (at park time, below), `tick` refuses to
-   * run anything while a tail is unserviced, and the driving loop services
-   * this queue first.
+   * Settled activation tails in settlement order. Result lifting, callback
+   * dispatch and implicit-thread exit follow the wasm call; JSPI separates
+   * them by microtasks where definitions.py `Thread.resume` keeps them in one
+   * step. Record settlement eagerly and service tails before `tick` so later
+   * threads do not observe unfinished bookkeeping or unreleased exclusivity.
    */
   readonly settled: {
     // deno-lint-ignore no-explicit-any
@@ -1042,14 +671,8 @@ export class Store {
   }[] = [];
 
   /**
-   * Park `t` on `promise` (jspi `awaitValue`), with EAGER settle tracking.
-   *
-   * The `.then` here is also what closes the claim discipline for
-   * resumptions the driver did not settle itself (a guest built-in resolving
-   * another activation's suspension — `subtask.cancel` delivering a
-   * cancellation): the claim taken at settle time must survive until the
-   * resumed activation parks again or finishes, and "finished" is exactly
-   * this continuation firing. See `releasePendingOf`.
+   * Track settlement at park time, including resumptions initiated by guest
+   * built-ins rather than a driver. Completion or rejection releases claims.
    */
   // deno-lint-ignore no-explicit-any
   noteAwaiting(t: any, promise: Promise<unknown>): void {
@@ -1067,25 +690,10 @@ export class Store {
   }
 
   /**
-   * Service settled activation tails. Returns whether anything ran. EVERY
-   * driving loop must call this before (and interleaved with) `tick` — the
-   * queue gates `tick`, so a driver that never services it wedges the store
-   * (observed: host-stream pumping between export calls). A `resumeWith` may
-   * throw (trap unwinding); callers propagate or park it exactly as they do
-   * for `tick`.
-   *
-   * Every non-stale tail is dispatched immediately, in queue order: there is
-   * no enterability condition to defer on (CM#705).
-   *
-   * The ordering discipline is therefore settle order, full stop — and it is
-   * the reason this queue exists rather than a direct resumption from the
-   * settle continuation: in definitions.py the tail runs atomically inside
-   * the entered bracket, so the phantom-state gate (`tick` refuses while an
-   * unserviced tail is queued, see `hasServiceableSettled`) is what keeps a
-   * parked activation's tail from being observed out of order.
-   *
-   * A POISONED instance's tail is dispatched like any other: `resumeWith`'s
-   * poison early-return retires it, so it drains rather than leaking.
+   * Dispatch tails in queue order without an entry-lock test. Every driver
+   * must service this queue before and between ticks; exceptions propagate
+   * to that driver. Stale entries are discarded, and `resumeWith` retires
+   * poisoned-instance tails without running their bodies.
    */
   serviceSettled(): boolean {
     let did = false;
@@ -1095,8 +703,7 @@ export class Store {
     scan: for (;;) {
       for (let i = 0; i < this.settled.length; i++) {
         const s = this.settled[i];
-        // Stale: the thread was resumed elsewhere (driveAsync's race-winner
-        // path). Drop it regardless of enterability; it is not progress.
+        // Another driver already resumed this thread.
         if (!this.awaiting.has(s.t)) {
           this.settled.splice(i, 1);
           continue scan;
@@ -1114,60 +721,20 @@ export class Store {
   }
 
   /**
-   * "Would a `serviceSettled` call make progress right now?" — i.e. is any
-   * entry queued at all. Every entry either dispatches or is dropped as
-   * stale, so a non-empty queue always makes progress.
-   *
-   * It exists to gate `tick` (and to keep the driving loops from parking)
-   * behind unserviced tails: resuming some other thread while a settled tail
-   * waits would expose the out-of-order state the queue is there to prevent.
+   * Every queued entry can dispatch or be discarded as stale. A non-empty
+   * queue therefore gates `tick` and prevents drivers from parking.
    */
   hasServiceableSettled(): boolean {
     return this.settled.length > 0;
   }
 
   /**
-   * "Does component instance `inst` still have runnable work?" — the
-   * drain-to-quiescence predicate behind the **deferred entry decision**
-   * (issue #43).
-   *
-   * wasmtime decides an async-lowered call's initial status only after the
-   * executor has drained the work queued ahead of it: a queued
-   * `GuestCall(StartImplicit)` is popped, and if `is_ready` is false
-   * (`do_not_enter || backpressure`) the caller is told STARTING
-   * (concurrent.rs :1497-1522, :3040-3160). That formulation is FIFO-order
-   * dependent; polyengine uses the order-robust restatement (issue #43): *the
-   * call reports STARTING only if the callee is still unstarted after the
-   * instance's runnable work has been exhausted* — drain to quiescence, not
-   * pop-one. That is what keeps `sync-streams.wast` green under
-   * `POLYENGINE_SCHED_SEED` shuffles, which wasmtime's own rule would not be.
-   * Adjudicated 2026-08-10 (issue #43): entry-status timing is NOT
-   * normative — this predicate implements a scheduler *policy*, picked so
-   * the suite's schedule-overfitted STARTED assertion holds under any
-   * seed; the hold-rule gate itself is the spec semantics.
-   *
-   * "Runnable work of `inst`" is, exhaustively:
-   *
-   *   (a) a settled-but-unserviced activation tail (`settled`) — bookkeeping
-   *       the reference runs atomically inside `Thread.resume`, so the
-   *       instance is mid-step, not quiescent;
-   *   (b) a waiting entry (thread or `SuspensionPoint`) of `inst` that is
-   *       `ready()` — the scheduler will resume it on the next tick. A gate
-   *       holder parked mid-frame on an un-rendezvous'd operation is NOT
-   *       ready and therefore contributes nothing: that is the "holder
-   *       cannot be drained" case, whose answer is STARTING;
-   *   (c) a thread of `inst` in `awaiting` whose promise is not a scheduler
-   *       park — i.e. genuinely in flight across an engine microtask hop.
-   *       A JSPI-parked activation appears in `awaiting` *and* owns a
-   *       `SuspensionPoint` in `waiting` (`SuspensionPoint.owner`), and is
-   *       accounted for by (b) instead; counting it here would make the
-   *       instance permanently non-quiescent.
-   *
-   * `excludeTask` is the CALLER's task, and is excluded everywhere: the
-   * caller cannot be drained — it is the activation asking the question.
-   * This is what makes the "only obstacle is the current running activation"
-   * shape (a nested lower from inside the gate holder's own invocation)
-   * answer STARTING immediately, with no park at all.
+   * Work to drain before deciding an async callee is still STARTING:
+   * queued tails, ready waiters, and awaiting threads crossing an engine
+   * hop. A thread owning a SuspensionPoint is genuinely blocked, so only
+   * that point's readiness counts. Exclude the caller's task throughout:
+   * it cannot be drained while asking this question. This is the runtime's
+   * entry-status scheduling policy, not an additional spec entry gate.
    */
   hasRunnableWork(inst: unknown, excludeTask: unknown): boolean {
     // deno-lint-ignore no-explicit-any
@@ -1195,71 +762,25 @@ export class Store {
   }
 
   /**
-   * definitions.py `Store.tick` (@ 2f13265): resume one ready thread. There
-   * is no bracket and no gate — the reference body is exactly "pick a ready
-   * thread, resume it" (CM#705).
-   *
-   * Returns false when no thread was ready, so callers can distinguish
-   * "made progress" from "stuck" without inspecting the queue themselves.
+   * Resume one ready thread, following definitions.py `Store.tick` with
+   * JSPI ordering and poison filters. False means no step ran, including
+   * when a pending resumption or queued tail must be serviced first.
    */
   tick(): boolean {
-    // One suspension resolved per turn.
-    //
-    // Settling a suspension hands control to wasm in a *microtask*, not
-    // synchronously — so `tick` returns with the resumed activation not yet
-    // run and its pending entry still outstanding. Resolving a second one
-    // before that happens would let the first activation's built-ins
-    // attribute themselves to the wrong task (observed as `exit-sync-call`
-    // popping another task's bracket). Refusing to make progress while an
-    // entry is pending forces the caller to yield to the microtask queue
-    // first, which is exactly what `driveAsync` does.
-    //
-    // THIS STORE's entries only (issue #210): activations never cross stores,
-    // so another store's pending resumption says nothing about what this one
-    // may schedule.
+    // Let this store's settled suspensions reach their engine continuations
+    // before scheduling another thread.
     if (this.pendingResumptions.size > 0) return false;
-    // Same discipline, other edge: a settled-but-unserviced activation tail
-    // (see `settled`) is mid-"atomic resume" from the reference's point of
-    // view; scheduling anything before servicing it acts on phantom state.
-    // That is settle-order discipline and has nothing to do with reentrance.
-    // `hasServiceableSettled` (rather than
-    // "queue non-empty") only because a tail whose thread was already resumed
-    // elsewhere must not wedge the store.
+    // Finish queued bookkeeping before observing readiness.
     if (this.hasServiceableSettled()) return false;
-    // Ready is sufficient — almost. Nothing filters this set for reentrance:
-    // at the pinned reference (definitions.py @ 2f13265) `Store.tick` resumes
-    // any ready thread with no gate and no bracket (CM#705), so a sibling
-    // instance's thread going ready while another instance is entered from
-    // the host is simply resumable.
-    //
-    // What is added is polyengine's per-instance poisoning divergence: a
-    // poisoned instance is a corpse, its threads must never resume, and the
-    // MARKER is the whole test. That filter lives in `readyCandidates` (so
-    // the drivers' deadlock probe reads the same candidate set this does).
-    // `Thread.resumeWith` makes the same call on the tail path.
     const candidates = this.readyCandidates();
     if (candidates.length === 0) return false;
     const thread = chooseCandidate(candidates);
     const inst = thread.task.inst;
-    // A trap out of the resumption poisons the instance (polyengine's named
-    // divergence: a per-instance corpse where wasmtime kills the whole store).
-    // Capability signals are the exception: a `NeedsJspi`/`PendingCapability`
-    // marks an operation this runtime cannot perform, not a component fault —
-    // in the reference that operation blocks and then completes, so poisoning
-    // here would turn one unsupported operation into a permanently dead
-    // instance.
+    // Capability failures do not poison; other escaping failures do.
     try {
       thread.resume();
     } catch (e) {
       if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
-        // Poisoned: its live stream/future ends can never rendezvous again —
-        // retire them so parked host peers settle instead of hanging (#66).
-        //
-        // Routed through `notifyInstancePoisoned` (not the raw hook) so the
-        // poison MARKER is recorded too (polyengine#145): `Thread.resumeWith`'s
-        // quiet-retire of late settled tails (#156) and `entryRefusal` both
-        // read it; without the marker a settled tail of this dead instance
-        // would be resumed as if healthy.
         notifyInstancePoisoned(
           inst as unknown as { handles: Iterable<unknown> },
           e,
@@ -1276,14 +797,9 @@ export class Store {
 // ---------------------------------------------------------------------------
 
 /**
- * Host-activity "arm" promises, by identity: entries a driver parks in
- * `Store.pendingHostCalls` purely to say "the embedder may still act". They
- * are NOT outstanding work — treating them as such is the "activity keeps
- * `pendingHostCalls` non-empty forever" hazard documented in
- * exec/host_streams.ts — so the between-calls drivers filter them out via
- * `hasRealHostCall`/`realHostCalls`. The registry lives here (rather than in
- * exec/host_streams.ts, which mints the arms) so exec/boundary.ts's
- * settlement pump can share the classification without an import cycle.
+ * Activity arms mean the embedder may still act, not that it owes a result.
+ * Between-call pumps exclude them from outstanding-work checks. Shared here
+ * to avoid a boundary/host_streams import cycle.
  */
 const hostActivityArms = new WeakSet<Promise<unknown>>();
 
@@ -1310,15 +826,8 @@ export function realHostCalls(store: Store): Promise<unknown>[] {
 }
 
 /**
- * Is there anything left that only a turn of the event loop could advance?
- * Activity arms do not count: they say "the embedder may still act", which is
- * precisely the state in which a between-calls driver should stop and let the
- * operation's promise stay pending (the documented hang, exec/host_streams.ts
- * module header).
- *
- * `store.settled` (settled-but-unserviced activation tails) DOES count: it
- * gates `tick`, so exiting with a tail queued is a lost wakeup — the store is
- * wedged until some other driver appears.
+ * No queued tails, awaiting activations, or real host calls. Activity arms
+ * and ready waiting threads do not count; callers must drain ticks first.
  */
 export function storeQuiescent(store: Store): boolean {
   return store.settled.length === 0 && store.awaiting.size === 0 &&
@@ -1326,19 +835,9 @@ export function storeQuiescent(store: Store): boolean {
 }
 
 /**
- * The reference's `canon_lift` sync driving loop (definitions.py, lines
- * 2190-2192, post-CM#705):
- *
- * ```python
- * while task.state != Task.State.RESOLVED:
- *   candidates = { t for t in inst.threads if t.ready() }
- *   trap_if(not candidates)
- *   random.choice(list(candidates)).resume()
- * ```
- *
- * Note the candidate set is `inst.threads` — threads *of the callee instance*
- * — with no exclusion (CM#705 dropped the prior `exclusive_thread` carve-out),
- * and that an empty set is a **trap** (the spec's deadlock trap), not a hang.
+ * definitions.py `canon_lift`'s sync loop: drive ready threads of the callee
+ * instance until resolution, trapping if none are ready. Unlike the host
+ * driver, this neither drains the whole store nor awaits JSPI microtasks.
  */
 export function driveSyncLift(
   task: {

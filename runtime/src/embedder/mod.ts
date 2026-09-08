@@ -2,9 +2,8 @@
 //
 // The host-facing surface: camelCase facades, resource classes on both sides,
 // stream/future handles, version-canonical import resolution and the branded
-// error model — all built at instantiate time from the plan's type tables, so
-// the layer works fully untyped. Bindgen (a separate track) emits compile-time
-// types that cast this facade; no generated code participates.
+// error model, built from the plan's type tables for typed or untyped callers.
+// Generated bindings verify their world digest and delegate to this facade.
 
 // Copy registration (contracts/embedder-api.md §"Module identity and
 // @polyengine/protocol"; issue #83). Runs at module evaluation, so
@@ -26,13 +25,8 @@ registerRuntimeCopy({
 
 export { COPY_URL, RUNTIME_VERSION } from "./copy.ts";
 
-// The host-ABI version (contracts/embedder-api.md §"The host-ABI surface and its
-// version"): the runtime's exported surface is application-only. The
-// courtesy re-exports (error classes, predicates, brands, `suspending`,
-// realm crossing, the copy registry) are removed — host modules import that
-// vocabulary from `@polyengine/protocol` directly. The runtime still
-// registers its own copy on the census above; it just no longer hands out
-// the registry API to callers of this module.
+// Application machinery lives here. Host modules import ABI vocabulary
+// (errors, brands, suspension marks, realm crossing) from @polyengine/protocol.
 
 export {
   artifactsFromEnvelope,
@@ -53,25 +47,20 @@ export {
   requiredImports,
 } from "./imports.ts";
 
-// `NameCollisionError` is the one error class that stays here: it's raised
-// while building an instantiation facade, before any handle/value exists —
-// application machinery, not host-ABI vocabulary (contracts/embedder-api.md
-// §"The host-ABI surface and its version", §"The host-ABI surface and its version").
+// Naming failures belong to facade construction/value adaptation, not host ABI.
 export { NameCollisionError } from "./errors.ts";
 
 export { type ElemCodec } from "./streams.ts";
 
-// `createStream<T>()` — the host-ABI version stream-pair factory (contracts/embedder-api.md
-// §"The host-ABI surface and its version" / §"Streams and futures"): the
-// `Stream.create()` static's application-surface spelling, since the
-// concrete `Stream`/`StreamWriter` classes are no longer exported. Handle
-// TYPES are spelled against `@polyengine/protocol`'s structural interfaces.
+// The application creates pairs; host modules use protocol handle interfaces.
 import { Stream as InternalStream } from "./streams.ts";
 import type {
   Stream as ProtocolStream,
   StreamWriter as ProtocolStreamWriter,
 } from "@polyengine/protocol";
 
+/** Create a stream/writer pair. Writer operations wait until passing the
+ * stream to a guest binds its element type. */
 export function createStream<T>(): {
   stream: ProtocolStream<T>;
   writer: ProtocolStreamWriter<T>;

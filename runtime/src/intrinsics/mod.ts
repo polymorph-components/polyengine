@@ -1,18 +1,6 @@
-// Host trampolines (contracts/intrinsics.md §B) and FACT-adapter intrinsic
-// obligations (§A) — the core subset, with instantiate-time (never
-// call-time) capability-gated failures for everything else.
-//
-// Implemented from the core subset:
-//   lower-import        host function call through descriptor-IR lift/lower
-//   trap                FACT `Trap` import -> ComponentTrap
-//   enter/exit-sync-call  degenerate sync-call bookkeeping (assert-and-count)
-//   resource-new/rep/drop  sync resource paths over cabi handle tables
-//                          (resources capability, implemented early: the
-//                          resources fixture references them at instantiation)
-//
-// Everything else fails at instantiate time naming the capability that
-// intrinsics.md §B schedules it under — "this component needs the task core"
-// is a feature, not a crash.
+// Host trampolines and FACT-adapter intrinsics (contracts/intrinsics.md).
+// Referenced unsupported kinds fail during instantiation; implemented blocking
+// forms use the configured suspension discipline.
 
 import {
   canonResourceDrop,
@@ -97,43 +85,27 @@ export * from "./stream_builtins.ts";
 /**
  * Where a host trap thrown *inside* a FACT adapter is remembered.
  *
- * FACT wraps every adapter body in a `try_table … catch_all` exception
- * barrier (wasmtime-environ 47.0.3 `fact/trampoline.rs:3939`
- * `enter_exception_barrier`) so that a guest exception escaping a component
- * becomes a trap rather than unwinding into the caller. In wasmtime a host
- * trap unwinds out of band and is unaffected; in a JS host our traps *are*
- * JS exceptions, so the barrier swallows them and re-raises the generic
- * `UncaughtException` FACT trap — which would violate contracts/intrinsics.md
- * §"Universal semantics" 2 ("traps ... must not be catchable by guest code").
+ * FACT's `enter_exception_barrier` (`fact/trampoline.rs`) converts escaping
+ * exceptions to `UncaughtException`. Host traps are JS exceptions too, so we
+ * remember and restore them to preserve their cause across nested barriers.
+ * A guest exception with no pending host trap keeps the generic message.
  *
- * The fix is to remember the trap on the way out and restore it when the
- * barrier reports `UncaughtException`. A genuine guest exception leaves
- * `pending` untouched and keeps the generic trap.
- *
- * **Residual limitation (inherent to a JS host).** wasmtime's traps are
- * unforgeable and uncatchable: they unwind out of band, and no guest
- * construct can observe or swallow one. Ours are ordinary JS exceptions, so
- * a guest that wraps a call in its own `try_table (catch_all …)` *can* catch
- * a host trap mid-flight and continue — the Component Model says that must be
- * impossible. Recovering full unforgeability needs an out-of-band channel
- * (e.g. a poison flag consulted at every host boundary crossing) and is not
- * attempted here; the barrier case above is the one that occurs in practice,
- * because FACT emits it on every adapter. Recorded as a known gap.
+ * Limitation: this preserves diagnostics, not uncatchability. A guest's own
+ * `try_table catch_all` can catch a host trap and continue, contrary to the
+ * Component Model's trap semantics. No out-of-band mechanism prevents that.
  */
 export interface HostTrapState {
   pending: unknown;
 }
 
 /**
- * Trap-code → message, from wasmtime-environ 47.0.3 `trap_encoding.rs`
+ * Trap-code → message, from wasmtime-environ `trap_encoding.rs`
  * (`generate_trap_type!`), whose ordinals are what FACT passes to the
- * `runtime.trap` import. Only the codes a sync FACT adapter can raise are
- * listed; anything else falls back to the numeric code.
+ * `runtime.trap` import. Unlisted codes fall back to the numeric code.
  *
  * Rendered with wasmtime's `"wasm trap: "` prefix (its `impl Display for
  * Trap`), because that is the text the official suite's `assert_trap`
- * commands expect for adapter-raised traps
- * (e.g. `values/realloc.wast:67,94`).
+ * commands expect for adapter-raised traps (e.g. `values/realloc.wast`).
  */
 const FACT_TRAP_MESSAGES: Record<number, string> = {
   9: "wasm `unreachable` instruction executed",
@@ -154,7 +126,7 @@ const TRAP_UNCAUGHT_EXCEPTION = 49;
 
 export { UnsupportedFeatureError } from "./errors.ts";
 
-/** Capability at which each trampoline kind stops instantiate-failing. */
+/** Diagnostic capability category for unsupported trampoline kinds. */
 const TRAMPOLINE_CAPABILITY: Record<
   string,
   "core" | "resources" | "task-core"
@@ -198,21 +170,16 @@ export class SyncCallScope {
   readonly lenders: ResourceHandle[] = [];
 
   /**
-   * definitions.py `Subtask.add_lender` (line 890) — note there is **no**
-   * `own` check, and `lift_borrow` (line 1516) calls it unconditionally: a
-   * component that received a borrow may lend it onward, and the borrow
-   * handle's own `num_lends` is what blocks `resource.drop` on it until the
-   * onward call returns (`canon_resource_drop`, line 2325, traps on
-   * `num_lends != 0` for owning *and* borrowed handles alike).
-   * wasmtime 47.0.3 `vm/component/resources.rs:285` (`resource_lift_borrow`)
-   * agrees.
+   * definitions.py `Subtask.add_lender`: borrowed handles can be lent onward
+   * too. `canon_resource_drop` checks `num_lends` for both own and borrow
+   * handles, so the source remains undroppable until delivery releases it.
    */
   addLender(h: ResourceHandle): void {
     h.numLends += 1;
     this.lenders.push(h);
   }
 
-  /** definitions.py `Subtask.deliver_resolve` (lines 902-906): releases lenders at delivery time. */
+  /** definitions.py `Subtask.deliver_resolve`: release lenders at delivery. */
   releaseLenders(): void {
     for (const h of this.lenders) h.numLends -= 1;
     this.lenders.length = 0;
@@ -226,15 +193,11 @@ export class SyncCallScope {
  * `on_start` (the copy adapters cannot block, so the window never suspends).
  *
  * Reference mapping (definitions.py): `taskScope` is the callee `Task` —
- * `lower_borrow` (line 1821) counts `num_borrows` there, and
+ * `lower_borrow` counts `num_borrows` there, and
  * `Task.return_`/`cancel` trap while it is non-zero; `lenders` is the
  * caller-side `Subtask` (async-start-call) or a plain scope released when
  * the caller's blocked frame gets its results (sync-start-call) —
- * `lift_borrow` (line 1517) adds lenders there, released at
- * `deliver_resolve` (line 904). Found by the #18 polymorph-tls smoke: the
- * suite is the first corpus with borrow-carrying composed calls through
- * prepare/start adapters, which previously asserted "transfer-borrow
- * outside an enter-sync-call/exit-sync-call bracket".
+ * `lift_borrow` adds lenders there, released at `deliver_resolve`.
  */
 export interface FactStartScope {
   /** The callee task (satisfies cabi's `TaskBorrowScope`). */
@@ -269,8 +232,7 @@ export interface TrampolineContext {
    * last; see `FactStartScope`). Separate from `syncCallStack` because the
    * prepare/start protocol has no enter/exit-sync-call bracket — the borrow
    * bookkeeping attaches to the callee `Task` and the caller-side subtask
-   * instead (definitions.py `lower_borrow` line 1821 / `lift_borrow` line
-   * 1517).
+   * instead (definitions.py `lower_borrow` / `lift_borrow`).
    */
   factStartScopes: FactStartScope[];
   /** See `FactCallContext.calleeCanBlock` (intrinsics/fact_calls.ts). */
@@ -292,15 +254,15 @@ export interface TrampolineContext {
   prepared: { current: PreparedCall | null };
   /** Suspension discipline (jspi/bridge.ts). */
   suspensionMode: import("../jspi/mod.ts").SuspensionMode;
-  /** Element types of the plan v2 stream/future tables. */
+  /** Element types of the plan's stream/future tables. */
   streamElem(index: number): import("../cabi/types.ts").ValType | null;
   futureElem(index: number): import("../cabi/types.ts").ValType | null;
   streamTableInstance(index: number): ComponentInstanceState;
   futureTableInstance(index: number): ComponentInstanceState;
   /**
    * The component instance owning error-context table `index`
-   * (`TypeComponentLocalErrorContextTableIndex`, plan v3 `errorContextTables`).
-   * Its own index space — NOT the resource-table one it used to borrow.
+   * (`TypeComponentLocalErrorContextTableIndex`, `errorContextTables`).
+   * This index space is distinct from resource-table indices.
    */
   errorContextTableInstance(index: number): ComponentInstanceState;
   /**
@@ -331,15 +293,14 @@ interface ResourceTrampolineDecl {
  * initializer/arg/export resolution — i.e. at instantiate time — so an
  * unsupported kind fails instantiation, not the first call
  * (plan-format.md "Executor obligations"). Unreferenced trampolines are
- * never created and therefore never fail (intrinsics.md §B tolerates e.g.
- * an unreferenced task-return until the task core exists).
+ * never created and therefore never fail.
  */
 export function createTrampoline(
   decl: WireTrampoline,
   ctx: TrampolineContext,
 ): CoreFn {
   const fn = createTrampolineBody(decl, ctx);
-  // Remember host traps so the FACT exception barrier cannot swallow them
+  // Preserve host-trap diagnostics across the FACT exception barrier
   // (see `HostTrapState`). This wraps the `trap` trampoline too, which is
   // what keeps a specific trap specific across *nested* adapters: the inner
   // barrier's `trap` trampoline restores and rethrows the real trap, this
@@ -355,18 +316,12 @@ export function createTrampoline(
   };
 }
 
-/**
- * The component instance a trampoline is declared in (wasmtime names it in
- * every instance-scoped `Trampoline` variant). This is the static answer to
- * definitions.py's `current_instance()`, and unlike it, it is defined during
- * instantiation — when a core module's start function may already be calling
- * these built-ins. See the header of ./async_builtins.ts.
- */
 /** Narrow the trampoline context to what the stream built-ins need. */
 function sctx(ctx: TrampolineContext): StreamTrampolineContext {
   return ctx as unknown as StreamTrampolineContext;
 }
 
+/** Static instance identity, available even to instantiation-time start functions. */
 function declaredInstance(
   decl: WireTrampoline,
   ctx: TrampolineContext,
@@ -379,12 +334,6 @@ function declaredInstance(
   return ctx.componentInstance(instance);
 }
 
-/**
- * The FACT sync-call bracket stack in force right now: the running task's
- * (activations interleave since background activations exist, so a single
- * executor-wide stack is not a stack), or the executor's when no task is
- * running — instantiation-time start functions.
- */
 // deno-lint-ignore no-explicit-any
 const SCOPE_TRACE = (() => {
   try {
@@ -394,6 +343,10 @@ const SCOPE_TRACE = (() => {
   }
 })();
 
+/**
+ * Brackets belong to the running thread because activations can interleave.
+ * Instantiation-time start functions have no thread and use the executor stack.
+ */
 function syncScopes(ctx: TrampolineContext, site = "?"): any[] {
   const thread = maybeCurrentThread() as
     | { syncCallStack: any[] }
@@ -446,12 +399,7 @@ function createTrampolineBody(
       };
     }
 
-    // Sync-call task bookkeeping (intrinsics.md §A) — assert-and-count.
-    // wasmtime 47 signatures:
-    // enter-sync-call carries the caller/callee instance pair, which is what
-    // the reentrance gate below needs; balance of the bracket is asserted at
-    // component teardown by tests.
-    // Signatures (wasmtime-environ 47.0.3 `fact.rs:743,754`):
+    // FACT sync-call borrow brackets (wasmtime-environ `fact.rs`):
     //   async.enter-sync-call(caller_instance: i32, async: i32,
     //                         callee_instance: i32) -> ()
     //   async.exit-sync-call() -> ()
@@ -461,24 +409,8 @@ function createTrampolineBody(
         async_?: number,
         calleeInstance?: number,
       ) => {
-        // ENTRY REFUSAL at the fused sync-call boundary.
-        //
-        // The reference has no reentrance gate (CM#705; definitions.py @
-        // 2f13265 has no `may_enter`/`entering_set`/`enter_from`): a
-        // guest->guest call through `Store.lift` runs `canon_lift`
-        // unconditionally, and host-mediated reentrance — host -> A.f -> C.g
-        // -> host import -> host invokes C.g — is simply valid. wasmtime's
-        // fused adapters agreed all along: `enter_guest_sync_call`
-        // (47.0.3 `runtime/component/concurrent.rs:1723`) performs no
-        // reentrance check, and `fact/trampoline.rs:120-127` decides the
-        // caller==callee / ancestor pairs statically at compile time (what
-        // `test/async/trap-on-reenter.wast` cases 2 and 3 pin — a translation
-        // -time trap, not this site).
-        //
-        // What this site does check is polyengine's per-instance poisoning: a
-        // callee that trapped is a corpse and may never be entered again,
-        // and the refusal names the original trap (polyengine#145). That is
-        // the whole content of this check.
+        // Reentrance is valid. `entryRefusal` enforces per-instance poisoning,
+        // a runtime divergence, and reports the original trap.
         if (
           typeof callerInstance === "number" &&
           typeof calleeInstance === "number"
@@ -492,27 +424,12 @@ function createTrampolineBody(
           );
           if (refusal !== null) trap(refusal);
         }
-        // `async_` records whether the callee is *async-lifted*. wasmtime
-        // stores it on the guest task it creates here
-        // (`concurrent.rs:1723` `enter_guest_sync_call`, whose `callee_async`
-        // parameter flows into `GuestTask::new`) and never traps on it.
-        //
-        // Before the task core existed this trampoline refused `async_ == 1`
-        // rather than silently treating an async callee as sync. That guard is
-        // now stale and actively wrong: a sync-lowered caller reaching an
-        // async-lifted export is the `sync-start-call` path
-        // (intrinsics/fact_calls.ts), and the task it needs is created by
-        // `prepare-call`, not here. What remains of this bracket for us is the
-        // borrow bookkeeping (`SyncCallScope`), which applies either way.
+        // This bracket manages borrows regardless of the callee's asyncness;
+        // the prepare/start protocol creates any separate callee task.
         void async_;
         ctx.stats.enterSyncCalls++;
-        // Per task where there is one; the executor-wide stack is the
-        // fallback for a start function running at instantiation time, which
-        // has no task (see `maybeCurrentTask`).
-        // Invariant, per ACTIVATION: every `enter` is matched by exactly one
-        // `exit` on the same stack. Recorded here so the `exit` side can
-        // assert it structurally rather than only by depth (CE_SCOPE_TRACE
-        // proved this is where the interesting failures live).
+        // Normal return must match enter/exit on the same activation's stack;
+        // trap unwind releases any scopes whose exit was skipped.
         const scopes = syncScopes(ctx, "enter");
         scopes.push(new SyncCallScope());
       };
@@ -527,14 +444,11 @@ function createTrampolineBody(
         assert_(
           scope !== undefined,
           // If this fires, an `exit` reached an activation that never ran the
-          // matching `enter` -- the bracket is attached to the wrong unit
-          // again. See `Thread.syncCallStack`.
+          // matching `enter`. See `Thread.syncCallStack`.
           "exit-sync-call with an empty sync-call stack",
         );
         // definitions.py `Task.return_`: the callee may not return while it
-        // still holds borrow handles. Wording parity with wasmtime's
-        // exit-time check (drop-cross-task-borrow.wast:309 pins the async
-        // path; the sync bracket is the same check).
+        // still holds borrow handles.
         trapIf(
           scope!.numBorrows > 0,
           "borrow handles still remain at the end of the call",
@@ -542,8 +456,7 @@ function createTrampolineBody(
         scope!.releaseLenders();
       };
 
-    // Guest-side resource built-ins (sync paths of docs/architecture.md §7 over the cabi
-    // handle tables). rep is always i32 in current wasmtime.
+    // Guest-side resource built-ins; reps and handle indices are i32.
     case "resource-new": {
       const d = decl as unknown as ResourceTrampolineDecl;
       const inst = ctx.componentInstance(d.instance);
@@ -565,12 +478,6 @@ function createTrampolineBody(
       };
     }
 
-    // FACT resource transfer (contracts/intrinsics.md §A, wasmtime-environ
-    // 47.0.3 `fact.rs:721` — signature `(i32 src_handle, i32 src_table,
-    // i32 dst_table) -> i32 dst_handle`). These are the fused-adapter form of
-    // `lift_own`/`lower_own` and `lift_borrow`/`lower_borrow`
-    // (definitions.py) with the src/dst tables named by index rather than
-    // implied by the running instance.
     // FACT string transcoders (contracts/intrinsics.md §B). The plan
     // carries the op name plus the source/destination `RuntimeMemoryIndex`es;
     // `./transcode.ts` holds the twelve operations.
@@ -604,8 +511,7 @@ function createTrampolineBody(
     }
 
     // --- 0.3 async built-ins (contracts/intrinsics.md §B) -------------
-    // All ported in ./async_builtins.ts; the ones that would have to block a
-    // wasm frame fail there, at the call site, with a JSPI-shaped message.
+    // Blocking forms require JSPI when they cannot complete immediately.
     case "task-return":
       return createTaskReturn(
         decl as unknown as {
@@ -617,13 +523,6 @@ function createTrampolineBody(
       );
     case "task-cancel":
       return createTaskCancel();
-    // No `backpressure-set` case on purpose: wasmtime-environ 47.0.3 has only
-    // `Trampoline::BackpressureInc` / `BackpressureDec`
-    // (`component/info.rs:775,781`) — there is no `BackpressureSet` variant to
-    // dispatch, so a case for it would be unreachable code implying a wire
-    // shape that cannot occur. definitions.py's own dead
-    // `canon_backpressure_set` was removed upstream (CM PR #690); see
-    // upstream-component-model-repo-findings.md CM-2, RESOLVED.
     case "backpressure-inc":
       return createBackpressureInc(declaredInstance(decl, ctx));
     case "backpressure-dec":
@@ -787,13 +686,8 @@ function createTrampolineBody(
     case "error-context-transfer":
       return createErrorContextTransfer(
         ctx as unknown as AsyncTransferContext,
-        // plan v3: the transfer's table arguments are
-        // `TypeComponentLocalErrorContextTableIndex`es (fact/trampoline.rs:
-        // 3526-3539), resolved through the plan's own `errorContextTables`
-        // section. Before v3 this went through `resourceTableInstance` — a
-        // different index space, which mis-routed silently whenever a
-        // concrete resource table happened to exist at the colliding slot
-        // (polyengine#89).
+        // Table arguments are `TypeComponentLocalErrorContextTableIndex`es,
+        // not resource-table indices.
         (t) => ctx.errorContextTableInstance(t),
       );
 
@@ -852,25 +746,11 @@ function transferOwn(
 
 /**
  * `lift_borrow` from the source table followed by `lower_borrow` into the
- * destination table. The source handle stays in place; the destination gets a
- * non-owning handle.
- *
- * Two deviations from the plain lift/lower pair, both taken from
- * definitions.py:
- *
- *  - `lower_borrow` returns the *rep* directly when the destination instance
- *    is the one that implements the resource ("own the resource" fast path),
- *    since a component always has direct access to its own reps.
- *  - lender / `num_borrows` bookkeeping is attached to the enclosing
- *    `SyncCallScope` (the `enter-sync-call` / `exit-sync-call` bracket),
- *    which is this path's stand-in for the callee `Subtask`/`Task` of
- *    definitions.py.
+ * destination table. The source handle stays in place. The implementing
+ * instance receives the rep directly; other destinations get a non-owning
+ * handle. Lenders and borrow counts attach to the FACT start window or sync
+ * bracket that represents the reference's Subtask/Task for this call.
  */
-// CONTRACT: contracts/intrinsics.md §A describes ResourceTransfer* only as
-// "handle-table moves between component instances" — the borrow-scope
-// interaction beyond the lender registration is taken from definitions.py
-// (`lift_borrow`/`lower_borrow` + `Subtask.lenders`/`Task.num_borrows`) and
-// is what makes `test/resources/borrows.wast:162` (`lend-trap`) trap.
 function transferBorrow(
   ctx: TrampolineContext,
   handle: number,

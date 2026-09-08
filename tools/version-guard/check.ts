@@ -1,49 +1,18 @@
 #!/usr/bin/env -S deno run -A
-// The release version guard (three modes: `pr`, `publish`, `cut`).
+// Release version guard; policy is in AGENTS.md "Versioning and publishing".
+// runtime/translator/wasi/ct-runner version together; protocol is independent.
 //
-// What it defends. The five packages publish under two rules (AGENTS.md
-// §Versioning, README §Consuming): @polyengine/{runtime,translator,wasi,
-// ct-runner} version in LOCKSTEP and their manifests always carry the NEXT
-// release; @polyengine/protocol versions independently and publishes at the
-// next cut after its manifest bumps. Breaking changes are
-// declared per package by PR labels `breaking/<package>`; no label means
-// caret-compatible. Labels are MUTABLE and read live from the GitHub API
-// every time — a label corrected after the merge still steers the cut,
-// which is the point of reading them at cut time rather than trusting an
-// event payload.
+//   local   - working-tree lockstep, monotonicity and protocol byte identity,
+//             without GitHub/PR context; advisory golden-change reminder.
+//   pr      - early version/label checks; no-op without PR_NUMBER.
+//   publish - compare protocol bytes with its named published version before
+//             release packaging, including artifact-only prereleases.
+//   cut     - release-window labels, minor advances, goldens and release notes.
 //
-// The three modes, and why the enforcement point is where it is:
-//
-//   pr      — early warning, inside `gha::core` on PR runs. Lockstep
-//             agreement, monotonicity against the last cut, label/version
-//             agreement in both directions, and the protocol-tear warning.
-//             Advisory in the sense that matters: label edits deliberately
-//             do NOT re-trigger CI, so a PR-time verdict can be stale by
-//             merge time. Cheap to be wrong here; a re-run picks up fixes.
-//   publish — the AUTHORITATIVE tear guard, in release.yml's publish step,
-//             in BOTH modes. Registry publishes happen only at explicit
-//             cuts (#223), so the window between a PR-time verdict and a
-//             publish is no longer a race — but a PR-time verdict is still
-//             the wrong thing to trust: it misses label edits made after
-//             the run, commits pushed straight to main, and any run stale
-//             by the time the cut happens. This check runs at the publish
-//             itself, reads the tree being published, and cannot be stale.
-//             On the prerelease path it publishes nothing and is instead
-//             early detection: a red means the next CUT would tear.
-//   cut     — label/version consistency for the whole release window, plus
-//             the release-notes fragment, in release.yml on release=true
-//             only. This is where a breaking label becomes a minor bump.
-//
-// The tear this exists for (the concrete incident): PR #219 changed
-// protocol/src without bumping protocol/deno.json, because its merge
-// resolution assumed 0.2.0 was still unpublished — under the pre-#223 flow
-// every green main published, and one such run had published 0.2.0 hours
-// earlier. Every publish after that skipped protocol as already-published,
-// so runtime@0.4.0-pre.* shipped importing exports the published
-// protocol@0.2.0 did not have: an import-time failure for anyone consuming
-// the pair. #221 (protocol 0.2.1) repaired it. `publish` mode is the check
-// that would have made that red, loudly, at the first publish after the
-// merge.
+// Labels are read live because they may be corrected after merge. Label edits
+// do not rerun CI, so PR checks cannot replace release-time enforcement.
+// Published protocol bytes must match the tree: otherwise dependents can ship
+// importing exports missing from the already-published protocol package.
 
 import { compareSemver, isMinorBumped, parseSemver } from "./semver.ts";
 import {
@@ -159,12 +128,8 @@ export async function latestCutVersion(
 
 export type GoldenChange = { status: "A" | "M" | "D"; path: string };
 
-/** Parse `git diff --name-status ... -- <locked dir>` output. A rename is
- * treated as an M of the old path plus an A of the new one (task authority:
- * dispatch step 1) — the new content still needs the gate, but the OLD
- * golden's disappearance is exactly what a plain M/D would flag, and a pure
- * rename-with-no-content-change should not dodge that by virtue of the
- * path move. A copy (`C...`) only introduces a new path, so it is an A. */
+/** Parse golden name-status output. Renames count as M(old) + A(new), so moving
+ * a golden cannot bypass the modified/deleted gate. Copies count as additions. */
 export function parseGoldenNameStatus(output: string): GoldenChange[] {
   const changes: GoldenChange[] = [];
   for (const raw of output.split("\n")) {
@@ -181,9 +146,7 @@ export function parseGoldenNameStatus(output: string): GoldenChange[] {
     } else if (code === "A" || code === "M" || code === "D") {
       changes.push({ status: code, path: parts[1] });
     }
-    // Other statuses (T, U, X, B) do not occur for plain committed text
-    // fixtures; ignoring them fails closed only in the sense that they
-    // neither trigger nor excuse the gate, which matches "added is free".
+    // Other statuses are ignored; this check covers committed text M/D changes.
   }
   return changes;
 }
@@ -687,25 +650,15 @@ export async function protocolVersionAtRef(
   return JSON.parse(atob(content.replace(/\n/g, ""))).version;
 }
 
-/** The locked-golden name-status diff for the whole release window, `git
- * diff --name-status <lastTag>..<sha> -- <locked dir>`. The release
- * checkout is shallow (actions/checkout@v4 default depth), so the last
- * cut's tag is fetched first — mirroring fetchBase's PR-base fetch — with
- * the same three-dot-unavailable fallback (two-dot local comparison; here
- * there is no merge-base ambiguity to begin with, so `..` is exact rather
- * than a fallback in the same sense, but the two-call shape matches the
- * rest of this file's style). */
+/** Diff locked goldens between the last cut and target SHA. Fetch the tag first
+ * for shallow release checkouts; this compares endpoints, not a merge base. */
 export async function cutGoldenChanges(
   fx: Effects,
   lastTag: string,
   sha: string,
 ): Promise<GoldenChange[]> {
-  // The full-refspec form is load-bearing: without a DESTINATION
-  // (`:refs/tags/…`) the fetch drops the objects into FETCH_HEAD but
-  // creates no local ref, so the tag NAME stays unresolvable and the diff
-  // below fails with "bad revision" (the v0.5.0 cut, first dispatch). The
-  // PR-base fetch this mirrors gets away with a bare source because a raw
-  // sha resolves from the object store alone; a tag name needs a ref.
+  // The destination ref makes the tag name resolvable locally; FETCH_HEAD alone
+  // supplies objects but not the ref used by the diff below.
   await fx.run("git", [
     "fetch",
     "origin",

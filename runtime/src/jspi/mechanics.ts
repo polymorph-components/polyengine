@@ -2,8 +2,7 @@
 // `WebAssembly.Suspending`. This module is intentionally standalone: it has
 // no knowledge of the task/scheduler model (runtime/src/task,exec,intrinsics,
 // plan) and must not import from those directories. It is the mechanics
-// layer that the upcoming JSPI scheduler phase (docs/architecture.md §6) will consume —
-// not the scheduler itself.
+// layer consumed by bridge.ts, not the scheduler itself.
 //
 // # The frame rule (docs/architecture.md §5)
 //
@@ -12,10 +11,8 @@
 // call to a `promising`-wrapped export and any call to a `Suspending`-wrapped
 // import. A JS frame anywhere in between traps.
 //
-// This has been empirically pinned in `runtime/tests/jspi/frame_rule_test.ts`
-// against Deno 2.9.5 / V8 15.0.245.2-rusty: see that file for the exact
-// error constructor, message, and timing observed. Consequences (also
-// findings, not just theory, per that test):
+// `runtime/tests/jspi/frame_rule_test.ts` checks the error and timing.
+// Consequences:
 //
 //   - Host-boundary JS glue is safe: a `Suspending`-wrapped import's JS body
 //     runs to completion and returns a Promise; the actual suspension
@@ -28,11 +25,10 @@
 //
 // # Reentrancy and concurrency (empirical, not mechanics-layer policy)
 //
-// The engine permits things the Component Model forbids (e.g. reentering an
-// instance while one of its exports is suspended) — docs/architecture.md §6 flags this as
-// the scheduler's job to gate, not the engine's. See
-// `reentry_test.ts`/`concurrent_activations_test.ts` for what the engine
-// actually allows; this module does not enforce CM invariants.
+// JSPI does not enforce task backpressure, callback exclusivity or poison
+// refusal. Live-instance reentry is allowed; the scheduler owns the narrower
+// admission and ordering rules. See `reentry_test.ts` and
+// `concurrent_activations_test.ts` for engine behavior.
 
 import { jspiApi } from "./types.ts";
 
@@ -103,10 +99,10 @@ export function makePromising<
 /**
  * Wrap a JS function as a `Suspending` import: when a `promising`-suspendable
  * wasm activation calls it (per the frame rule above) and it returns a
- * genuine Promise, the wasm activation suspends until that Promise settles;
- * if it returns a non-Promise value (or the call site is not suspension-
- * eligible), the value passes straight through — the "fast path", pinned in
- * `suspending_import_test.ts::non_promise_return_is_fast_path`.
+ * genuine Promise, the wasm activation suspends until that Promise settles.
+ * Non-Promise results avoid that wait but still cross the engine's return
+ * hop. A non-eligible call is not a fallback path: it can trap even when the
+ * import returns a plain value (`suspending_import_test.ts`).
  *
  * The returned value is an opaque `WebAssembly.Suspending` instance; hand it
  * directly to the instantiation `imports` object in the slot the wasm module

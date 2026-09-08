@@ -7,15 +7,7 @@
 // Fixtures: runtime/tests/bindgen/fixtures/*.envelope.json are the shim's
 // C-ABI JSON envelope (`{plan, adapters}` — runtime/src/shim/mod.ts /
 // crates/translator-shim's README) for each of the three sync guest
-// fixtures, checked in as static data. Regenerated (2026-08-08, REVISION
-// ROUND) against a current, building `crates/translator-shim` (Track A's
-// `importedResources` field (contracts/plan-format.md schema) — is now
-// present in every envelope, as an empty array for all
-// three fixtures; verified digest-neutral: `computeWorldDigest` on the
-// regenerated envelopes matches the same `EXPECTED` values below, byte-for-
-// byte identical canonical JSON, since none of these fixtures have
-// component-level imports). Regenerate from a clean `crates/translator-shim`
-// checkout:
+// fixtures, checked in as static data. Regenerate from the translator shim:
 //
 //   cargo build -p translator-shim --example dump-plan
 //   for w in hello values resources; do
@@ -138,12 +130,11 @@ Deno.test("digest: verifyWorldDigest flags a mismatch (wrong expected digest)", 
 });
 
 // ---------------------------------------------------------------------------
-// DigestError guard paths (REVISION ROUND: review found these unexercised).
+// DigestError guard paths.
 // ---------------------------------------------------------------------------
 
 Deno.test("digest: imported-resources guard fires (own/borrow cannot be safely aliased)", async () => {
-  // CONTRACT: format.ts:23-33's `importedResources` (v0.2 proposal). No
-  // alias map exists from an imported resource's `ResourceIndex` to a
+  // No alias map exists from an imported resource's `ResourceIndex` to a
   // qualified name yet, so any plan declaring imported resources must be
   // refused outright rather than risk silently aliasing an own/borrow site
   // to the wrong (exported) resource — see digest.ts's buildResourceNameMap.

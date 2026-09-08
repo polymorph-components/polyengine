@@ -1,201 +1,123 @@
 # Conformance harness
 
-The wast→JSON conformance pipeline from docs/architecture.md §11: an offline Rust step
-(`crates/testgen`) converts the official Component Model `.wast` suite into
-JSON command files plus extracted binaries, and a TypeScript runner (this
-directory, Deno) executes the JSON. The component runtime does not exist yet;
-every command that needs it is recorded as a skip with reason
-`pending-runtime`, so the same harness runs green today and becomes the
-conformance gate as the runtime lands.
+`crates/testgen` converts the pinned Component Model WAST suite into JSON commands
+and extracted binaries. This directory executes those commands under Deno;
+browser and engine-shell runners reuse the harness with lane-specific
+expectations. See [architecture](../docs/architecture.md) for the parity policy
+and platform scope.
+
+A green run means no unexpected failures or passing stale xfails in the
+executed corpus. It is **not proof of full conformance**: known failures, skipped
+directives, capability gaps, and scheduling-profile exclusions remain visible
+and must be included when reporting results.
 
 ## Running
 
+From the repository root:
+
 ```sh
-deno task conformance   # regenerate harness/generated/ via testgen, then test
-deno task gen           # just (re)convert the wast suite
-deno task test          # just run the tests against harness/generated/
+just shim          # rebuild the translator for the current source
+just conformance   # regenerate the corpus and run the Deno harness
 ```
 
-`deno task test` prints a per-directory summary at the end:
-`{commands, executed, passed, failed, pending-runtime, unsupported-directive}`.
-
-testgen can also be run directly (from anywhere in the repo):
+From `harness/`:
 
 ```sh
-cargo run -p testgen                          # whole suite -> harness/generated/
-cargo run -p testgen -- binary validation     # subset of test subdirectories
+deno task gen          # regenerate harness/generated/ with testgen
+deno task test         # run against existing corpus and shim
+deno task conformance  # gen + shim-check + test
+```
+
+`shim-check` builds only when the artifact is absent; it does not detect a stale
+shim. `CONFORMANCE_EXECUTOR=core-only deno task test` selects the JS-WebAssembly
+pipeline-sanity stub, not a component conformance run. It needs no shim.
+
+Testgen also accepts directory subsets and explicit locations, from the repo root:
+
+```sh
+cargo run -p testgen -- binary validation
 cargo run -p testgen -- --test-dir D --out-dir D2
 ```
 
-Output is deterministic: same suite + same testgen build → byte-identical
-`harness/generated/` (sorted traversal, stable JSON field order, no
-timestamps or absolute paths).
+## Results and exclusions
 
-## Generated layout
+The per-directory summary reports `commands`, `executed`, `passed`, `failed`,
+`xfail`, `pending-runtime`, `pending-capability`, and `unsupported-directive`.
+`executed` includes passes and both known and unexpected failures; skips are
+separate.
 
-```
+- `src/xfail.ts` records known failures by generated file and WAST source line,
+  with a reason and tracking issue. A matching failure is an xfail, not a pass.
+  The Deno summary fails if an xfailed command passes. This check does not prove
+  that every listed entry was reached, or that a failure still has its original
+  cause; review the reason when triaging a changed result.
+- `PendingRuntimeError` becomes a skip. A `pending-capability:` prefix selects
+  the more specific counter. `RuntimeExecutor` retains message-based capability
+  classification in `CAPABILITY_MARKERS`; these skips are not validation
+  verdicts or evidence that all async behavior is unsupported.
+- Text/quote artifacts and unimplemented directives are recorded as
+  `unsupported-directive` rather than passed.
+- Under `POLYENGINE_SCHED_SEED`, files in `DETERMINISTIC_PROFILE_ONLY` are ignored
+  by Deno because their guests assert reference-profile scheduling order. They
+  are absent from the command summary, so report the ignored-test count too.
+- Browser and shell deltas live in `browser/expectations/` and
+  `shell/expectations/`. Their lane runners check for unexpected deviations and
+  stale deltas; a lane with accepted deltas is not an all-pass corpus.
+
+All generated suite directories, including `async/` and `values/`, are run.
+Component-level value imports/exports remain outside the runtime's stated
+parity scope; do not confuse that feature with ordinary canonical-ABI values.
+
+## Execution
+
+[`CommandExecutor`](src/executor.ts) separates command bookkeeping from engine
+semantics. The runner owns instance names and the current default instance, and
+resets executor state after each file. The Deno test gives each file a timeout;
+a stalled file is recorded as failed rather than disappearing from the summary.
+
+[`RuntimeExecutor`](src/runtime-executor.ts) translates components, loads the
+current plan format, and calls the internal plan executor. It exercises the raw
+canonical value boundary, not the public embedder facade. Async exports are
+awaited; WAST calls use `trapOnIdle: true` so an unresolved blocking call that
+goes idle is a deadlock verdict rather than a permanently pending Promise.
+
+Only a structured `TranslateError` with phase `validation` counts as component
+rejection for `assert_invalid` or `assert_malformed`. Translation does not
+distinguish those two phases; `unsupported` and `internal` errors are not valid
+rejection evidence. Instantiation errors are mapped separately according to the
+command's expected trap or link failure.
+
+The plain core-module path delegates to `CoreOnlyExecutor`, which validates and
+compiles but does not instantiate the module. The separate core definition/
+instance path can instantiate a compiled module with empty imports. General
+core invocation and component `get` are not implemented. `register` records
+instances but does not wire them into component host imports. These are harness
+limits, not claims about the embedder API.
+
+## Generated data and comparison
+
+```text
 harness/generated/
-  manifest.json            # {"files": ["async/cancel-stream.json", ...]}
-  <suite-dir>/<stem>.json  # command file, one per .wast
-  <suite-dir>/<stem>.<N>.wasm   # extracted binary (module or component)
-  <suite-dir>/<stem>.<N>.wat    # quote forms kept as text
+  manifest.json              # list of generated command files
+  <suite-dir>/<stem>.json     # one command file per WAST file
+  <suite-dir>/<stem>.<N>.wasm  # extracted binary
+  <suite-dir>/<stem>.<N>.wat   # quoted text artifact
 ```
 
-## JSON schema
+Generation is deterministic for the same suite and testgen build. The schema
+comes from `json-from-wast`; [`src/schema.ts`](src/schema.ts) mirrors the subset
+used by this harness. Assertion `line` values identify the inner form's 1-based
+source line, not necessarily the enclosing assertion. They remain stable only
+while the WAST source does.
 
-testgen drives the `wast` parser and the `json-from-wast` crate (the
-implementation of `wasm-tools json-from-wast`, itself the component-aware
-successor of WABT's `wast2json`) as libraries, so the schema is exactly
-upstream's: the serde derives in `json-from-wast`'s `src/lib.rs`
-(`Wast`, `Command`, `WasmFile`, `Action`, `Const`) are the specification;
-`src/schema.ts` mirrors the subset this suite exercises. Points worth knowing
-when reading the files or writing xfail entries:
+The JSON artifact metadata does not identify core module versus component.
+`artifactKind` in [`src/runner.ts`](src/runner.ts) recognizes the exact core
+preamble and sends everything else to the component translator. Quoted text is
+not compiled by this runner.
 
-- `line` is 1-based and, for the module- and action-bearing asserts
-  (`assert_invalid/malformed/unlinkable/uninstantiable/trap/return`), is the
-  line of the *inner form* (`(component ...)` / `(invoke ...)`), not the
-  `(assert_...` line. It is the key used by `src/xfail.ts` and the lane
-  expectation overlays.
-- Artifacts are `filename` + `module_type: "binary" | "text"`; nothing in
-  the JSON says whether a binary is a core module or a component. The runner
-  classifies from the preamble (`artifactKind` in `src/runner.ts`: exact
-  core preamble → module, anything else → component; in this suite every
-  top-level artifact is a component).
-- Values are `{"type": ..., "value": ...}`. Scalars are decimal strings
-  (floats as IEEE754 bit patterns; core-value expectations may also be
-  `nan:canonical` / `nan:arithmetic`), `bool` is a JSON boolean, `record` is `[name, value][]`,
-  `variant` is `{case, payload?}`, `result` is `{Ok: v|null}` /
-  `{Err: v|null}`, `option` is `v | null`, `flags` is `string[]`.
-- `(component quote "...")` forms are written as `.wat` with
-  `module_type: "text"` (5 in the current suite, all `assert_malformed`);
-  the runner records them as skip(`unsupported-directive`).
-
-## Executor contract (provisional)
-
-`src/executor.ts` defines `CommandExecutor` — the interface a future
-polyengine runtime must implement to make this harness execute for
-real. It is deliberately minimal and **will change**; it exists so runner
-and runtime evolve against one concrete seam:
-
-- `validate(artifact)` → verdict (never throws for bad input; malformed vs
-  invalid need not be distinguished)
-- `instantiate(artifact, expect)` → `InstanceRef`; `expect` (`"success"` /
-  `"trap"` / `"link-error"`) lets a partial executor decline verdicts it
-  cannot deliver honestly
-- `define(name?, artifact)` / `instantiateDefinition(defName?, instanceName?)`
-  — the `module_definition` / `module_instance` pair
-- `register(as, instance?)`
-- `invoke(target?, field, args)` / `get(target?, field)` → outcome
-  (`returned values` | `trapped message`; traps are outcomes, not exceptions)
-- `reset()` — drop all per-file state (executor state is per `.wast` file)
-
-The runner owns instance *naming* and the "current default instance" rule;
-the executor owns everything semantic. Anything the executor cannot do yet
-throws `PendingRuntimeError`, which the runner records as a
-skip(`pending-runtime`) rather than a failure.
-
-`CoreOnlyExecutor` is the pipeline-sanity stub: core modules are validated
-and compiled with the JS `WebAssembly` API; **all component-layer operations
-throw `PendingRuntimeError`**. This is forced, not lazy: V8 rejects the
-component preamble (`00 61 73 6d 0d 00 01 00`) outright, so
-`WebAssembly.validate` returns `false` for valid and invalid components
-alike — no component verdict can come from the JS API. That layer is
-pinned by a unit test in `tests/runner_unit_test.ts`. It stays available via
-`CONFORMANCE_EXECUTOR=core-only deno task test` for pipeline sanity (no shim
-build required).
-
-`RuntimeExecutor` (`src/runtime-executor.ts`) is the real thing, driving
-`runtime/`'s public API (`@polyengine/runtime/{shim,exec,cabi,plan}`,
-consumed read-only — this is Track A's territory):
-
-- `validate` / component `instantiate`: `Translator.translate` (the wasm32
-  shim under Deno) is the verdict — a structured `{error}` envelope (surfaced
-  as a thrown `PlanError`) means invalid/malformed; the JS API can't
-  distinguish the two either, so neither does this.
-- successful translation feeds `instantiateComponent` (plan v0 → compiled
-  core modules → task-model-backed export surface); its `Trap` /
-  `UnsupportedFeatureError` / `PlanError` outcomes map to
-  `TrapError`/`LinkError`/`PendingRuntimeError` by the command's expected
-  outcome (`assert_uninstantiable` vs `assert_unlinkable` vs a plain
-  instantiation gap).
-- `module_definition`/`module_instance` reuse the same translate/instantiate
-  path against a small per-file definition table (by name, or "most recent").
-- `invoke` calls the export as a plain JS function
-  (`component.exports[field](...)` — see `runtime/src/exec/boundary.ts`
-  `createLiftedFunction`) with arguments converted from wast-JSON `Value` to
-  the runtime's `ComponentValue` host shapes (`src/value-mapping.ts`); the
-  arity of the raw JS return (`undefined`/bare-value/array, see
-  `resultsToHost`) is reconstructed into a proper result list using the
-  export's `FuncType.results.length` (recomputed from the plan, since a
-  single `list`-typed result is otherwise indistinguishable from a
-  multi-result array).
-- `get` (a core `global.get` wast action) has no component-level equivalent
-  in this suite; declined honestly as `pending-runtime` rather than guessed.
-- capability gaps the sync executor is expected to hit (async canonical
-  options, stream/future values, error-context — the task scheduler's scope)
-  are recognized by message substring (`CAPABILITY_MARKERS` in
-  `runtime-executor.ts`) and reported as skip(`pending-capability: ...`) — a
-  precise subset of `pending-runtime` naming the exact missing feature,
-  rather than a generic skip or a false failure.
-
-### Value comparison
-
-`src/value-mapping.ts` converts both directions against the runtime's
-`ComponentValue` (definitions.py's semantics, our representation —
-variant/enum/option/result as
-`{kind: label, value: payload}` objects, tuple as despecialized record,
-flags as `{label: boolean}`, `list<u8>` as `Uint8Array`): `toComponentValue`
-for invoke arguments, `compareValue`/`compareValues` for `assert_return`
-(recursive, type-directed by the *expected* value's own tag — no separate
-`FuncType` needed on either side, matching how the runtime itself never
-exposes one across its export-call boundary).
-
-Floats compare bit-exact: the expected bit-pattern string is decoded via a
-shared `DataView` scratch buffer and compared against the actual value's
-re-encoded bits, except `nan:canonical`/`nan:arithmetic` expectations, which
-match by NaN pattern class instead of exact bits. In practice the runtime's
-deterministic NaN profile (`runtime/src/cabi/float.ts`) always produces
-exactly the canonical NaN bit pattern, so both classes are satisfied by
-every NaN the runtime returns — but the pattern-class check is written
-generally in case a less-deterministic engine's NaN ever needs it.
-
-### Trap-message matching
-
-`runner.ts`'s `trapMatches` compares by substring first (the suite's own
-convention), then falls back to a small checked-in table
-(`TRAP_MESSAGE_EQUIVALENTS`) of confirmed-equivalent wording pairs, e.g. the
-suite's `"unknown handle index N"` vs. the runtime's
-`"table index out of range"`/`"table entry empty"` (both are `trapIf(...)`
-call sites in `runtime/src/cabi/handles.ts` — same semantic condition,
-independently-authored text). A message pair not in the table is a plain
-substring failure, not a silent pass — the table only encodes *confirmed*
-equivalences, not a permissive fuzzy match.
-
-### Triage: xfail list
-
-`src/xfail.ts` is a checked-in `{file, line, reason}` list (line = the
-command's 1-based source line, stable across regen) for commands that fail
-today for a known, understood cause outside harness territory (a
-translator-shim encoding gap, a sync-vs-task-scheduler semantic gap, etc.) — distinct
-from "unexpected regression". `tests/conformance_test.ts` treats a failure
-matched in `XFAIL` as `xfail` in the summary rather than `failed`, and it
-does not fail the surrounding `Deno.test`. It is *not* auto-verified against
-the actual outcome (an xfail'd command that starts passing again isn't
-flagged) — periodically diff the summary's `xfail` column against
-`XFAIL.length`.
-
-`test/async/` and `test/values/` are deliberately **not** triaged into
-`xfail.ts` — docs/architecture.md §7 excludes `test/values/` from parity scope entirely
-(wasmtime doesn't implement component `value` imports/exports), and
-`test/async/` is task-scheduler scope; both are expected to show real
-failures against the sync-only executor and are left as visible `failed`
-counts rather than suppressed, so the summary keeps signaling exactly how
-much of the suite the current implementation should be judged against
-(binary, linking, resources, validation).
-
-### Wire-up
-
-`deno task conformance` = `deno task gen` (testgen regen) + `deno task
-shim-check` (build the wasm32 shim if the artifact is missing) + `deno task
-test`. `CONFORMANCE_EXECUTOR=core-only` switches `deno task test` back to
-the JS-API-only stub.
+[`src/value-mapping.ts`](src/value-mapping.ts) converts WAST values to the raw
+runtime shapes and compares results recursively. Export arity comes from the
+plan, so a single list result is not confused with multiple results. Floats
+compare by bits, with NaN-pattern classes handled separately. Trap messages use
+substring matching plus the explicit `TRAP_MESSAGE_EQUIVALENTS` table in the
+runner; unmatched wording fails rather than being accepted by fuzzy matching.

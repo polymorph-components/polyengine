@@ -1,10 +1,9 @@
 // Cache API backend for the artifact cache (docs/architecture.md §10), for browsers
 // (and other environments implementing the standard `CacheStorage`/`Cache`
 // interfaces). Feature-detects `globalThis.caches`; throws a named error
-// where unavailable (e.g. plain Deno without `--unstable-*` polyfills, or a
-// non-secure-context page) rather than silently no-op'ing.
+// where unavailable rather than silently no-op'ing.
 //
-// Layout: one synthetic same-origin-ish URL per cache key, stored as a
+// Layout: one synthetic absolute URL per cache key, stored as a
 // single JSON `Response` body containing `{meta, plan, adapters}` (adapters
 // base64-encoded — `Cache` stores `Response` bodies, not arbitrary trees,
 // so we can't mirror dirCache's file-per-adapter layout; one blob per entry
@@ -51,8 +50,7 @@ function fromBase64(s: string): Uint8Array {
   return out;
 }
 
-/** Synthetic request URL an entry is stored under. Same-origin-relative so
- * it works under any page origin; the path has no filesystem meaning. */
+/** Synthetic absolute cache key, not a fetched URL or filesystem path. */
 function entryUrl(hex: string): string {
   return `https://artifact-cache.invalid/${hex}`;
 }
@@ -67,11 +65,7 @@ class WebCache implements ArtifactCache {
     return await globalThis.caches.open(this.cacheName);
   }
 
-  /** Internal self-heal eviction (issue #196): the caller is `get`'s own
-   * recovery path for a poisoned/stale entry, not an explicit caller of
-   * `evict()` — so a failure here must not escape and fail what would
-   * otherwise be a clean miss. The public `evict()` below keeps throwing;
-   * only this internal path swallows. */
+  /** Best-effort stale-entry eviction; unlike public evict, failure is a miss. */
   async #tryEvict(key: CacheKey): Promise<void> {
     try {
       await this.evict(key);
@@ -81,13 +75,9 @@ class WebCache implements ArtifactCache {
   }
 
   async get(key: CacheKey): Promise<CachedArtifacts | null> {
-    // `open()` failing (no `globalThis.caches` in this environment) is a
-    // capability/configuration error, not a per-entry I/O failure — it
-    // propagates uncaught (existing behavior, `WebCacheUnavailableError`)
-    // so a caller who tries to use this backend somewhere it can't work
-    // finds out immediately rather than silently always-missing. Once open
-    // succeeds, every failure below (issue #196: poisoned entry, self-heal
-    // eviction, ...) is swallowed to a `null` miss.
+    // Opening errors propagate from direct backend calls. After opening,
+    // entry read/validation failures become misses. translateCached catches
+    // either kind of get failure.
     const cache = await this.open();
     try {
       const hex = await keyHex(key);
@@ -119,9 +109,7 @@ class WebCache implements ArtifactCache {
       }
       return { plan, adapters };
     } catch {
-      // Poisoned/corrupted entry, or any other I/O failure (issue #196):
-      // miss + best-effort evict, never trust and never throw out of
-      // `get`.
+      // An unreadable/invalid entry is a miss; eviction is best effort.
       await this.#tryEvict(key);
       return null;
     }

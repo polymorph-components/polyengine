@@ -1,27 +1,27 @@
 # bench/boundary — the host-boundary microbench
 
-Calls-per-second across the host import boundary, per ABI shape — the
-instrument behind [#17](https://github.com/polymorph-components/polyengine/issues/17)'s
-jco-vs-polyengine baseline, [#54](https://github.com/polymorph-components/polyengine/issues/54)'s
-lift-throughput finding, and [#8](https://github.com/polymorph-components/polyengine/issues/8)'s
-cost ledger. The design goal is attribution, not realism: the guest is a
-tight loop over echo-shaped imports whose host bodies are trivial, so
-what the clock sees is lift/lower + dispatch + (for async shapes) the
-suspension machinery — and both stacks run on **the same engine** (plain
-`node` runs the polyengine callback ABI with no flag; the jco lane and
-polyengine's jspi mode share `--experimental-wasm-jspi`), so V8/GC/JIT
-variables cancel.
+A manual instrument for host calls, stream transfer, and compound-value
+lift/lower. The guest uses synthetic loops and trivial host bodies, not a real
+application workload. The Node lanes share one Node executable, reducing engine
+version differences, but GC, JIT, process scheduling, and thermal variation do
+not cancel. Deno is a separate engine build.
 
 ```sh
 just bench-boundary            # polyengine lanes: node callback+jspi, deno
 just bench-boundary with-jco   # + the incumbent jco lane (npm ci + transpile on first use)
 ```
 
-The polyengine lanes measure the CURRENT TREE: the recipe builds the local
-embedder bundle (`tools/release-bundle/build.ts`) and the local
-translator shim. Numbers are box-relative — compare lanes within one
-run, or the same lane across commits on one box, never absolute values
-across machines.
+The recipe builds the local guest, embedder bundle, and translator shim. It
+requires Rust with `wasm32-wasip2` and `wasm32-unknown-unknown`, Node, Deno, and
+optionally npm for the jco lane. `sweep.mjs` currently passes
+`--experimental-wasm-jspi` to the Node JSPI lanes; callback lanes explicitly
+disable JSPI. Consult [architecture](../../docs/architecture.md) for engine
+support, rather than inferring requirements from this historical runner flag.
+
+The tables below are **historical measurements, not current-tree performance
+claims**. Compare fresh interleaved runs on the same machine and record the
+engine versions, component/toolchain pins, and source revision. These
+microbenchmarks are not gates or evidence of application throughput.
 
 ## Shapes
 
@@ -31,12 +31,17 @@ across machines.
 | `recv` | `fetch: async func(u32) -> list<u8>` | UDP-receive-shaped: payload host→guest |
 | `send-sync` | `ping-sync: func(list<u8>) -> u32` | the sync-lowered control |
 
-Host settlement `mode`: `immediate` (a plain return value — the fast
-path) and `microtask` (an async host fn, i.e. an already-resolved
-promise — the wakeup-shaped path a real receive takes). Payload sizes 0
+Host settlement `mode`: `immediate` (a plain return value) and `microtask`
+(an async host function returning an already-resolved Promise). The latter
+does not simulate network delay. Payload sizes 0
 (pure call overhead) and 1200 B (QUIC-ish MTU). Medians of 5 timed
 export calls after a warmup call; each export call runs `iters`
 boundary crossings.
+
+`send-sync` uses a plain synchronous host function in both mode rows; the
+`microtask` label does not make that control suspend. Timing also includes
+guest work: `send` clones its payload on each iteration, while `send-sync`
+borrows its buffer.
 
 ## Stream shapes ([#68](https://github.com/polymorph-components/polyengine/issues/68))
 
@@ -46,17 +51,17 @@ boundary crossings.
 | `stream-source: async func(n: u32) -> stream<u8>` (guest pumps n bytes) | guest→host payload |
 | `stream-pass: async func(s: stream<u8>) -> stream<u8>` (guest returns its input unchanged, never reads) | host↔host rendezvous after identity transfer (contracts/embedder-api.md §"Streams and futures") |
 
-Unlike the calls-per-second shapes above, none of these involve a host
-import: the host drives the stream endpoint directly via the embedder's
-`Stream` API (`contracts/embedder-api.md` §"Streams and futures"), so
-what's measured is the rendezvous/copy cost in isolation. Reported as
-MB/s (bytes moved ÷ elapsed), medians of 5 timed runs after a warmup,
-same convention as the calls-per-second table. Chunk sizes 1200 B,
-16 KiB, 256 KiB; the chunk COUNT per size is chosen (`sweep.mjs`,
-`STREAM_CONFIGS`) so one timed run lands in the tens-of-ms range —
-smaller chunks need more of them to reach a measurable duration, larger
-chunks need fewer. **polyengine drivers only**: jco's p3 stream support is
-not under test here, so the jco lane is skipped for these rows.
+These shapes do not involve a host import: the host creates stream pairs with
+`createStream()` and reads or writes handles directly. See the
+[embedder contract](../../contracts/embedder-api.md) for stream semantics.
+Timing includes export dispatch, rendezvous, and any payload allocation/copy
+inside the timed region, not an isolated copy primitive.
+
+The driver labels throughput `MB/s` but computes **MiB/s** (bytes divided by
+`1024 * 1024`, then by elapsed seconds). The historical tables retain their
+original labels. Results are medians of five timed runs after a warmup.
+`STREAM_CONFIGS` in `sweep.mjs` sets chunk sizes and counts. Only polyengine
+drivers run these shapes; jco stream support is not measured.
 
 ## Compound element shapes ([#261](https://github.com/polymorph-components/polyengine/issues/261))
 
@@ -65,38 +70,28 @@ not under test here, so the jco lane is skipped for these rows.
 | `lift-ops: async func(n: u32) -> list<op>` (guest returns `n` elements) | compound-element LIFT |
 | `lower-ops: async func(ops: list<op>) -> u64` (guest folds, returns a checksum) | compound-element LOWER |
 
-`op` is a 16-case variant over records — the width and payload mix
-mirror #261's reported 17-case consumer schema (a DOM-mutation op
-stream, records carrying `string`, `option<u16>`, `list<u8>`, and a
-nested payload-free variant `node-update-kind`), because two of the
-costs #261 identifies — `maxCaseAlignment` (`runtime/src/cabi/layout.ts`)
-and the embedder facade's variant case resolution
-(`runtime/src/embedder/values.ts` `toHost`) — are both O(case count) per
-element. Every other shape in this instrument — `list<u8>`, `u32`,
-`stream<u8>` — is a flat scalar and takes a bulk copy path (issues
-#63/#67); before this lane, NOTHING in `bench/boundary` exercised the
-per-element interpreted lift/lower loop that compound types (records,
-variants, options, strings) actually walk. Both directions are measured
-separately because `load.ts`'s per-element path and `store.ts`'s
-per-element path are separate code with the same defect.
+`op` is a 16-case variant over records, based on #261's DOM-mutation workload.
+It contains strings, options, byte lists, and a nested payload-free variant.
+Unlike the bulk byte-copy shapes, these rows exercise per-element compound
+conversion. Lift and lower are measured separately; the old per-element
+layout/case scans that motivated these rows have since been optimized.
 
-Reported as ns/element (`iters` reused as the element count `n`; `size`
-is unused, passed through as "n/a" like `mode` is for the stream shapes)
-— the unit that makes these numbers comparable to a whole variant-over-
-records lift/lower rather than a byte or a call. Medians of 5 timed runs
-after a warmup, same convention as the other tables. Element count
-10000, calibrated (`sweep.mjs`, `ELEMENT_N`) so a timed run lands in the
-tens-of-ms range. **polyengine drivers only**, same reason as the stream
-shapes: jco is not under test here.
+Reported as ns/element: `iters` is the element count `n`, and the input `size`
+argument is unused (the JSON result records `size: n`). `ELEMENT_N` in
+`sweep.mjs` is 10000. Each result is the median of five timed runs after a
+warmup. Only polyengine drivers run these shapes; jco is not measured.
 
-Methodology footnote: `lift-ops`'s guest caches its `Vec<Op>` in a
-`thread_local!` keyed on `n` — the warmup call builds it, every timed
-call clones the cached vector, measured in isolation at ~15 ns/element
-on this box (a temporary export cloned without crossing the boundary).
-`lower-ops`'s host array is built ONCE outside the timed loop, since
-that lane measures lowering, not host array construction.
+`lift-ops`'s guest caches its `Vec<Op>` by `n`; warmup builds it and timed calls
+clone it, so cloning remains in the measurement. The original investigation
+measured that clone at about 15 ns/element on its dev box using a temporary
+export, not a standing benchmark. `lower-ops` builds its host array outside
+the timed loop.
 
-## Baseline (2026-08-11, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60; post-#63/#67 bulk list copies)
+The sink also collects received bytes into a guest vector, and `lower-ops`
+folds the received values into a checksum. These costs are part of the timed
+work, not subtracted overhead estimates.
+
+## Historical baseline (2026-08-11, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60; post-#63/#67 bulk list copies)
 
 ```
 shape     mode       size    polyengine-node-callback      polyengine-node-jspi  polyengine-deno-callback         jco-node-jspi
@@ -131,14 +126,12 @@ Two methodology footnotes for the stream rows:
 - `stream-source` allocates and fills its whole payload inside the guest
   within the timed region (one `vec![0x5a; n]` per run), where
   `stream-sink`'s host payload is preallocated outside it — the source
-  lane over-measures by one guest alloc+fill per run. Consistent across
-  runs, so trend-tracking is unaffected; just don't read sink-vs-source
-  deltas as pure copy-direction cost.
-- "size" means write granularity for `stream-sink` but host *read*
-  granularity for `stream-source`/`stream-pass` (their producers offer
-  everything at once; `wit_stream`'s writer does its own internal
-  chunking). One dimension, two meanings — split it if a finding ever
-  hinges on the distinction.
+  lane includes one guest alloc+fill per run. Do not read sink-vs-source
+  deltas as pure copy-direction cost, or assume allocation cost is stable.
+- In the current driver, "size" means host write granularity for `stream-sink`,
+  host read granularity for `stream-source`, and both host write and read
+  granularity for `stream-pass`. The guest source offers its payload to the
+  stream writer, whose internal chunking is separate.
 
 ### Compound element shapes baseline (2026-09-03, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60) — before #261's optimization PRs (#263/#264/#265 landed after this was recorded)
 
@@ -149,13 +142,12 @@ lift-ops                       3,804.4                   3,909.3                
 lower-ops                      3,482.3                   3,646.8                   3,285.3
 ```
 
-This is the "before" baseline for #261, recorded before any optimization
-of the per-element interpreted path lands. ~3.2-3.9 µs/element here vs.
-#261's reported ~5 µs/element on a similar box — same order of
-magnitude, within ~1.6x; the residual gap reads as box/config drift.
-See the 2026-09-04 block below for the "after" numbers.
+This is the pre-optimization record for #261. The 2026-09-04 block below records
+the post-optimization run; neither table predicts the current tree's cost.
+The original #261 consumer report was about 5 microseconds/element on a similar
+machine, but that was a different workload/configuration, not a matched lane.
 
-## Baseline (2026-09-04 — post-#261, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60; #263 layout-node cache + #264 adapter tables + #265 flatten-count memoization)
+## Historical baseline (2026-09-04 — post-#261, linux-arm64 dev box, Node 24.18 / Deno 2.9.5, guest wit-bindgen 0.60; #263 layout-node cache + #264 adapter tables + #265 flatten-count memoization)
 
 ```
 compound-element lanes (ns/element; n=10000; jco lane skipped — see README.md):
@@ -164,58 +156,33 @@ lift-ops                         677.8                     704.2                
 lower-ops                        630.4                     661.4                     694.6
 ```
 
-The compound-element drop against the 2026-09-03 "before" table is
-3.7x-5.6x fewer ns/element depending on lane (#263's layout-node cache
-plus #264's adapter tables). The calls-per-second table is NOT refreshed
-here: this box cannot currently reproduce it — `send immediate 0` /
-`polyengine-node-jspi` alone read 780,785/s (2026-08-11), 1,023,625/s
-(an interleaved run today), and 521,044/s (this sweep), a 2x spread on
-identical code, so a fresh table would be noise with a date on it. What
-is known instead, from interleaved before/after pairs (medians of paired
-differences, `immediate`, size 0, attributable to #265's per-call
-flatten-count memoization, reproduced across two passes): `send-sync`
-+27%/+32%, `send` +22%/+28%, `recv` +34%/+31% calls/sec — a delta, not a
-new absolute baseline. The 2026-08-11 table remains the recorded
-calls-per-second baseline, known to understate the current tree, until a
-quiet box allows a real re-measurement. Stream rows are also NOT
-re-measured: `stream-sink` at 256 KiB spans 2,900-10,800 MB/s across four
-interleaved runs with no consistent before/after sign, and none of
-#263/#264/#265 touch the `stream<u8>` bulk-copy path, so the 2026-08-11
-stream rows above still stand as the current record.
+The recorded compound-element time fell by 3.7x-5.6x relative to 2026-09-03.
+Calls/sec and stream tables were not refreshed on 2026-09-04 because repeated
+measurements varied substantially. For `send immediate 0` in the Node JSPI lane,
+the recorded values were 780,785/s on 2026-08-11, then 1,023,625/s in an
+interleaved run and 521,044/s in the September sweep. Paired September passes
+reported `send-sync` +27%/+32%, `send` +22%/+28%, and `recv` +34%/+31% calls/sec
+for #265 (`immediate`, size 0). Those are historical relative observations, not
+a replacement absolute baseline. `stream-sink` at 256 KiB ranged from
+2,900 to 10,800 in the driver's `MB/s` units across four interleaved runs, with
+no consistent before/after sign.
 
-## What the baselines say
+## Interpreting comparisons
 
-- **Async import round-trips**: polyengine's callback ABI sustains 0.3–1.1 M
-  crossings/s; jco's async path costs ~3 ms per call flat
-  (timer-quantized — its sync path is healthy at ~300 k/s, so the cost
-  is the async task loop, the same machinery behind lann/jco#11 and
-  polymorph-iroh's 5 ms polling workaround). For the UDP direct path
-  (#4) this is the difference between "boundary is free" and "boundary
-  is the bottleneck".
-- **#54 (fixed in #63; sentinel rows)**: `recv @ 1200` once ran ~18 k/s
-  (~22 MB/s, a per-element interpreted store); it now tracks the empty
-  call within ~1 % — the payload copy is bulk in both directions, and
-  these rows are the regression sentinel. #67 extended the bulk copies
-  to the remaining flat element types (not separately represented here;
-  the shapes are `list<u8>`).
-- **jspi vs callback** (same runtime, same engine): parity on
-  immediate-settled paths, ~2–4× behind on deferred (microtask) paths —
-  the suspend/resume cost, recorded for #8.
-- **#68 stream shapes**: `stream-pass` (host↔host rendezvous, no guest
-  memory touched — contracts/embedder-api.md §"Streams and futures")
-  consistently beats `stream-sink` and
-  `stream-source` (host↔guest, which pay a real memory copy through the
-  guest's linear memory) at every chunk size, confirming the identity
-  transfer is doing what it claims. All three scale up sharply with
-  chunk size — per-rendezvous overhead amortizes over more bytes.
-- **#261 compound elements**: the first instrument for the interpreted
-  per-element lift/lower path — every prior shape here is flat and
-  bulk-copies. #263 (layout-node cache) + #264 (adapter tables) moved
-  `lift-ops`/`lower-ops` from ~3.2-3.9 µs/element to ~0.6-0.9 µs/element
-  — same sentinel role #54/#67 played for flat types, now proven out.
+The August table captured a large async-call difference against the pinned jco
+toolchain and a callback/JSPI difference on microtask-settled imports. It does
+not establish current jco performance or isolate a single scheduling cost.
+Likewise, stream throughput does not prove ownership-transfer correctness;
+functional tests establish that. The byte-copy rows are useful regression
+probes for #54/#63/#67, and the compound rows for #261/#263/#264/#265, but each
+new claim needs a fresh controlled comparison.
 
-The jco lane pins the family's own toolchain (the lann/jco all-fixes
-transpile + preview2-shim release tarballs, the vendored
-`jco-transpile.mjs` wrapper, and polymorph-test's `bindImports` for the
-WASI spellings — the exact stack the consumer repos' jco legs run). It
-exists as the incumbent baseline and retires with the jco era.
+For historical context, #54 reported about 18,000 calls/sec (about 22 MB/s as
+originally reported) for `recv` at 1200 bytes before #63's bulk-copy change.
+That earlier finding is not a current measurement or a row from the dated
+tables above.
+
+The optional jco lane uses the toolchain pinned in `package.json` and
+`package-lock.json`, the local `jco-transpile.mjs` wrapper, and `bindImports`
+for WASI spellings. It is a comparison with that pinned stack, not necessarily
+the current stack in any consumer repository.

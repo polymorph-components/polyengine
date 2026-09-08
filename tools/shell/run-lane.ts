@@ -1,9 +1,8 @@
-// Engine-shell canary lane driver (issue #22).
+// Pinned and canary engine-shell lane driver.
 //
 // Deno-lane-shaped: spawns the shell as a child process (`tools/shell/dist/
-// entry.js`, bundled by `tools/shell/bundle.ts`), CWD'd to the repo root so
-// the entry's disk reads (`harness/generated/**`, the shim, the probe
-// modules) resolve without any argv/config plumbing. Parses the entry's
+// entry.js`, bundled by `tools/shell/bundle.ts`). The entry derives artifact
+// paths from its bundle URL, not the shell's working directory. Parses the entry's
 // `@polyengine:`-prefixed protocol lines from stdout and classifies with the
 // SAME `harness/src/xfail.ts` + `Summary` + per-lane-overlay machinery the
 // browser lanes use (`tools/browser/classify.ts` — shared, not forked).
@@ -54,7 +53,7 @@
 //   shell crashed mid-corpus with no results at all), regardless of
 //   `required`. sm-nightly/jsc-trunk are `required: false` (issue #22:
 //   "findings lanes, never gating"); sm-pinned/jsc-pinned are
-//   `required: true` (this track: promoted to per-push gates).
+//   `required: true`.
 
 import { dirname, fromFileUrl, join, normalize } from "jsr:@std/path@1";
 import { classify, diffTotals, totalsOf } from "../browser/classify.ts";
@@ -148,14 +147,8 @@ type Header = any;
  * node/bun run `tools/shell/host-node.mjs` instead — an unbundled preamble
  * that installs the entry's host capabilities (binary reads, `print`) and
  * imports `dist/entry.mjs` (bundle.ts's byte-identical ESM-suffixed copy).
- * The bun lane additionally sets `BUN_JSC_useWasmMultiMemory=1`: bun 1.3.x
- * vendors WebKit's wasm multi-memory implementation but ships it
- * default-off, and the CABI routinely needs >1 memory per core module —
- * stock bun fails 174 corpus commands with "there can at most be one Memory
- * section for now" (measured 2026-08-11; the flag-flip precedent is the
- * firefox browser lane setting its own JSPI pref). Bun warns BUN_JSC_*
- * options are unstable across releases; the pin freezes that risk, and a
- * re-pin must re-verify the option (see the expectation's header).
+ * The Bun lane sets `BUN_JSC_useWasmMultiMemory=1` for multi-memory adapters.
+ * BUN_JSC_* options are unstable; re-verify the option when updating the pin.
  *
  * The CWD is set to the repo root but the entry does NOT rely on it: JSC
  * trunk bundles run through their shipped wrapper, which chdir()s into the

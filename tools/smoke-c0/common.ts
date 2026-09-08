@@ -1,13 +1,10 @@
 // Consumer smoke test — shared helpers (docs/consumers.md).
 //
-// Run legs from this directory:
-//   deno run --allow-read leg1_tdz.ts
-//   deno run --allow-read leg2_exec_model.ts
-//   deno run --allow-read leg3_throughput.ts
-//   deno run --allow-read --allow-run leg4_websocket.ts
+// Run from the repo root with `just smoke-c0`, or use this directory's
+// `deno task leg1` through `leg4` for focused probes.
 //
 // Prerequisite (built from source in this repo):
-//   cargo build -p translator-shim --release --target wasm32-unknown-unknown
+//   just shim
 //
 // All consumer artifacts are referenced by absolute path and are READ-ONLY;
 // nothing in this tree writes to the polymorph working trees.
@@ -19,8 +16,7 @@ import type { WirePlan } from "../../runtime/src/plan/format.ts";
 export const REPO_ROOT = new URL("../../", import.meta.url);
 export const POLYMORPH = Deno.env.get("POLYMORPH_ROOT") ??
   "/home/lmartin/p/polymorph";
-/** experiment-mosh renamed and moved out of the polymorph tree
- * (2026-08-10): it is `wosh`, a sibling OF the polymorph directory. */
+/** Wosh has a separate root from the polymorph consumer family. */
 export const WOSH = Deno.env.get("WOSH_ROOT") ?? "/home/lmartin/p/wosh";
 
 /** Absolute paths to the consumer artifacts under test (never copied). */
@@ -77,7 +73,7 @@ export interface TranslateAttempt {
 }
 
 /**
- * One `translateRaw` + `loadEnvelope` pass.
+ * Time `translateRaw`, then translate again to obtain parsed artifacts.
  *
  * Rejections are captured, not thrown: contracts/plan-format.md gives the
  * shim three phases (validation | unsupported | internal) and this suite's job is to

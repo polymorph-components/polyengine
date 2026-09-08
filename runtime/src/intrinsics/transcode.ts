@@ -7,12 +7,12 @@
 // pointers into two linear memories and expects them to do the encoding work
 // in place; the surrounding allocation/realloc dance stays in the adapter.
 //
-// Authorities used, in order:
-//   - signatures: wasmtime-environ 47.0.3 `fact/transcode.rs` (`Transcoder::ty`)
+// FACT protocol sources:
+//   - signatures: wasmtime-environ `fact/transcode.rs` (`Transcoder::ty`)
 //   - call protocol (argument order, multi-pass retries, what each result is
 //     used for): `fact/trampoline.rs` `string_copy` / `string_deflate_to_utf8`
 //     / `string_to_utf16` / `string_utf16_to_compact` / `string_to_compact`
-//   - operation semantics: wasmtime 47.0.3
+//   - partial-progress operations: wasmtime
 //     `runtime/vm/component/libcalls.rs` (the twelve `Transcode` libcalls) —
 //     the executable reference for this layer, since definitions.py models
 //     transcoding as whole-string `store_string_*` rather than as these
@@ -215,29 +215,18 @@ function inflateLatin1Bytes(
 }
 
 /**
- * Guard against the one case where reading and writing through the same
- * `Uint8Array` would corrupt data: FACT freshly allocates every destination,
- * so source and destination never overlap, but they *can* live in the same
- * memory. Callers that read and write interleaved snapshot the source first.
+ * Snapshot a byte range before writing to a potentially shared memory.
+ * FACT allocates destination regions separately; a snapshot also prevents
+ * writes from changing unread source bytes if those regions overlap.
  */
 function snapshot(bytes: Uint8Array, ptr: number, len: number): Uint8Array {
   return bytes.slice(ptr, ptr + len);
 }
 
 /**
- * O(1) defensive counterpart to wasmtime's `assert_no_overlap`
- * (libcalls.rs:166-177): traps (does not merely assert) because this
- * replaces a guarantee FACT's trampoline construction is supposed to
- * provide — src/dst are always independently-allocated regions — so a hit
- * here means that guarantee broke, which is guest-memory-corruption-class
- * severity, not an internal invariant a caller controls.
- *
- * Applied only where a call reads and writes through the SAME backing
- * `Uint8Array` while interleaving reads and writes (byte-range comparison,
- * not per-element — O(1) per call). Ops that first `snapshot()` the source
- * into an independent copy (transcode.ts's `snapshot`, used by every op
- * above that decodes-then-writes) already break aliasing before the first
- * write, so they are exempt by construction and do not call this.
+ * Defensive byte-range overlap trap for the non-snapshot operation, analogous
+ * to wasmtime's `assert_no_overlap`. Other operations snapshot source bytes
+ * before writing. This is an explicit Trap, not a host-precondition assertion.
  */
 function trapIfOverlap(
   src: Uint8Array,
@@ -274,16 +263,8 @@ export function createTranscoder(
   to: TranscodeMemory,
 ): (...args: number[]) => unknown {
   const fn = createTranscoderInner(op, from, to);
-  // Core wasm delivers i32 params to a JS import as *signed* numbers, but
-  // every transcoder arg (ptr/len/flag) is a FACT-validated unsigned
-  // quantity (contracts/intrinsics.md §A/§B; wasmtime libcalls.rs takes
-  // unsigned guest pointers, and validate_guest_pointer does its bounds
-  // arithmetic unsigned). Normalize once here, at the single call boundary
-  // every one of the twelve arms shares, so none of them need to know about
-  // the signed/unsigned wasm calling-convention detail — matching the
-  // `>>> 0` normalization every other i32-taking intrinsic gets (see
-  // intrinsics/mod.ts resource-new/-rep/-drop, resource-transfer-*, and
-  // exec/boundary.ts).
+  // Core i32 arguments arrive signed; FACT pointers, lengths, and flags are
+  // unsigned. Normalize once before any address or capacity arithmetic.
   return (...args: number[]) => fn(...args.map((a) => a >>> 0));
 }
 
@@ -385,16 +366,8 @@ function createTranscoderInner(
       return (srcPtr, srcLen, dstPtr) => {
         const src = from.bytes();
         const dst = to.bytes();
-        // This op does not call `snapshot()` (unlike its siblings above):
-        // it reads the full `out` prefix before writing anything to `dst`,
-        // which is the same aliasing-safety property snapshot() buys
-        // elsewhere, just via a builder array instead of a byte copy. The
-        // overlap guard is still added here (O(1): a byte-range compare, not
-        // per-element) as the one op in this file that is safe by algorithm
-        // shape rather than by an explicit `snapshot()` call — cheap
-        // insurance against that reasoning becoming stale under a future
-        // edit (docs/architecture.md §7; wasmtime asserts overlap on every
-        // op unconditionally, libcalls.rs:166-177).
+        // This arm reads its latin1 prefix into `out` before writing, rather
+        // than snapshotting source bytes. It also explicitly rejects overlap.
         trapIfOverlap(src, srcPtr, 2 * srcLen, dst, dstPtr, srcLen);
         const view = new DataView(src.buffer, src.byteOffset, src.byteLength);
         // Note: no surrogate validation here, matching wasmtime — a surrogate
@@ -464,15 +437,10 @@ function createTranscoderInner(
         const dst = to.bytes();
         inflateLatin1Bytes(dst, dstPtr, latin1Bytes);
         const view = new DataView(dst.buffer, dst.byteOffset, dst.byteLength);
-        // Defensive dst-capacity guard: wasmtime's equivalent
-        // (`run_utf8_to_utf16`'s `.zip(dst)`, libcalls.rs:308-312) is bounded
-        // by Rust's `Iterator::zip` truncating to the shorter of the two —
-        // it can never overrun `dst`. FACT is supposed to size `dstLen` to
-        // always have room (a full re-encode of a string that was already
-        // partially latin1-encoded never needs more u16 units than
-        // `dstLen - latin1Bytes`), so this should be unreachable; trap
-        // rather than let a broken caller corrupt guest memory past `dst`'s
-        // bound or silently truncate.
+        // dstLen is total UTF-16 capacity in code units. The widened latin1
+        // prefix occupies latin1Bytes units; the decoded suffix must fit in
+        // the remainder. Trap rather than overrun or silently truncate if
+        // the FACT caller supplies insufficient capacity.
         const capacity = dstLen - latin1Bytes;
         if (s.length > capacity) {
           trap("utf8-to-compact-utf16: destination capacity exceeded");

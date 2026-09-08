@@ -1,12 +1,8 @@
 // The JSPI ↔ scheduler bridge: turning a blocking canonical built-in into a
 // genuinely suspended wasm activation.
 //
-// This is the phase-1 seam swap. Nothing in the task model changes: `Thread`,
-// `BlockRequest` and `waitUntil` are exactly as they were. What changes is
-// *who* the parked thing is. For the stackless (callback-ABI) path a parked
-// thread is a JS generator; for a stackful one it is a suspended wasm
-// activation, and this module is the adapter that makes the two look the same
-// to `Store.tick`.
+// Generator waits and suspended wasm frames share Store.tick's readiness
+// interface. The latter resume when their import Promise is settled.
 //
 // ===========================================================================
 // THE INVARIANT
@@ -16,7 +12,7 @@
 //   `promising`-wrapped and no import is `Suspending`-wrapped — OR
 //   "suspension-capable": every entry that can reach a blocking built-in is
 //   `promising`-wrapped, and every blocking built-in is `Suspending`-wrapped.
-//   Never a mixture.
+//   Explicit plain sync entries cannot use suspension-capable imports.
 //
 // This is forced by empirical fact (c), pinned in
 // `runtime/tests/jspi/suspending_import_test.ts`: **a `Suspending`-wrapped
@@ -32,14 +28,13 @@
 // so a mismatch fails loudly at instantiate time rather than as a mystery
 // trap much later.
 //
-// Which entries "can reach a blocking built-in"? Exactly three:
+// Suspension-capable entries include:
 //   * a lifted export's core function,
 //   * a callback export (the callback-ABI loop re-enters wasm),
 //   * a FACT adapter callee invoked by `{sync,async}-start-call`.
-// `realloc`, `post-return` and resource destructors are deliberately NOT
-// promising-wrapped: they are guest-internal or spec-forbidden from blocking,
-// they never call a canonical built-in, and wrapping them would force their
-// results to become Promises where cabi needs a number synchronously.
+// Host-initiated destructors may also use promising entry. Nested guest
+// destructors use a plain synchronous lift and cannot suspend through their
+// JS trampoline frame. Realloc and post-return remain synchronous.
 
 import { assert_ } from "../cabi/trap.ts";
 import {
@@ -196,9 +191,8 @@ export function planNeedsSuspension(plan: {
 /**
  * Wrap a JS→wasm entry according to the mode.
  *
- * In `plain` mode this is the identity. In `jspi` mode the returned function
- * always yields a Promise (empirical fact (e)), which is why the mode is an
- * embedder opt-in: it changes the shape of every lifted export.
+ * In plain mode this is the identity; in JSPI mode it always returns a
+ * Promise. Mode may be explicitly requested or inferred from the plan.
  */
 export function enterWasm<T extends (...a: never[]) => unknown>(
   fn: T,
@@ -238,46 +232,12 @@ export function enterWasm<T extends (...a: never[]) => unknown>(
 // Continuation-chunk attribution sentinels (issue #24)
 // ---------------------------------------------------------------------------
 //
-// PROBLEM. Engine continuation chunks — the segments of a promising wasm
-// activation between suspension/hop points — begin as promise REACTIONS,
-// with no synchronous signal to this runtime. When several activations have
-// pending continuations (a settled real suspension racing a fast-path hop,
-// or two fast-path hops from nested entries), the chunks interleave at an
-// empty bracket stack, and every ambient read in a later chunk — a hop's
-// `owner` capture at `claimingFn` entry, or an unsafe intrinsic like
-// `context.set`, which has no hop at all — inherits whatever claim the
-// previous chunk left on top. Claim-stack ordering alone cannot repair
-// this: the release edges are themselves promise reactions. Measured
-// consequence (issue #24): wit-bindgen's callback epilogue restored one
-// task's state pointer into another thread's context slots, and the next
-// invocation of the starved thread's callback hit
-// `assert!(!state.is_null())` (async_support.rs:578) -> unreachable.
-// Reachable only with enough concurrently-suspended sibling activations
-// (first corpus: polymorph-tls' webcrypto-composed suite, three async
-// wit-bindgen components deep).
-//
-// FIX. Exploit the one ordering guarantee the platform does give us:
-// microtasks run FIFO, and between our code queueing a microtask and the
-// engine queueing the continuation reaction there is only synchronous
-// engine-internal promise machinery. So at EVERY point where an engine
-// continuation is about to be queued, queue a SENTINEL first that claims
-// the chunk's owner (move-to-top):
-//
-//   * fast-path hop: sentinel queued synchronously in `claimingFn` before
-//     returning the plain value — the engine queues the hop reaction while
-//     processing that return, so the queue reads [sentinel, chunk].
-//   * genuine suspension: the wrapper attached to the import's thenable
-//     queues the sentinel inside the settle reaction, before returning the
-//     value — the engine (attached to the WRAPPED promise) queues the
-//     resumption when that wrapper returns, so again [sentinel, chunk].
-//     This holds even when several promises settle in one drain: each
-//     pair is queued contiguously from within its own settle reaction.
-//
-// Nothing is delayed or reordered — unlike a serializing gate, which
-// measurably shifted the deterministic-profile backpressure-admission
-// order (async-calls-sync.wast caught it). This is the JSPI substitute for
-// what fibers give wasmtime for free: identity travels with the
-// resumption, here as a claim planted one microtask ahead of it.
+// Engine continuation chunks can run after synchronous ambient brackets unwind.
+// Queue an owner-claim sentinel before returning a plain value, or from the
+// thenable's settlement reaction before the wrapped Promise settles. Promise
+// reactions are FIFO, but engine continuation timing can interleave other
+// claims between the sentinel and wasm chunk; adjacency is not guaranteed.
+// Instance-scoped ambient lookup also filters sibling-instance candidates.
 
 function sentinelFor(owner: unknown): void {
   if (owner === null || owner === undefined) return;
@@ -288,8 +248,9 @@ function sentinelFor(owner: unknown): void {
 }
 const SENTINEL_TICK = Promise.resolve();
 
-/** Wrap a suspending import's thenable so the eventual resumption chunk is
- * preceded contiguously by its attribution sentinel. */
+/** Queue attribution before the wrapped Promise settles. Engine continuation
+ * timing need not make the sentinel and wasm chunk adjacent; instance-scoped
+ * ambient lookup also filters sibling-instance claims. */
 function attributeContinuation<T>(
   owner: unknown,
   r: PromiseLike<T>,
@@ -335,13 +296,9 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
       throw e;
     }
     if (r === null || typeof (r as { then?: unknown })?.then !== "function") {
-      // Fast path (jspi pin (j)): the value still returns to wasm through an
-      // engine microtask hop, so the rest of the caller's frame is an engine
-      // continuation chunk like any other. The synchronous claim covers any
-      // reads before the hop; the sentinel re-claims contiguously ahead of
-      // the hop reaction (see the header above — issue #24's second shape
-      // was exactly a fast-path hop chunk misattributed after a sibling's
-      // claim intervened).
+      // Plain values still return through an engine hop. Claim synchronously
+      // for pre-hop reads and queue a sentinel before returning; other claims
+      // may interleave before wasm resumes, as described above.
       claimActivationAmbient(owner);
       sentinelFor(owner);
       return r;

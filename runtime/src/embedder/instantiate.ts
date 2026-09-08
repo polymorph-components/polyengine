@@ -3,9 +3,9 @@
 // DESIGN: the facade is **runtime-driven**. Every
 // camelCase name, every resource class and every import wrapper is built here,
 // at instantiate time, from the loaded plan's type tables — the plan already
-// carries names, kinds and function types. Bindgen emits compile-time *types*
-// that cast this facade; no generated code participates, so everything works
-// fully untyped.
+// carries names, kinds and function types. Bindgen emits types and a wrapper
+// that verifies the world digest before delegating here; untyped callers can
+// instantiate directly.
 //
 // Governing contract: contracts/embedder-api.md (all sections). Secondary:
 // contracts/plan-format.md for the wire shapes read here.
@@ -62,16 +62,8 @@ import { type ElemCodec, Future, Stream } from "./streams.ts";
 import { markSyncCallable, syncPayloadOf } from "./sync.ts";
 
 /**
- * Relay the per-declaration host-import marks from the embedder's function
- * onto the wrapper the executor will actually receive, and return the
- * wrapper.
- *
- * Every `#dispatcher` arm re-wraps the embedder's function in a closure, so a
- * brand left on the original is INVISIBLE to `buildLoweredImport` — for suspending mark
- * that surfaced as a `NeedsJspi`, for cancellation discard (`deferCancel()`) it would be a
- * silently discarded commit, which is precisely the failure the brand exists
- * to prevent. Both marks are relayed by the same helper so a third one cannot
- * be added to one arm and forgotten in the other three.
+ * Preserve declaration-level suspension/cancellation marks through every
+ * facade wrapper; the executor sees only the outermost function.
  */
 function relayMarks<F extends CallableFunction>(from: unknown, to: F): F {
   if (isSuspending(from)) suspending(to);
@@ -109,8 +101,7 @@ export interface ComponentArtifacts {
  * `translator` accepts the translator-shim wasm bytes (simplest; compiles
  * the shim per call) or an already-created `Translator` (preferred when
  * instantiating more than one component, or the same component more than
- * once — create it once and reuse; translation itself is sub-millisecond
- * warm, the wasm compile is the cost being shared). `requiredImports`
+ * once, to share the compiled shim and its instance). `requiredImports`
  * still needs a plan: translate explicitly when you want to inspect the
  * import surface before instantiating.
  */
@@ -163,7 +154,7 @@ export async function resolveArtifacts(
 }
 
 export interface EmbedderOptions {
-  /** Opt in to JSPI-backed suspension (see `InstantiateInput.jspi`). */
+  /** Override automatic JSPI selection (see `InstantiateInput.jspi`). */
   jspi?: boolean;
   /** Verify `plan.component.sha256` against the bytes (default true). */
   verifyHash?: boolean;
@@ -218,11 +209,8 @@ export async function instantiate(
     imports: facade.rawImports,
     jspi: opts.jspi,
     verifyHash: opts.verifyHash,
-    // THE ordering fix: the facade converted this plan in its constructor and
-    // wired its import wrappers against those very `ResourceTypeInfo` tokens.
-    // Host imports fire DURING instantiation (a core module's `start`
-    // function runs inside `runInitializers`), so the facade cannot wait for
-    // the handle to learn its own types.
+    // Share the facade's resource tokens with imports called by core start
+    // functions, before instantiateComponent returns a handle.
     loadedPlan: facade.loaded,
   });
   facade.bind(handle);
@@ -260,7 +248,7 @@ class Facade {
   readonly rawImports: HostImports = {};
   readonly #resolver: ImportResolver;
   readonly #bindings = new Map<number, Binding>();
-  /** ResourceTypeInfo identity -> ResourceIndex (one index, many tokens). */
+  /** ResourceTypeInfo identity -> ResourceIndex (many table aliases). */
   readonly #tokenIndex = new Map<ResourceTypeInfo, number>();
   /**
    * The converted plan — owned by the facade and handed to the executor, so
@@ -271,10 +259,9 @@ class Facade {
   readonly loaded: LoadedPlan;
   readonly #bridge: ValueBridge;
   /**
-   * Releases for reps minted while lowering the CURRENT call's arguments.
-   * Argument lowering is synchronous and uninterrupted (no `await` between
-   * `#lowerScope = […]` and the reset), so a single slot is race-free even
-   * with concurrent export calls in flight.
+   * Releases collected during synchronous argument lowering. #lowerParams
+   * saves/restores this slot for reentrant lowering; each call retains its
+   * own release list after the collection window ends.
    */
   #lowerScope: (() => void)[] | null = null;
   /** ResourceIndex -> registry, for diagnostics (see INTERNAL_HOST_REGISTRIES). */
@@ -288,15 +275,9 @@ class Facade {
   ) {
     this.#resolver = new ImportResolver(providers);
     this.loaded = loadPlan(artifacts.plan);
-    // `ResourceTypeInfo` identity -> `ResourceIndex`. Both halves are static
-    // (the tokens are ours; `resourceTables` is wire data), so this map is
-    // complete before instantiation starts — a host import that fires from a
-    // guest `start` function can resolve resource types normally.
-    //
-    // One resource TYPE can be reached through several resource TABLES
-    // (plan-format.md "Type exports index into `resourceTables`": a type export's index is a table
-    // index, and the executor sets impl/dtor on every table whose `resource`
-    // matches), hence index-keyed bindings with tokens as aliases.
+    // Resolve identity before core start functions can call imports. Concrete
+    // tables naming one ResourceIndex share a token; table indices are aliases
+    // (plan-format.md "Type exports index into `resourceTables`").
     artifacts.plan.resourceTables.forEach((table, i) => {
       if (table.kind !== "concrete") return;
       const token = this.loaded.resourceTokens[i];
@@ -329,14 +310,8 @@ class Facade {
   // -- resource-type identity ------------------------------------------------
 
   /**
-   * Consistency check after instantiation.
-   *
-   * The facade no longer *learns* anything here — it handed its own
-   * `LoadedPlan` to the executor precisely so that nothing about types or
-   * resource identity depends on instantiation having finished. All this does
-   * is assert the executor did not silently re-load (which would give it a
-   * second, disjoint set of `ResourceTypeInfo` tokens and make every
-   * `own`/`borrow` unresolvable).
+   * Confirm the executor used the facade's loaded plan, not fresh resource
+   * tokens that would disagree with the import wrappers.
    */
   bind(handle: ComponentHandle): void {
     if (handle.loadedPlan !== this.loaded) {
@@ -462,12 +437,8 @@ class Facade {
           else self.#lowerScope.push(release);
           return rep;
         }
-        // Host `own` wrapper lowered as `borrow<R>` (#86): record the lend
-        // for the duration of this call, so a `drop()` or a GC finalization
-        // in the window cannot destroy a rep the guest still borrows.
-        // definitions.py `lift_borrow` -> `Subtask.add_lender` (line 890);
-        // `#lowerScope` is released where that subtask delivers its
-        // resolution, i.e. when the call ends.
+        // Retain the rep until this call ends; explicit/GC drop must not
+        // destroy it while borrowed (lift_borrow -> Subtask.add_lender).
         const rep = takeRep(v, t.rt, false, `borrow<${b.name}>`);
         const release = lendWrapper(v as object);
         if (self.#lowerScope === null) {
@@ -587,11 +558,8 @@ class Facade {
       );
     }
     const dispatch = this.#dispatcher(leaf, provider);
-    // The function type is resolved LAZILY, on first call. It must come from
-    // the *executor's* loaded plan: the `own`/`borrow` types in it carry the
-    // per-instantiation `ResourceTypeInfo` identity tokens the bridge keys on,
-    // and those objects do not exist until `instantiateComponent` has run —
-    // which is after this wrapper has to be handed to it.
+    // Build the value adapter lazily from the facade's already-loaded types.
+    // The executor receives this same LoadedPlan, including for start calls.
     let impl: RawFn | null = null;
     const wrapper = (...raw: unknown[]) => {
       if (impl === null) {
@@ -603,9 +571,7 @@ class Facade {
       }
       return impl(...raw);
     };
-    // suspending mark/cancellation discard brand relay, layer 2 of 2 (see #dispatcher): the executor reads
-    // the brands off this wrapper, which is what lands in its hostImports
-    // record.
+    // The executor reads declaration marks from this outermost wrapper.
     return relayMarks(dispatch, wrapper);
   }
 
@@ -660,19 +626,8 @@ class Facade {
             `${describe(fn)}); expected '${camelCase(m.name)}'`,
         );
       }
-      // suspending mark/cancellation discard: the `suspending()` and `deferCancel()` brands ride the
-      // dispatch closure so #wrapLeaf can relay them onto the value the
-      // executor actually receives.
-      //
-      // suspending mark receiver rule: an interface member is invoked with its containing
-      // object as receiver (matching the static arm's `apply(cls)`), so a
-      // class INSTANCE is a fully supported spelling of an interface
-      // provider — methods reading instance state work. A world-level bare
-      // import has no containing object and stays unbound. (Previously the
-      // plain arm called extracted functions unbound: a class-instance
-      // provider type-checked, worked while stateless, and broke with
-      // `this === undefined` the moment a method touched state — the silent
-      // liberal-acceptance failure the contract forbids.)
+      // Interface members keep their provider as receiver; world-level
+      // functions stay unbound. Relay marks through the dispatch closure.
       const receiver = leaf.path.length === 0 ? undefined : provider;
       const dispatch: (args: unknown[]) => unknown = (args) =>
         (fn as RawFn).apply(receiver, args);
@@ -697,22 +652,10 @@ class Facade {
         // deno-lint-ignore no-explicit-any
         return (args) => new (cls as any)(...args);
       case "method": {
-        // suspending mark: the brand authority for an instance method is the CLASS
-        // PROTOTYPE, read at wrap time — the Suspending-wrap decision is
-        // per-declaration and taken at instantiation, before any instance
-        // exists. Instance-level method overrides do not change
-        // suspendability (marking follows the WIT declaration, not the
-        // object); the per-call lookup below still dispatches to the
-        // override's BODY as before.
-        //
-        // The probe must not INVOKE accessors: a platform getter (e.g.
-        // `URLSearchParams.prototype.size`) brand-checks its receiver, and a
-        // raw `prototype[member]` read runs it with `this` = the prototype —
-        // an engine TypeError at instantiation, even for guests that never
-        // call the member. Only a data-property function can carry the suspending mark
-        // mark (stage-3 method decorators install data properties), so an
-        // accessor-backed member yields no wrap-time function here and stays
-        // a call-time concern for the per-call lookup below.
+        // Declaration marks come from prototype data methods at instantiation;
+        // per-instance overrides change the body, not the declaration. Do not
+        // invoke accessors while probing a bare prototype. Actual method
+        // lookup remains a call-time operation on the receiver.
         const protoFn = dataMember(
           (cls as { prototype?: unknown })?.prototype,
           camelCase(m.member),
@@ -752,13 +695,12 @@ class Facade {
    * The raw (definitions.py-shaped) function the executor lowers, wrapping a
    * conventions-shaped host implementation.
    *
-   * Error model (contract §"Error model"), the inversion of jco's convention:
+   * Error model (contract §"Error model"):
    *   * a returned value is the ok side;
    *   * `throw new ComponentException(payload)` is the err side of a `result<T, E>`;
    *   * a `Trap` passes through unchanged;
    *   * **any other throw is a host bug and becomes a trap naming the import**
-   *     — never a guest-visible err. This is what makes the consumers'
-   *     defensive `platformCall`-style wrappers unnecessary by construction.
+   *     — never a guest-visible err.
    */
   #wrapImportFn(
     leaf: ImportLeaf,
@@ -792,15 +734,8 @@ class Facade {
           value: rt.error === null ? null : fromHost(e.payload, rt.error, o),
         };
       }
-      // Every remaining branch traps the component. The import's lifted
-      // stream/future arguments were transferred to the host when the params
-      // were converted (the guest's ends are gone), and a trapping import is
-      // a declared host bug — nothing owns them anymore, so drop them here:
-      // a peer parked on one (a host writer feeding the stream this import
-      // just received, the #66 E2 shape) settles with the truthful "reader
-      // went away" instead of hanging forever. The err-VALUE branch above
-      // deliberately does NOT do this: a fallible import returning err is a
-      // normal outcome whose implementation may retain the handles.
+      // Trap paths abandon top-level async arguments transferred to the host.
+      // A normal result error does not: its implementation may retain them.
       releaseAsyncArgs(args);
       if (isTrap(e)) throw e;
       if (isComponentException(e)) {
@@ -809,10 +744,7 @@ class Facade {
             `only a fallible import may signal an error value`,
         );
       }
-      // The #83 signature: in a graph with several copies, an UNBRANDED throw
-      // is usually a pre-module identity copy's `ComponentException` (its brand rode class identity,
-      // which does not survive the copy boundary). Say so rather than leaving
-      // the latent puzzle that motivated §"Module identity and @polyengine/protocol".
+      // Include copy diagnostics for unbranded host failures.
       const census = copyCensus();
       throw new Trap(
         `${where} threw ${describeThrow(e)}. An unbranded throw from a host ` +
@@ -831,15 +763,8 @@ class Facade {
       const args = ft.params.map((p, i) =>
         toHost(raw[i] as ComponentValue, p, o, scope)
       );
-      // CONTRACT: anything the executor appended PAST the WIT-declared
-      // params is a runtime-minted extra, not a component value — today
-      // exactly the `abortable()` signal `createLoweredImport` adds for a
-      // marked import. It is forwarded verbatim (no `toHost` conversion: it
-      // has no `ValType` and must reach the host as the platform object it
-      // is). Without this the facade would silently drop the signal and a
-      // marked import's `signal` parameter would be forever `undefined` —
-      // the failure the mark exists to prevent. The slice is empty for every
-      // unmarked import, so no existing path changes shape.
+      // Extras beyond WIT params are runtime values, notably abortable()'s
+      // AbortSignal. Forward without component-value conversion.
       for (let i = ft.params.length; i < raw.length; i++) args.push(raw[i]);
       let out: unknown;
       try {
@@ -849,18 +774,9 @@ class Facade {
         return fail(e, args);
       }
       if (isThenable(out)) {
-        // When the WIT result type is `future<T>`, a thenable
-        // return IS the future source ("for `future<T>`, a `Promise<T>` or
-        // `Future<T>`" — §"Streams and futures"), not the call's async
-        // completion. The import completes immediately with the lowered
-        // future; the producer settles it on its own schedule. Without this,
-        // the natural spelling of the wasi:sockets 0.3 TCP `send` shape —
-        // `func(data: stream<u8>) -> future<result>`, an async method whose
-        // promise resolves when transmission completes — would park the
-        // call, and a future whose settlement depends on post-return guest
-        // action (the guest writes `data` AFTER `send` returns) livelocks.
-        // This branch also covers a returned `Future` handle, which is a
-        // PromiseLike and would otherwise be adopted and mis-lowered.
+        // A future-typed result is the source, not async call completion.
+        // Lower it immediately: settlement may depend on guest work after
+        // this import returns. This also preserves returned Future handles.
         if (resultType !== null && resultType.kind === "future") {
           scope.end();
           return ok(out);
@@ -1065,9 +981,8 @@ class Facade {
    * Lower a call's arguments, collecting the releases for anything that was
    * allocated *for the duration of this call* (see `lowerBorrow`).
    *
-   * The collection window is the synchronous argument-lowering phase only —
-   * `#lowerScope` is set and cleared with no `await` in between — so a single
-   * slot is correct even with concurrent export calls in flight.
+   * Save/restore the collection slot for reentrant lowering. Release every
+   * borrow once, even if another release throws, then report the first error.
    */
   #lowerParams(
     params: ValType[],
@@ -1167,8 +1082,8 @@ class Facade {
   /**
    * Wrap one lifted export.
    *
-   * Uniformly Promise-shaped (contract §"Functions and async"): a sync
-   * completion resolves immediately, so there is one calling convention.
+   * Promise-shaped except for an eager Future handle in future-result
+   * position (contract §"Functions and async").
    * A `result<T, E>` in *function-result* position resolves `T` or rejects
    * `ComponentException<E>`; a result nested inside a value is plain `{kind, value}` data
    * and never throws.
@@ -1188,7 +1103,6 @@ class Facade {
       // PromiseLike, so `await` still yields `T`.
       const element = resultType.element;
       wrapper = (...args: unknown[]): Promise<unknown> => {
-        // Advisory 9: the generic branch checks arity; so must this one.
         if (args.length !== ft.params.length) {
           throw new TypeError(
             `${where}: expected ${ft.params.length} argument(s), got ` +
@@ -1246,9 +1160,7 @@ class Facade {
         return toHost(raw as ComponentValue, resultType, o);
       };
     }
-    // sync() brand (contracts/embedder-api.md §"Functions and async"): every
-    // returned wrapper is branded, additively — the default Promise-shaped
-    // surface above is unchanged either way.
+    // sync() selects the synchronous form without changing the default wrapper.
     if (ft.async === true) {
       markSyncCallable(wrapper, { kind: "async" });
     } else {
@@ -1282,11 +1194,8 @@ class Facade {
       SYNC_ENTRY
     ] as RawFn | undefined) ?? fn;
     const unreachableThenable = (raw: unknown): never => {
-      // Defensive (see the dispatch prompt / sync() failure ladder): a genuine
-      // park through a plain entry surfaces as a trap, `NeedsJspi`, or
-      // `SyncEntryBusy` — never a settled thenable VALUE. A silent
-      // Promise-as-value here would corrupt lifting rather than fail loudly,
-      // so this is a diagnostic backstop, not a documented outcome.
+      // A plain entry must refuse suspension, not return a thenable that
+      // would be mistaken for a component value.
       void raw;
       throw new Error(
         `${where}: the sync entry returned a thenable, which should be ` +
@@ -1431,13 +1340,10 @@ function isThenable(v: unknown): boolean {
 }
 
 /**
- * Drop the lifted stream/future arguments a trapping import abandoned (#66).
- * Top-level parameters only: those are the shapes whose peers park host
- * operations; a stream nested inside a record is exotic enough to leave to
- * the negligence rules. Uses the teardown drop, not the plain one — the
- * calling instance is about to be poisoned by this very trap, and a DROPPED
- * notification must not queue a phantom event into its waitables (review
- * B2; see task/streams.ts `dropSharedForTeardown`).
+ * Drop top-level stream/future arguments abandoned by a trapping import.
+ * Nested handles are not traversed. Teardown suppresses notifications only
+ * for peers already marked poisoned/retired; it does not anticipate the
+ * caller's later poisoning (task/streams.ts dropSharedForTeardown).
  */
 function releaseAsyncArgs(args: unknown[]): void {
   for (const a of args) {

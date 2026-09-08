@@ -1,9 +1,8 @@
 //! translator-shim: `wasmtime-environ`'s component frontend (validation,
 //! linking resolution, FACT fused-adapter synthesis) behind a stable output
-//! format — the **plan v0** of `contracts/plan-format.md`.
+//! format defined in `contracts/plan-format.md`.
 //!
-//! Promoted from translator-spike (`crates/translator-spike`). The spike's debug
-//! `Summary` is replaced by the contract artifact set:
+//! Translation produces the contract artifact set:
 //!
 //! - `plan.json` — the plan (schema: `src/plan.rs`)
 //! - `adapters/<static-module-index>.wasm` — FACT-generated core modules
@@ -65,7 +64,7 @@ pub struct Translation {
 
 /// Wasm feature set used for validation during translation.
 ///
-/// `wasmparser` 0.252 defaults already include `component_model` and
+/// `wasmparser` defaults already include `component_model` and
 /// `cm_async` (component-model-async). We additionally enable the async
 /// trailing features (mirroring wasmtime's
 /// `-W component-model-async=y,component-model-error-context=y`) and the
@@ -74,9 +73,7 @@ pub struct Translation {
 /// suite files contain components the suite expects to *decode* (`module` /
 /// `module_definition` commands); with the gates off the shim rejects them
 /// with a feature-gate error, which is not a conformance verdict we want to
-/// claim. Enabling them was checked against the whole corpus: it does not
-/// turn any `assert_invalid`/`assert_malformed` case into an acceptance
-/// (`cargo run -p translator-shim --example suite-inventory`).
+/// claim. `suite-inventory` checks validation outcomes against the corpus.
 fn features() -> wasmparser::WasmFeatures {
     let mut f = wasmparser::WasmFeatures::default();
     f.insert(wasmparser::WasmFeatures::CM_ASYNC);
@@ -130,7 +127,7 @@ fn feature_names() -> Vec<String> {
         .to_vec()
 }
 
-/// Translate a component binary into plan v0 + adapter artifacts.
+/// Translate a component binary into a plan and adapter artifacts.
 ///
 /// Runs wasmtime's full component frontend: parse + validate + type-check the
 /// component, resolve its linking structure to a flat initializer list, run
@@ -378,10 +375,8 @@ pub fn translate_to_envelope(component_bytes: &[u8]) -> String {
 
 /// The C-ABI error envelope.
 ///
-// CONTRACT: contracts/plan-format.md / translator-shim README pin the error
-// envelope as `{"error": "<message>"}` and "no other field present". The
-// `error` string keeps exactly that meaning; `errorDetail` is an additive
-// sibling carrying the structured verdict (phase + message). v0.2 proposal.
+// `error` carries the message; `errorDetail` carries the structured verdict
+// (phase + message), per contracts/plan-format.md.
 pub fn error_envelope_json(e: &TranslateError) -> String {
     serde_json::to_string(&serde_json::json!({
         "error": e.message,
@@ -392,7 +387,7 @@ pub fn error_envelope_json(e: &TranslateError) -> String {
 
 /// C-ABI surface for the wasm32 build (used by the Deno driver).
 ///
-/// Contract (unchanged from the spike):
+/// Contract:
 /// - `ts_alloc(len) -> ptr`: allocate `len` bytes (caller writes input here).
 /// - `ts_translate(ptr, len, out_len: *mut usize) -> out_ptr`: translate the
 ///   component at `ptr..ptr+len`. Writes the output length to `*out_len` and

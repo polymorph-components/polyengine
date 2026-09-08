@@ -33,7 +33,7 @@ export class Translator {
    * `null` when constructed from a pre-compiled `WebAssembly.Module` with no
    * bytes available (module identity can't be recovered post-compile).
    *
-   * This is the honest translator "build hash" for the artifact cache
+   * This is the translator build identity for the artifact cache
    * (docs/architecture.md §10): the wire envelope's `producer` block records
    * `{shimVersion, wasmtimeEnviron, features}`, which does NOT change when
    * the shim wasm is rebuilt from the same source versions (e.g. a local
@@ -76,8 +76,8 @@ export class Translator {
   }
 
   /**
-   * Wrap an ALREADY-INSTANTIATED shim — the ESM wasm-module import path
-   * (issue #16 delivery design): `import * as shim from ".../translator_shim.wasm"`
+   * Wrap an already-instantiated shim, including an ESM wasm namespace:
+   * `import * as shim from ".../translator_shim.wasm"`
    * hands back an instantiated namespace (the shim imports nothing, so the
    * ESM integration instantiates it trivially), and this wraps it with no
    * further compile or copy.
@@ -91,7 +91,7 @@ export class Translator {
    * `buildHash` (hex sha-256 of the shim wasm bytes) cannot be recovered
    * from an instance; pass it when known — a published package can ship the
    * hash of the exact asset it carries — or leave it absent and the
-   * artifact cache politely refuses to key on translator identity
+   * artifact cache refuses to key on translator identity
    * (cache/core.ts).
    */
   static fromExports(
@@ -101,7 +101,7 @@ export class Translator {
     return new Translator(exports, opts.buildHash ?? null);
   }
 
-  /** Translate a component binary into plan v0 + adapter artifacts. */
+  /** Translate a component binary into a validated plan and adapter artifacts. */
   translate(componentBytes: Uint8Array): TranslationResult {
     const json = this.translateRaw(componentBytes);
     const { wire, adapters } = loadEnvelope(json);

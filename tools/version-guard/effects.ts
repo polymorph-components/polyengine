@@ -1,8 +1,5 @@
-// The effects the guard needs from the outside world, as one injectable
-// interface: every check below is a pure function over this, so the unit
-// tests run the real decision logic against fixtures with no network, no
-// `gh`, and no repository state. `realEffects()` is the only place that
-// touches Deno APIs.
+// Injectable network, command and filesystem effects. Tests exercise the guard's
+// decision logic without network access, gh or repository state.
 
 export type HttpResponse = { status: number; body: string };
 

@@ -2,53 +2,19 @@
 // only; nothing here depends on the engine's own compiled-module cache,
 // i.e. layer 2).
 //
-// GOAL: content-address a shim translation by
+// Content-address a shim translation by
 // `(component sha256, translator build hash, feature flags)` so a reload
 // (same component, same shim build, same features) can skip the
 // translate-with-the-shim step entirely.
 //
-// CACHE FAILURES ARE NEVER FATAL (issue #196): the cache is a pure
-// optimization layered over `Translator.translateRaw` + `loadEnvelope`, both
-// of which already succeed/fail on their own terms. A `get`/`put`/internal
-// self-heal failure — including a read-only or otherwise unwritable cache
-// root — must never turn into a failed translation; at worst it turns into
-// a fresh (uncached) translation. `translateCached` swallows `get`/`put`
-// failures (surfaced only via the opt-in `onCacheError` callback below);
-// the backends (dir.ts, web.ts) swallow their internal self-heal evictions
-// and turn any `get`-path I/O failure into a `null` (miss) rather than a
-// throw. The one exception, by design, is `TranslateError` from
-// `loadEnvelope`: that is a verdict about the *input component*, not a
-// cache failure, and keeps propagating uncached. The public `evict()` also
-// keeps throwing — an explicit caller asked for that specific effect and
-// deserves to know if it didn't happen.
+// translateCached treats get/put failures as misses or uncached successes;
+// key construction, translation and envelope validation still fail normally.
+// Direct backend calls retain their own error contracts, including evict.
 //
-// PERSISTED-ARTIFACT-SET DECISION (governing: contracts/plan-format.md
-// "Artifact set" + "No duplicate bytes" — plan-format.md:24-31,63-64):
-// we persist `plan.json` (the wire `WirePlan`) and the FACT adapter modules
-// only. We do NOT persist the original component bytes.
-//
-// Evidence this is correct, not merely convenient:
-//   - plan-format.md is explicit: "The original component binary is the
-//     third input at instantiation time; the plan never embeds it" and
-//     "Embedded core modules are referenced as `[offset, len)` byte ranges
-//     into the original component binary — the executor slices them
-//     itself" (decision 3). `instantiateComponent`/`Facade.instantiate`
-//     (runtime/src/embedder/instantiate.ts `ComponentArtifacts`) take
-//     `componentBytes` as a caller-supplied field *alongside* `plan` and
-//     `adapters` — never as something the plan or its loader manufacture.
-//   - Operationally: whoever calls `translateCached` already holds the
-//     component bytes (that's how they'd have a sha256 to form a cache key
-//     in the first place, and how `verifyComponent`'s length check runs
-//     without a bytes store at all). Reload use cases (browser page reload,
-//     Deno process restart) re-fetch/re-read the *component* from its own
-//     source of truth (network, disk) every time; only the *translation*
-//     (the expensive shim call) is worth skipping. Storing componentBytes a
-//     second time would be pure duplication with no consumer.
-//   - `get()` therefore verifies integrity using only the requested
-//     `CacheKey.componentSha256` against the value that was true at `put()`
-//     time (recorded in the stored metadata and cross-checked against the
-//     embedded `plan.component.sha256`) — never against fresh bytes, which
-//     this layer never sees.
+// Persist plans and FACT adapters, not original component bytes: the caller
+// supplies those again at instantiation (plan-format.md "Artifact set").
+// Backend checks compare metadata and plan.component.sha256 to the requested
+// key and validate plan structure; they do not authenticate stored contents.
 
 import type { WirePlan } from "../plan/format.ts";
 import { loadEnvelope, PlanError } from "../plan/loader.ts";
@@ -64,14 +30,8 @@ export interface TranslatorLike {
   translateRaw(componentBytes: Uint8Array): string;
 }
 
-/** Cache layout version. Bumped on any incompatible on-disk/on-Cache-API
- * schema change; an unrecognized version is read back as a miss (never a
- * crash) so stale caches from an older build self-heal by re-translating —
- * and this self-healing holds even when the cache root itself is
- * unwritable (issue #196): the eviction attempt that a layout mismatch
- * triggers is swallowed internally by the backend, so a read-only
- * pre-warmed cache from an older layout degrades to "always miss, always
- * re-translate" rather than throwing.
+/** Cache layout version. Bump on incompatible storage-schema changes.
+ * Unknown versions are misses; stale-entry eviction is best effort.
  *
  * @internal — on-disk/on-Cache-API schema version, owned by the bundled
  * cache backends. */
@@ -167,7 +127,7 @@ export async function keyFor(
 export interface TranslateCachedOptions {
   features?: string[];
   /**
-   * Opt-in determinism guard (tests only, per dispatch): after a cache miss,
+   * Opt-in determinism guard: after a cache miss,
    * translate a second time and assert byte-identical envelope JSON before
    * trusting/storing the result. Throws `Error` on mismatch.
    */
@@ -242,10 +202,7 @@ export async function translateCached(
       );
     }
   }
-  // loadEnvelope both validates (throws TranslateError for a validation
-  // verdict — must propagate uncached, per TranslateError's docs: a
-  // validation verdict is a judgment about the *input component*, not
-  // something to cache-and-replay) and gives us the split plan/adapters.
+  // Translation/envelope failures propagate; only successful artifacts cache.
   const { wire, adapters } = loadEnvelope(first);
 
   // A `put` failure (issue #196) is swallowed: the translation already

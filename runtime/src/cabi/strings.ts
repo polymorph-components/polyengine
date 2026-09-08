@@ -2,7 +2,7 @@
 // `store_string*`, `convert_i32_to_char`, `char_to_i32`).
 //
 // Host-side strings are plain JS strings (docs/architecture.md §7). Two deliberate
-// deviations from definitions.py, both recorded in runtime/README.md:
+// host-representation choices:
 //
 // 1. No encoding provenance. The reference represents a lifted string as
 //    (str, src_encoding, tagged_code_units) so that lowering can pick a
@@ -32,10 +32,7 @@ import type { PtrType, StringEncoding } from "./types.ts";
 
 export const REALLOC_I32_MAX = 2 ** 32 - 1;
 
-// Trap wording for realloc-return validation, matching wasmtime
-// (`src/runtime/component/func/options.rs:175,185`) so the official suite's
-// `values/realloc.wast` expectations match. Semantics are unchanged; only the
-// text differs from the earlier hand-written wording.
+// Realloc diagnostics match the official suite's `values/realloc.wast` text.
 export const REALLOC_MISALIGNED = "realloc return: result not aligned";
 export const REALLOC_OOB = "realloc return: beyond end of memory";
 export const MAX_STRING_BYTE_LENGTH = (1 << 28) - 1;
@@ -149,12 +146,8 @@ export function loadStringFromRange(
         return latin1Decode(bytes);
     }
   } catch {
-    // Message only: the trap condition is unchanged. wasmtime lifts strings
-    // with `core::str::from_utf8` and surfaces Rust's `Utf8Error`, whose two
-    // shapes the official suite asserts on separately
-    // (`values/strings.wast:85` vs `:101`): a byte sequence that can never be
-    // valid, versus one that is a valid prefix cut short by the end of the
-    // string.
+    // `values/strings.wast` distinguishes malformed UTF-8 from a valid prefix
+    // cut short at the end of input, matching Rust's Utf8Error diagnostics.
     trap(
       encoding === "utf-8"
         ? utf8ErrorMessage(bytes)
@@ -232,9 +225,7 @@ export function storeString(
 ): void {
   const mem = requireMemory(cx.opts);
   const [begin, taggedCodeUnits] = storeStringIntoRange(cx, v);
-  // Write order matches the reference (store_string, definitions.py:1613-1616):
-  // begin pointer first, then tagged length. Unobservable here (no trap can
-  // intervene between the two writes), but kept in step for parity.
+  // `store_string` writes the begin pointer before the tagged code-unit count.
   storeInt(
     mem,
     mem.ptrSize() === 4 ? begin : BigInt(begin),

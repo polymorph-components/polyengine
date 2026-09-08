@@ -1,17 +1,8 @@
-// `@polyengine/wasi` — the WASI providers for polyengine hosts, and the
-// executable check that the embedder conventions
-// (`@polyengine/protocol` — this package is protocol-only, per
-// embedder-api.md §"The host-ABI surface and its version")
-// serve WASI (docs/architecture.md §2 keeps implementations out of
-// the RUNTIME — this package is where they live). Scope: p2
-// baseline + p3 clocks + à la carte sockets on BOTH tracks (the
-// poll-shaped `@0.2` surface std::net links, and `@0.3` UDP + TCP
-// client/listener; one node-builtins backend serving Deno and Node;
-// `@polyengine/wasi/sockets`, issue #4, server-JS hosts only). Sockets is
-// deliberately not merged here: this root module stays host-agnostic
-// web-platform code, and `wasi()` merges only AMBIENT, side-effect-
-// benign capabilities (time, entropy, stdio capture, an empty
-// filesystem). Anything granting network egress or host storage is
+// `@polyengine/wasi`: WASI providers using only `@polyengine/protocol` for
+// the host ABI (contracts/embedder-api.md §"The host-ABI surface and its version").
+// This root module stays host-agnostic web-platform code. `wasi()` merges
+// time, entropy, stdio capture, and an empty filesystem.
+// Anything granting network egress or host storage is
 // opt-in regardless of how portable it is — sockets, the fetch-backed
 // http fragment, the host-stdio cli impl (`./cli-stdio` — real
 // stdin/stdout/terminal access; the unqualified `./cli` stays the
@@ -51,8 +42,7 @@
 //
 // `wasi(options)` returns one flat imports-record fragment, keyed by
 // compatibility-**track** keys per contracts/embedder-api.md §"Version
-// canonicalization" (`@0.2`, `@0.3`) — this package is the flagship
-// track-key-registration consumer: one `@0.2` provider serves every p2
+// canonicalization" (`@0.2`, `@0.3`): one `@0.2` provider serves compatible p2
 // leaf regardless of whether the guest's binary says `0.2.6`, `0.2.9` or
 // `0.2.12`, and one `@0.3` union provider serves both
 // divergent `monotonic-clock@0.3.0` drafts the corpus actually links

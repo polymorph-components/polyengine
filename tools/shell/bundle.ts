@@ -1,8 +1,4 @@
-// Builds the shell-lane bundle into `tools/shell/dist/` (gitignored, same as
-// `harness/browser/dist/`). Same `deno bundle` mechanics as
-// `tools/browser/bundle.ts` (see that file's header) — a separate script
-// per issue #22's dispatch, not a shared one, because the entry points and
-// output layout differ (no `harness/browser/index.html` to sit next to).
+// Builds the shell-lane bundle into tools/shell/dist/ (gitignored).
 //
 // Usage: deno run -A tools/shell/bundle.ts
 
@@ -33,11 +29,8 @@ export async function bundle(): Promise<void> {
   });
   const { code } = await cmd.output();
   if (code !== 0) throw new Error(`deno bundle failed with code ${code}`);
-  // Byte-identical .mjs copy for the node/bun lanes (host-node.mjs imports
-  // it): with no package.json anywhere above tools/shell/dist/, node parses
-  // a .js file as CommonJS and rejects the bundle's import/export syntax;
-  // the .mjs extension forces ESM. (The jsshells keep loading entry.js —
-  // one bundle, two names, so every lane runs the same bytes.)
+  // .mjs makes ESM explicit for Node/Bun without package.json or syntax detection.
+  // The shells load the byte-identical entry.js.
   await Deno.copyFile(out, join(dirname(out), "entry.mjs"));
   return;
 }

@@ -4,11 +4,11 @@
 //
 // JSR is the primary registry (README §Consuming); this emits the same five
 // packages for npm consumers, from the same sources, at the same version AS
-// THEIR JSR COUNTERPART. The build is a pure function of the workspace:
+// THEIR JSR COUNTERPART unless --version overrides the lockstep set:
 // `name`, `version` and `exports` come from each package's deno.json, so a
 // version bump or a new entry point needs no edit here.
 //
-// Versioning mirrors release.yml's "compute tag and version" step exactly:
+// Versioning follows the lockstep/package policy:
 // runtime, translator, wasi and ct-runner are a LOCKSTEP set (one emission
 // version between them — either the caller's `--version` stamp, or their
 // agreeing manifest version when no stamp is given). @polyengine/protocol is
@@ -17,8 +17,8 @@
 // emits at its own manifest version, on both registries, regardless of
 // `--version`. Dependency edges follow the same asymmetry: a lockstep
 // package depending on a lockstep sibling pins the exact emission version
-// (they publish atomically); a dependency on protocol is a caret of
-// protocol's manifest version (`^0.1.0`), matching what `deno publish`
+// (they are released together); a dependency on protocol is a caret of
+// protocol's manifest version, matching what `deno publish`
 // itself does when it rewrites workspace cross-deps for the JSR emission —
 // letting a protocol bump dedup across lockstep versions built before and
 // after it, per contracts/embedder-api.md §"Module identity and
@@ -31,14 +31,14 @@
 // `import.meta.url` (runtime/src/embedder/copy.ts), neither of which survives a
 // CommonJS emit.
 //
-// THE INVARIANT THIS FILE EXISTS TO PROTECT: cross-package imports become real
+// Cross-package imports must become real
 // npm `dependencies`, never inlined source. Duplicate copies of the runtime or
 // the protocol package in one module graph are the latent-failure mode that
 // contracts/embedder-api.md §"Module identity and @polyengine/protocol" is
 // a response to; registry symbols
 // make a duplicate survivable, not correct. `mappings` below forces every
 // `@polyengine/*` specifier — including subpath forms like
-// `@polyengine/runtime/shim` — onto the npm package at the exact same version.
+// `@polyengine/runtime/shim` — onto the owning npm package and version range.
 // tools/npm-build/smoke.mjs asserts the property mechanically after packing.
 //
 // Build order is dependency order, and each package is built with its
@@ -134,7 +134,7 @@ async function main() {
 
   // One version for the lockstep four: either the manifests' (which the
   // release workflow's lockstep guard already pins to agree) or the caller's
-  // stamp for a prerelease. A torn set would produce packages depending on
+  // version override. A torn set would produce packages depending on
   // sibling versions that were never published. protocol is NOT part of
   // this — it rides its own manifest version always (see header).
   for (const p of LOCKSTEP) {
@@ -164,7 +164,7 @@ async function main() {
   for (const pkg of PACKAGES) {
     const name = manifests.get(pkg)!.name;
     // Dependency edges: a lockstep sibling is pinned EXACT (they publish
-    // atomically, and a prerelease stamp must pin exactly what it built
+    // together, and a version override must pin exactly what it built
     // alongside); protocol is pinned by CARET of its own manifest version —
     // JSR parity, since `deno publish` rewrites workspace cross-deps to
     // caret, and it lets a protocol bump dedup across mixed lockstep

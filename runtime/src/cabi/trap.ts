@@ -1,15 +1,14 @@
 // Trap and assertion machinery (definitions.py `Trap`, `trap`, `trap_if`).
 //
 // `Trap`'s canonical definition lives in `@polyengine/protocol`
-// (contracts/embedder-api.md §"Module identity": it is an embedder-contract value and must be recognizable across
-// runtime copies, issue #83); it is re-exported here so every existing
-// `from "../cabi/trap.ts"` import path is unchanged. The protocol package is
-// dependency-free, so this import introduces no cycle.
+// so it is recognizable across runtime copies
+// (contracts/embedder-api.md §"Module identity").
 //
-// `Trap` models a Component Model trap — a deterministic guest-visible fault.
-// `AssertionError` models the reference's Python `assert`s: internal
-// invariants that callers are supposed to make unviolable. Tests treat only
-// `Trap` as an expected outcome.
+// `Trap` represents a Component Model trap. `AssertionError` represents
+// reference assertions and host-precondition violations, such as an invalid
+// value supplied to scalar lowering, not a guest's canonical trap outcome.
+// Throwing a JS exception does not itself ensure guest uncatchability;
+// see intrinsics/mod.ts `HostTrapState` for that limitation.
 
 import { Trap } from "@polyengine/protocol";
 
@@ -34,7 +33,7 @@ export function assert_(cond: boolean, message?: string): asserts cond {
   if (!cond) throw new AssertionError(message);
 }
 
-/** Marks a definitions.py code path this v1 interpreter does not port yet. */
+/** Marker for an unsupported interpreter path, distinct from a guest trap. */
 export class NotImplemented extends Error {
   constructor(what: string) {
     super(`not implemented in cabi v1: ${what}`);

@@ -180,7 +180,7 @@ Deno.test("loader: nested structural types convert recursively", () => {
   });
 });
 
-// --- structured translation verdicts (contracts v0.2 proposal) -------------
+// --- structured translation verdicts --------------------------------------
 
 Deno.test("loader: envelope errorDetail becomes a TranslateError with phase", () => {
   // A `validation` phase is the shim's judgment about the *component* — the
@@ -234,7 +234,7 @@ Deno.test("loader: v0.1 envelope without errorDetail is not a validation verdict
   }
 });
 
-// --- imported resources (contracts v0.2 proposal) --------------------------
+// --- imported resources ---------------------------------------------------
 
 Deno.test("loader: ResourceIndex = imported + defined", () => {
   const withImports = loadPlan(minimalPlan({

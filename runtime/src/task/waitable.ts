@@ -1,12 +1,12 @@
-// definitions.py `### Waitable State` (line 754) — the event protocol shared
-// by subtasks and (later) stream/future ends.
+// definitions.py `Waitable` / `WaitableSet`: events shared by subtasks and
+// stream/future ends.
 
 import { assert_, trapIf } from "../cabi/trap.ts";
 import { chooseCandidate } from "./scheduler.ts";
 import type { BlockRequest, Cancelled } from "./scheduler.ts";
 import type { Thread } from "./thread.ts";
 
-/** definitions.py `EventCode` (line 756). */
+/** definitions.py `EventCode`. */
 export enum EventCode {
   NONE = 0,
   SUBTASK = 1,
@@ -21,13 +21,9 @@ export enum EventCode {
 export type EventTuple = [code: EventCode, p1: number, p2: number];
 
 /**
- * definitions.py `class Waitable` (line 767).
- *
- * The pending event is a **thunk**, not a value: the reference computes the
- * payload at delivery time (`get_pending_event` calls it), which is what lets
- * a subtask report its *final* state even if it advanced between the event
- * being set and being read. Keeping the thunk is load-bearing — see
- * `Subtask.setPendingEvent`.
+ * `Waitable.get_pending_event` computes the payload at delivery time, so a
+ * subtask reports its current state even if it advanced after notification.
+ * See `Subtask.setSubtaskPendingEvent` for delivery-time lender release.
  */
 export class Waitable {
   pendingEvent: (() => EventTuple) | null = null;
@@ -47,7 +43,7 @@ export class Waitable {
   }
 
   /**
-   * definitions.py `Waitable.wait_for_pending_event` (line 786): a
+   * definitions.py `Waitable.wait_for_pending_event`: a
    * *non-cancellable* block until this waitable has an event, used by the
    * synchronous `subtask.cancel` path.
    */
@@ -70,7 +66,7 @@ export class Waitable {
     return pendingEvent();
   }
 
-  /** definitions.py `Waitable.join` (line 797). */
+  /** definitions.py `Waitable.join`. */
   join(wset: WaitableSet | null): void {
     assert_(!this.hasSyncWaiter, "join on a waitable with a sync waiter");
     if (this.wset) {
@@ -82,7 +78,7 @@ export class Waitable {
     if (wset) wset.elems.push(this);
   }
 
-  /** definitions.py `Waitable.drop` (line 805). */
+  /** definitions.py `Waitable.drop`. */
   drop(): void {
     assert_(
       !this.hasPendingEvent(),
@@ -101,7 +97,7 @@ const EV_TRACE = (() => {
   }
 })();
 
-/** definitions.py `class WaitableSet` (line 810). */
+/** definitions.py `WaitableSet`. */
 export class WaitableSet {
   readonly elems: Waitable[] = [];
   numWaiting = 0;
@@ -111,10 +107,8 @@ export class WaitableSet {
   }
 
   /**
-   * definitions.py `WaitableSet.get_pending_event` (line 821). The reference
-   * shuffles `elems` before scanning; we scan in **join order** under the
-   * default FIFO policy (`chooseCandidate` over the ready elements), which is
-   * within the same allowed nondeterminism — see scheduler.ts's policy note.
+   * `WaitableSet.get_pending_event` permits choosing any pending member.
+   * Default to join order; seeded scheduling chooses among ready members.
    */
   getPendingEvent(): EventTuple {
     const ready = this.elems.filter((w) => w.hasPendingEvent());
@@ -132,7 +126,7 @@ export class WaitableSet {
     return ev;
   }
 
-  /** definitions.py `WaitableSet.wait_for_event_and` (line 829). */
+  /** definitions.py `WaitableSet.wait_for_event_and`. */
   *waitForEventAnd(
     thread: Thread,
     readyFunc: () => boolean,
@@ -152,7 +146,7 @@ export class WaitableSet {
     }
   }
 
-  /** definitions.py `WaitableSet.wait_for_event` (line 841). */
+  /** definitions.py `WaitableSet.wait_for_event`. */
   *waitForEvent(
     thread: Thread,
     cancellable: boolean,
@@ -161,7 +155,7 @@ export class WaitableSet {
   }
 
   /**
-   * definitions.py `WaitableSet.poll` (line 844). Never blocks, so it is a
+   * definitions.py `WaitableSet.poll`. Never blocks, so it is a
    * plain function rather than a generator.
    */
   // deno-lint-ignore no-explicit-any
@@ -173,7 +167,7 @@ export class WaitableSet {
     return this.getPendingEvent();
   }
 
-  /** definitions.py `WaitableSet.drop` (line 852). */
+  /** definitions.py `WaitableSet.drop`. */
   drop(): void {
     trapIf(this.elems.length > 0, "cannot drop waitable set with waitables");
     trapIf(this.numWaiting > 0, "cannot drop waitable set with waiters");

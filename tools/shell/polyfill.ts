@@ -1,47 +1,13 @@
 // Shell surface bootstrap — MUST be the first import in `tools/shell/entry.ts`
 // (see that file's header for why import order matters here). Installs
-// TextEncoder/TextDecoder on `globalThis` for engines that lack them.
+// encoding, SHA-256 digest and base64 helpers on globalThis when absent.
 //
-// Verified 2026-08-09 (see issue #22): SpiderMonkey nightly (linux-aarch64
-// jsshell) and JSC (jsc, GTK 2.52 stable) both lack TextEncoder/TextDecoder
-// entirely. Scope of what the runtime actually needs (grep of
-// `runtime/src/cabi/strings.ts`, `runtime/src/intrinsics/transcode.ts`,
-// `runtime/src/shim/translator.ts`, `runtime/src/digest/*.ts`,
-// `runtime/src/cache/core.ts` — the full non-test surface):
-//
-//   - `new TextEncoder()` then `.encode(str)` — UTF-8 encode. No `encodeInto`
-//     call anywhere in the runtime; not implemented here.
-//   - `new TextDecoder("utf-8", { fatal: true, ignoreBOM: true })` and
-//     `.decode(bytes)` — UTF-8 decode, throw on ill-formed input.
-//   - `new TextDecoder("utf-16le", { fatal: true, ignoreBOM: true })` —
-//     UTF-16LE decode, throw on an unpaired surrogate (definitions.py
-//     `load_string` treats a lone surrogate as ill-formed on decode; the
-//     USVString replacement only happens on the *lowering* side, via
-//     `String.prototype.toWellFormed`, not here — see strings.ts).
-//   - `new TextDecoder()` (defaults: "utf-8", fatal: false, ignoreBOM: false)
-//     — used once, translator.ts, to decode the shim's plan JSON.
-//
-// `String.prototype.toWellFormed` is present on both shells (verified), so
-// USVString conversion (lone surrogate -> U+FFFD) needs no polyfilling.
-//
-// Web semantics matched here (WHATWG Encoding Standard):
-//   - UTF-8 encode: standard UTF-8 of the (already well-formed, from the
-//     runtime's call sites) JS string; a lone surrogate reaching `encode`
-//     directly (bypassing `toWellFormed`) is itself replaced with the UTF-8
-//     encoding of U+FFFD, matching the spec's encoder (which never produces
-//     WTF-8) rather than throwing.
-//   - UTF-8 decode: standard UTF-8 decoder; `fatal: true` throws
-//     `TypeError` on any ill-formed byte sequence (overlong forms,
-//     unexpected continuation bytes, out-of-range code points, truncated
-//     sequences) instead of substituting U+FFFD.
-//   - UTF-16LE decode: pairs of little-endian code units become UTF-16 code
-//     units directly (JS strings already are UTF-16); `fatal: true` throws on
-//     an odd trailing byte or an unpaired surrogate.
-//   - `ignoreBOM` is accepted but every runtime call site passes `true`
-//     (never relevant) except the bare `new TextDecoder()` call, which
-//     therefore strips a leading U+FEFF if present (default WHATWG
-//     behavior) — implemented for completeness though the runtime's one use
-//     (JSON from the shim) never emits a BOM.
+// Implements the lane's encoding subset, not the full Encoding API: UTF-8
+// encode, UTF-8/UTF-16LE decode, fatal errors and BOM handling; no encodeInto.
+// Encoding replaces lone surrogates with U+FFFD. Fatal decoding rejects malformed
+// input, including unpaired UTF-16 surrogates, as required by CABI load_string.
+// This differs intentionally from lowering's USVString replacement. Non-fatal
+// decoding substitutes U+FFFD, and ignoreBOM=false strips a leading BOM.
 
 // deno-lint-ignore no-explicit-any
 const g = globalThis as any;

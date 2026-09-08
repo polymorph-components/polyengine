@@ -76,26 +76,11 @@ export function flattenTypes(ts: ValType[], opts: LiftOptions): CoreType[] {
 /**
  * `flattenTypes(ts, opts).length`, memoized on (ts array identity, ptrType).
  *
- * Every arm of `flattenType` reaches `opts` only through
- * `requireMemory(opts).ptrType()` (string/list-without-length read the
- * pointer width; every other arm is opts-free or recurses structurally), so
- * the flattened element count is a pure function of `(ts, ptrType)` — one
- * map per pointer width is the whole of the cache key. `ts` is always a
- * plan-owned `ft.params`/`ft.results` array, the same stability argument
- * `spillTupleType` (values.ts) relies on, so its identity is a valid key.
- *
- * This caches the COUNT, not the flattened array: `values.ts`'s only use of
- * `flattenTypes` on the per-call path is `.length`, and a cached number has
- * no aliasing/mutation hazard to guard (a cached array would need freezing
- * plus a lossy `readonly`-to-mutable cast at every read site — the shape
- * this replaced). Callers that need the actual flat types (instantiate-time
- * `flattenFunctype`) still call `flattenTypes` directly, uncached; that path
- * runs once per function, not once per call, so it doesn't need this.
- *
- * The null-memory path is deliberately NOT cached: `requireMemory` throws
- * when `opts.memory` is null (for any `ts` containing a string/unbounded
- * list), and that throw must still surface on every call, not just the
- * first.
+ * `flattenType` reads options only for pointer width. Inputs and all reachable
+ * types must remain immutable, as for plan-owned ft.params/ft.results.
+ * Only the count is shared; callers of flattenTypes receive fresh arrays.
+ * Null-memory calls remain uncached so requireMemory still rejects types
+ * containing strings or variable-length lists, even after a memory-backed hit.
  */
 const flatCountCacheByPtrType = {
   i32: new WeakMap<ValType[], number>(),

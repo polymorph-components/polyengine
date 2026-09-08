@@ -1,45 +1,12 @@
 // A lift that exited `done` resolves even if another driver hop-parks before
 // its continuation runs — polyengine#310.
 //
-// THE REGRESSION (0.6.5 -> 0.6.6). `createLiftedFunction`'s asynchronous
-// completion path used to be
-//
-//   pending.then(() => {
-//     if (idlePolicy === "exit" && !driveDone()) return backgroundCompletion();
-//     return finishHostEntry();
-//   })
-//
-// which RE-DERIVES `driveDone()` a microtask after the driver already decided.
-// `driveDone` is a predicate over store-wide state (`hopParked()` looks at
-// every task's threads, #280), and other drivers of the same store mutate it:
-// in the traced consumer the settlement pump serviced a settled host call
-// belonging to another task, the activation it resumed transiently hop-parked,
-// and the lift — whose own driver had exited `EXIT-done` one microtask
-// earlier — took `backgroundCompletion()`. That path waits for the task's LAST
-// thread to unregister, so for an export that spawns long-lived background
-// futures (the consumer's `boot`: engine driver, event pump, accept loop) the
-// host's Promise never settles.
-//
-// THE SHAPE here, store-level in the style of `parked_driver_host_call_test.ts`
-// (no checked-in example guest has the participants):
-//
-//   * a real async-typed, callback-ABI lifted export whose core returns a
-//     Promise, so its thread parks on it and the drive necessarily goes
-//     through `driveAsync` — i.e. the export completes on the `.then` path
-//     where the re-derivation lived;
-//   * the core resolves the task (`task.return`) and spawns an IMMORTAL
-//     second thread into the same task (`readyFunc: () => false`), the model
-//     of the consumer's background futures: it keeps `task.threads` non-empty
-//     forever, which is what makes `backgroundCompletion()` a black hole
-//     rather than a detour;
-//   * a foreign ready thread, resumed by the very tick that follows the
-//     export thread's resumption, queues a microtask that puts a foreign
-//     HOP-park into `store.awaiting` (`entryHopThreads` = awaiting with no
-//     `SuspensionPoint` owner). It lands after the driver's `done()` test and
-//     before the lift's continuation — exactly the window the trace shows.
-//
-// Pre-fix the export's Promise never settles; with the verdict plumbed out of
-// the driver (`DriveExit`) it resolves.
+// Completion must use the driver's `DriveExit`, not re-evaluate `driveDone`
+// in a later microtask: another task can change the store-wide hop state.
+// The callback-ABI export resolves its task but leaves a non-ready background
+// thread alive. A foreign thread queues a hop-park between the driver's done
+// verdict and the lift continuation. Re-evaluating there would incorrectly
+// wait for the background thread and leave the host Promise unsettled.
 
 import { assertEq } from "./support/asserts.ts";
 import {

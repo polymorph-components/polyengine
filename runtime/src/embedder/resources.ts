@@ -1,16 +1,13 @@
 // Resources as classes on both sides of the boundary
 // (contracts/embedder-api.md §"Resources").
 //
-// The raw boundary represents `own<R>` / `borrow<R>` as bare **reps**
-// (cabi/handles.ts `liftOwn` returns `rh.rep`; the host never holds a table
-// index). Embedders otherwise turn that into identity tables and
-// hand-transcribed `[method]…` keys by hand. Both become runtime obligations
-// here.
+// The raw boundary uses bare reps, not table indices. This layer maps them
+// to guest wrappers or the host's original instances.
 //
 // Ownership, per the contract's 2x4 table:
 //
 // | position                | guest-implemented R          | host-implemented R        |
-// | host receives own<R>    | new wrapper (host owns)      | instance back, mapping released, NO dispose |
+// | host receives own<R>    | new wrapper (host owns)      | instance back, ownership released, no dispose |
 // | host receives borrow<R> | wrapper valid for the call   | instance, mapping kept    |
 // | host passes own<R>      | wrapper invalidated          | instance registered       |
 // | host passes borrow<R>   | wrapper stays valid          | rep reused/allocated      |
@@ -24,15 +21,8 @@ import { camelCase, pascalCase } from "./casing.ts";
 import { markSyncCallable, syncPayloadOf } from "./sync.ts";
 
 /**
- * Internal state of a guest-resource wrapper.
- *
- * The KEY is the process-global `polyengine.resourceState/1` brand
- * (contracts/embedder-api.md §"Module identity": it used to be a module-local `Symbol(...)`, on the now-repealed
- * assumption that bundle and source runtimes are never mixed in one process —
- * issue #83 showed they routinely are). The state SHAPE stays strictly
- * runtime-internal, exactly as the module identity brand table notes: another copy may
- * RECOGNIZE a wrapper, and must never read or write this object. `copyUrl` is
- * what lets this copy tell its own wrappers from a foreign copy's.
+ * Shared recognition key, runtime-private state. Only `copyUrl` may be read
+ * to distinguish this copy's wrappers; another copy cannot operate the rep.
  */
 const STATE = RESOURCE_STATE;
 
@@ -47,26 +37,14 @@ interface WrapperState {
   rt: ResourceTypeInfo;
   className: string;
   /**
-   * Host-side `ResourceHandle.num_lends` (#86). The reference models a
-   * host-held `own` as a table entry whose `num_lends` is bumped every time
-   * it is lifted as a `borrow` (definitions.py `Subtask.add_lender`, line
-   * 890, reached from `lift_borrow`, line 1516) and decremented when the
-   * borrowing call's subtask delivers its resolution (`deliver_resolve`,
-   * line 902). `lift_own` and `canon_resource_drop` both trap while it is
-   * non-zero (lines 1508 / 2325).
-   *
-   * Here the host holds bare reps rather than table entries, so the counter
-   * lives on the wrapper. Its lifecycle point is the *lowering scope* of the
-   * call the wrapper was passed into (`instantiate.ts` `#lowerParams`), which
-   * is released exactly when that call ends — the host-side analogue of the
-   * subtask's resolve delivery.
+   * Host-side lend count, analogous to ResourceHandle.num_lends. Each
+   * lowering scope retains the rep until its call ends. Transfer as own is
+   * forbidden while lent; drop invalidates immediately but defers the dtor.
    */
   lends: number;
   /**
-   * A drop (explicit or via the GC backstop) that arrived while `lends > 0`.
-   * The reference would trap; the host has no frame to trap into by then, so
-   * the drop is deferred to the last release instead of running the dtor
-   * under a live guest borrow (which is the use-after-free #86 reports).
+   * Explicit or GC-backstop drop deferred until the last lend releases.
+   * Unlike canon_resource_drop's busy trap, this host API queues destruction.
    */
   pendingDrop: boolean;
 }
@@ -77,13 +55,8 @@ export class GuestResource {
   declare [STATE]: WrapperState;
 
   constructor() {
-    // realm boundary (contracts/embedder-api.md §"Realm boundaries and
-    // structured-clone-safe forms"; issue #131): guest-resource wrappers are
-    // realm-local by principle (their machinery lives in the minting
-    // copy's tables, issue #129's identity rule) — the pill makes a raw
-    // structuredClone/postMessage of one throw instead of husking. NOTE:
-    // `makeWrapper` below mints via `Object.create`, which bypasses this
-    // constructor entirely — it installs the pill itself.
+    // Raw structured cloning must fail: wrappers depend on this realm's
+    // runtime state. makeWrapper bypasses this constructor and marks separately.
     defineRealmLocal(this);
   }
 
@@ -98,8 +71,8 @@ export class GuestResource {
 }
 
 /**
- * Backstop for leaked handles (docs/architecture.md §7). A wrapper that becomes unreachable
- * without `drop()` still runs the guest destructor — late, but not never.
+ * Best-effort backstop for leaked handles (docs/architecture.md §7).
+ * Finalization is not guaranteed; callers should drop explicitly.
  */
 const runBackstop = (s: WrapperState): void => {
   // Idempotence: `valid` is the single guard. A wrapper that was dropped,
@@ -108,11 +81,8 @@ const runBackstop = (s: WrapperState): void => {
   if (!s.valid || !s.owns) return;
   s.valid = false;
   if (s.lends > 0) {
-    // A live guest borrow of this rep is outstanding (#86). Running the dtor
-    // now is exactly the use-after-free the reference forbids
-    // (definitions.py line 2325, `trap_if(h.num_lends != 0)`); the last
-    // `releaseLend` runs it instead. The closure held by the lowering scope
-    // keeps `s` alive, so the deferred drop is not lost with the wrapper.
+    // The lowering scope retains state until releaseLend can safely destroy
+    // the rep, even though the wrapper itself is unreachable.
     s.pendingDrop = true;
     return;
   }
@@ -122,9 +92,7 @@ const runBackstop = (s: WrapperState): void => {
 const leaked = new FinalizationRegistry<WrapperState>(runBackstop);
 
 /**
- * Simulate the GC backstop firing for `w` (the FinalizationRegistry callback,
- * verbatim). Test seam: real GC finalization is unschedulable, and #86 is
- * precisely about what the backstop does in a window a test must control.
+ * Run the GC callback deterministically for a test of a live borrow window.
  *
  * @internal
  */
@@ -134,22 +102,10 @@ export function simulateFinalizationForTest(w: object): void {
 }
 
 /**
- * Run a host-initiated drop of a guest `own` handle.
- *
- * The host holds a rep, never a table index, so there is nothing to remove
- * from a handle table: the observable remainder of definitions.py
- * `canon_resource_drop` for an owning handle is the lifted dtor call
- * (`hostDtorCall`, exec/boundary.ts), with `caller = None` — a host-initiated
- * call, `Store.invoke`'s `caller = None`.
- *
- * Never throws: the two callers are `drop()`/`[Symbol.dispose]()` — where a
- * trap *is* reportable, so it propagates — and the FinalizationRegistry
- * callback, where a throw would be swallowed by the engine with no
- * diagnostic. `runHostDrop` is the latter's form: a trapping dtor poisons the
- * implementing instance (which the lift harness does) and is additionally
- * recorded on the store's host-failure channel, so the next driven call
- * surfaces it instead of silently continuing on a half-destroyed instance
- * (#86, second defect: the former `catch {}`).
+ * Run a deferred/backstop destructor without throwing into cleanup. Record
+ * a synchronous failure on the implementing store; hostDtorCall records
+ * asynchronous failures there too. Immediate explicit drops call it directly
+ * so their synchronous failures can propagate to the caller.
  */
 function runHostDrop(s: WrapperState): void {
   try {
@@ -179,13 +135,8 @@ export function initWrapper(
 }
 
 /**
- * This copy's state for a wrapper, or `undefined`.
- *
- * A wrapper minted by ANOTHER copy carries the same (process-global) brand key
- * but its state belongs to that copy — reading it here would be reading a
- * foreign copy's private shape. So it is not a state: it is
- * `undefined` here, and `requireLive` turns that into the named cross-copy
- * error rather than a misleading "not a resource handle" / "not live".
+ * Return this copy's wrapper state only. requireLive distinguishes a foreign
+ * brand from an unbranded object without interpreting foreign resource state.
  */
 export function wrapperState(w: object): WrapperState | undefined {
   const s = (w as unknown as Record<symbol, WrapperState | undefined>)[STATE];
@@ -236,24 +187,12 @@ function dropWrapper(w: GuestResource): void {
   leaked.unregister(w);
   if (!s.owns) return; // a borrow was never ours to drop
   if (s.lends > 0) {
-    // Lent out to an in-flight guest call (#86): defer rather than destroy a
-    // rep the guest still holds a `borrow` of. `drop(): void` stays
-    // non-blocking either way — the deferred dtor runs from `releaseLend`.
+    // Invalidate now; destruction waits for the last in-flight borrow.
     s.pendingDrop = true;
     return;
   }
-  // The dtor runs as an ordinary LIFTED sync call (`hostDtorCall`, #160):
-  // definitions.py `canon_resource_drop` (line 2319) lifts it with
-  // `CanonicalOptions(async_ = False)` rather than calling it bare, and that
-  // is what gives the activation a Task/Thread. A dtor that suspends (a
-  // `promising`-entered dtor calling a `Suspending` import,
-  // docs/architecture.md §7) therefore releases the implementing instance's
-  // entry bracket at its first park, so the scheduler can resume it — the
-  // old held-bracket form wedged exactly there (#160).
-  //
-  // `drop(): void` stays non-blocking: an unfinished dtor's tail is driven
-  // by the store like any other parked activation, and a failure that has no
-  // frame to return into is parked on `store.hostFailure`.
+  // A canonical lifted destructor gets a Task/Thread, not a bare JS call.
+  // Drop does not await its tail; the store drives it and records late failure.
   hostDtorCall(s.rt, s.rep);
 }
 
@@ -261,8 +200,7 @@ function dropWrapper(w: GuestResource): void {
  * Record that a host-held `own` wrapper was lowered as `borrow<R>` into a
  * guest call, and return the (idempotent) release for the end of that call.
  *
- * definitions.py: `lift_borrow` -> `Subtask.add_lender` (line 890) on the way
- * in, `Subtask.deliver_resolve` (line 902) on the way out.
+ * Analogue of lift_borrow -> Subtask.add_lender / deliver_resolve.
  */
 export function lendWrapper(w: object): () => void {
   const s = wrapperState(w);
@@ -320,7 +258,7 @@ export function takeRep(
         `${what}: a borrowed ${s.className} handle cannot be transferred as own`,
       );
     }
-    // definitions.py `lift_own` (line 1508): `trap_if(h.num_lends != 0)`. A
+    // definitions.py `lift_own`: `trap_if(h.num_lends != 0)`. A
     // handle currently lent to an in-flight call cannot be transferred away.
     if (s.lends > 0) {
       throw new InvalidHandleError(
@@ -360,14 +298,9 @@ export interface GuestResourceSpec {
 }
 
 /**
- * Build (once, at class-build time — never per call) the Promise-shaped
- * wrapper for one method/static's raw lifted function, exactly as
- * `Facade#wrapExportFn` would for a plain export. `buildGuestResourceClass`
- * reads the sync() brand off the returned wrapper to install the matching
- * `"method"`/`"free"`/`"async"` brand on the class member it builds around
- * it — the wrapper itself IS what a per-call closure invokes, so a `self`
- * receiver is `wrapper(self, ...args)` for a method the same way a bare
- * export is `wrapper(...args)`.
+ * Wrap a method/static once at class construction, using Facade's export
+ * conventions. Methods prepend self; the wrapper's sync brand is relayed to
+ * the class member with a method-specific receiver requirement.
  */
 export type ExportWrapper = (
   raw: (...a: unknown[]) => unknown,
@@ -380,11 +313,9 @@ export type ExportWrapper = (
 /**
  * Build the class for a guest-implemented resource.
  *
- * The JS constructor is **synchronous**: a JS constructor cannot return a
- * Promise, so the contract's "exports are uniformly Promise-shaped" rule has
- * one unavoidable exception here. A guest constructor that does not complete
- * synchronously is reported as such rather than silently returning a
- * half-built object (see the report's contract-friction list).
+ * Construction must finish synchronously to return a usable resource wrapper.
+ * A guest constructor returning a thenable is refused; use an async factory
+ * for asynchronous construction.
  */
 export function buildGuestResourceClass(
   spec: GuestResourceSpec,
@@ -458,10 +389,7 @@ export function buildGuestResourceClass(
   for (const m of spec.methods) {
     const js = camelCase(m.member);
     const where = `${className}.${js}`;
-    // Built ONCE at class-build time (sync(): "prototype methods and statics
-    // must carry the brand at class-build time, not per call") — every
-    // instance's method call goes through this same wrapper, receiver
-    // (`self`) prepended.
+    // Share one branded wrapper across instances, prepending self per call.
     const wrapped = wrapExport(m.raw, m.params, m.results, m.async, where);
     const methodFn = function (this: GuestResource, ...args: unknown[]) {
       // params[0] is the `borrow<R>`/`own<R>` self.
@@ -469,11 +397,7 @@ export function buildGuestResourceClass(
     };
     const payload = syncPayloadOf(wrapped);
     if (payload !== undefined) {
-      // A resource method's sync form takes `self` as its first argument —
-      // exactly `wrapped`'s own synchronous form (params[0] IS self), so the
-      // "method" brand's `fn` is `payload.fn` verbatim, just re-tagged so
-      // `sync()` knows this one needs `sync(instance)` rather than being
-      // callable bare.
+      // The sync form already takes self; retag it to require sync(instance).
       markSyncCallable(
         methodFn,
         payload.kind === "free" ? { kind: "method", fn: payload.fn } : payload, // kind "async": pass the brand through unchanged
@@ -532,10 +456,9 @@ export function makeWrapper(
 /**
  * Runtime-owned instance <-> rep mapping for a host-implemented resource.
  *
- * The rep->instance direction is a **strong** map for exactly as long as the
- * guest holds handles: the guest's handle is the only reference keeping a
- * host object alive across calls, and a weak map here would let it be
- * collected under the guest's feet.
+ * Strongly retain the instance while guest-owned or borrowed by any host-
+ * originated call. Returning own releases ownership, not outstanding borrows.
+ * A guest drop defers disposal until all borrows release.
  * @internal — runtime-owned instance<->rep mapping; hosts supply a class, not
  * a registry.
  */
@@ -629,8 +552,8 @@ export class HostResourceRegistry {
   }
 
   /**
-   * An `own<R>` arrived from the guest: the host gets its instance back, the
-   * guest's handle is gone, and **no dispose runs** (the contract's 2x4 table).
+   * Return the host's instance without disposal. Keep its mapping while any
+   * host-originated borrow remains, even though guest ownership has ended.
    */
   release(rep: number): object {
     const inst = this.lookup(rep);
@@ -641,8 +564,9 @@ export class HostResourceRegistry {
   }
 
   /**
-   * The guest dropped its last own handle: run the destructor. This is the
-   * `HostResourceType` dtor the executor calls from `canon_resource_drop`.
+   * Guest drop: dispose now or after the last host-originated borrow.
+   * Pending disposal prevents re-transfer as own; the final release reports
+   * any disposal failure after removing the mapping.
    */
   dtor(rep: number): void {
     const entry = this.#byRep.get(rep);
@@ -656,7 +580,7 @@ export class HostResourceRegistry {
     (inst as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
   }
 
-  /** Live handle count — diagnostics and tests. */
+  /** Retained mapping count, not handle count; diagnostics and tests. */
   get liveCount(): number {
     return this.#byRep.size;
   }

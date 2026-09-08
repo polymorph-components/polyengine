@@ -1,6 +1,5 @@
-//! Plan-v0 emission tests: the translator-spike assertions adapted to the plan
-//! schema, plus determinism and a golden-ish shape test for the hello
-//! fixture (contracts/plan-format.md).
+//! Plan emission, determinism, and fixture shape tests
+//! (contracts/plan-format.md).
 
 use translator_shim::plan::{
     CoreDefJson, ExportDecl, Initializer, ModuleEntry, ResourceTableDecl, TrampolineDecl, TypeDecl,
@@ -100,7 +99,7 @@ fn linked_generates_fact_adapter() {
         .collect();
     assert_eq!(adapter_inits.len(), t.adapters.len());
 
-    // Manifest categories cover the translator-spike-observed intrinsic surface
+    // Manifest categories cover the fixture's intrinsic surface
     // (intrinsics.md §A): callee core-def, instance flags, trap +
     // enter/exit-sync-call trampolines. (`task-may-block` was a
     // `CoreDef::TaskMayBlock` category; upstream removed that variant at the
@@ -382,9 +381,8 @@ fn resources_plan_shape() {
         .any(|e| matches!(e, ExportDecl::LiftedFunc { .. })));
 }
 
-/// wit-bindgen 0.60 async guests use `context.{get,set}`, which wasmtime 47
-/// models as `CoreDef::UnsafeIntrinsic`. Plan v0 rejected it outright; plan
-/// v1 (contracts/plan-format.md v0.3) emits it as
+/// The async guest uses `context.{get,set}`, which wasmtime models as
+/// `CoreDef::UnsafeIntrinsic`. The plan emits it as
 /// `{"kind":"unsafe-intrinsic","intrinsic":"<symbol>"}`.
 ///
 /// This locks the wire shape *and* the symbol vocabulary: the guest uses
@@ -536,7 +534,7 @@ fn transcoder_trampoline_shape() {
 }
 
 // ---------------------------------------------------------------------------
-// Structured verdicts (src/error.rs; contracts v0.2 proposal)
+// Structured verdicts (src/error.rs; contracts/plan-format.md)
 // ---------------------------------------------------------------------------
 
 /// Malformed bytes and invalid components are both `validation`: the shim's

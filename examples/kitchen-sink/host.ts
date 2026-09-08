@@ -91,7 +91,7 @@ const imports = {
 
     // §2b — fallible import (result return-place): return the ok value;
     // throw `new ComponentException(payload)` for the err side. Any OTHER throw is a
-    // host bug and traps the component — the anti-footgun inversion.
+    // host bug and traps the component.
     parseId: (raw: string): number => {
       const n = Number(raw);
       if (!Number.isInteger(n) || n < 0) {

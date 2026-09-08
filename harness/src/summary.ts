@@ -54,8 +54,7 @@ export class Summary {
         case "passed":
           stats.executed++;
           stats.passed++;
-          // Stale-xfail detection (G7, now a real gate): an entry whose
-          // command passes is stale and must be pruned.
+          // Passing commands must also be classified to detect stale xfails.
           if (isXfail(r)) {
             this.staleXfails.push({ file: file.source, line: r.line });
           }

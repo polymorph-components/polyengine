@@ -4,14 +4,8 @@
 // against the release's SHASUMS256.txt — tools/shell/pins.json). Both linux
 // arches are published, so unlike jsc-pinned this lane runs on both CI legs.
 //
-// TOTALS: seeded as EXACT Deno-lane parity from a local measurement
-// (2026-08-11, linux-arm64 dev box, V8 14.6.202.34-node.28): 1254 passed /
-// 0 failed / 95 xfail, zero node-specific deltas, full capability matrix
-// true (JSPI round trip, multi-memory, wasm-GC, EH, memory64, tail-calls,
-// relaxed-simd) — with NO runtime flags: wasm JSPI is on by default in
-// node >= 26, exactly as docs/architecture.md §3's engine table recorded.
-// Like jsc-pinned's seeding, determinism does the heavy lifting: pinned
-// bytes + pinned corpus + pinned shim flags; confirm on the first CI run.
+// Expect the Deno baseline with no per-command deltas or runtime flags.
+// JSPI is enabled by default in this pin.
 //
 // WHY 26.x AND NOT 24 LTS (measured, same box, same corpus): node 24.18's
 // V8 13.6 gates JSPI behind `--experimental-wasm-jspi`, and even with the
@@ -22,19 +16,9 @@
 // node 26 / V8 14.6. Recorded so nobody re-lanes the LTS expecting clean
 // parity: a node-24 lane needs flag plumbing AND a 2-delta overlay.
 //
-// WHAT THIS LANE ADDS over the Deno lane (same V8 family): the node
-// EMBEDDING — ESM loading of the bundle, the node event loop under the
-// scheduler, and node's pooled-Buffer I/O (tools/shell/host-node.mjs must
-// copy out of the pool before bytes reach WebAssembly APIs; handing the
-// pool-backed .buffer to wasm is a classic node-embedder defect this lane
-// would catch). Raw-engine coverage was already carried by the shell and
-// browser lanes; this pin is about the runtime consumers actually deploy.
-//
-// CM#705 pin advance to 2f13265 (polyengine#173): re-measured (this host is
-// aarch64) — full Deno-lane parity holds exactly, zero deltas, zero stale
-// xfails. Corpus grew 1416->1475 commands; see harness/src/xfail.ts and
-// sm-pinned.ts's header for the new-class breakdown (engine-independent by
-// construction).
+// This lane also exercises Node's embedding: ESM loading, its event loop,
+// and pooled-Buffer I/O. tools/shell/host-node.mjs must pass only the intended
+// bytes to WebAssembly APIs, not a Buffer's entire backing pool.
 
 import type { ShellLaneExpectation } from "./types.ts";
 

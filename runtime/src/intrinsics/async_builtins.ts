@@ -1,46 +1,20 @@
 // The 0.3 async canonical built-ins, as host trampolines
 // (contracts/intrinsics.md §B): task.{return,cancel},
-// backpressure.{set,inc,dec}, waitable-set.{new,wait,poll,drop},
+// backpressure.{inc,dec}, waitable-set.{new,wait,poll,drop},
 // waitable.join, subtask.{drop,cancel} and thread.yield.
 //
-// Every one is a direct port of the correspondingly named `canon_*` function
-// in definitions.py (cited per function), with one systematic substitution.
+// Semantics follow the corresponding `canon_*` functions in definitions.py,
+// with JSPI timing differences documented at the waits below.
 //
-// ## `current_instance()` vs the trampoline's declared instance
+// Instance-scoped built-ins use the trampoline's declared instance. It is
+// available during core start functions before a task exists, and identifies
+// the right handle table even when a FACT adapter runs under another
+// instance's task. Operations needing a task/thread still read the ambient.
 //
-// definitions.py reads `current_instance()` (line 312), defined as
-// `current_task().inst` — it can, because in the reference a canonical
-// built-in is only ever reached from inside a task. That is not true of a
-// real component: wasmtime lets a core module's **start function** call
-// instance-scoped built-ins (`waitable-set.new`, `backpressure.inc`, ...)
-// during instantiation, before any task exists. The official suite exercises
-// exactly this (e.g. `test/async/dont-block-start.wast`).
-//
-// wasmtime resolves it by naming the owning component instance *statically*
-// in every trampoline declaration (`Trampoline::WaitableSetNew { instance }`
-// and friends — the `instance` field the plan carries). So the built-ins
-// below take their instance from the declaration, which is well-defined at
-// instantiation time and identical to `current_instance()` whenever a task is
-// running. Built-ins that genuinely need the *task* or *thread*
-// (`task.return`, `task.cancel`, `subtask.cancel`, `thread.yield`) still read
-// the current-thread stack: they are meaningless outside a task, and the
-// reference's `trap_if`s are what report that.
-//
-// ## Blocking built-ins in a stackless world
-//
-// `waitable-set.wait`, `thread.yield` and the synchronous `subtask.cancel`
-// all *block the calling wasm frame* in the reference. A callback-ABI guest
-// is stackless: there is no suspendable wasm stack to park, so blocking here
-// genuinely requires JSPI (docs/architecture.md §6, JSPI role 2) and these built-ins say
-// so at the precise point, loudly, instead of faking a wait.
-//
-// They are not, however, unconditionally unavailable. Where the reference can
-// complete *without* suspending — `waitable-set.wait` on a set that already
-// has a pending event, `waitable-set.poll` always, `subtask.cancel` on a
-// subtask that resolved eagerly — this module returns the answer directly.
-// That is not a shortcut: definitions.py's `Thread.wait_until` (line 396) may
-// legitimately return without blocking when `ready_func()` already holds, so
-// taking that branch is a conforming schedule.
+// Blocking a wasm frame requires JSPI, including from callback-ABI code.
+// Returning WAIT/YIELD callback codes is the stackless alternative. A built-in
+// may complete immediately when its condition already holds, as permitted by
+// `Thread.wait_until`; otherwise plain mode reports `NeedsJspi`.
 
 import { blockCurrentActivation } from "../jspi/mod.ts";
 import type { SuspensionMode } from "../jspi/mod.ts";
@@ -85,7 +59,7 @@ export interface AsyncTrampolineContext {
 }
 
 /**
- * `BLOCKED` sentinel of `canon_subtask_cancel` (definitions.py line 2467).
+ * `BLOCKED` sentinel of definitions.py `canon_subtask_cancel`.
  */
 export const BLOCKED = 0xffff_ffff;
 
@@ -93,17 +67,16 @@ export const BLOCKED = 0xffff_ffff;
 // task.return / task.cancel
 // ---------------------------------------------------------------------------
 
-/** definitions.py `canon_task_return` (line 2384). */
+/** definitions.py `canon_task_return`. */
 export function createTaskReturn(
   decl: { results: number; resultType: number | null; options: number },
   ctx: AsyncTrampolineContext,
 ): CoreFn {
   const opts = ctx.options(decl.options);
-  // plan v3: `resultType` is the interned `plan.types` entry; `results` is the
+  // `resultType` is the interned `plan.types` entry; `results` is the
   // raw wasmtime `TypeTupleIndex` (the FACT `task_return_type` key, consumed
   // by the loader's dictionary). `null` is wire-legal for a task with no
-  // declared result type; today's producer always emits the empty tuple
-  // instead, so this degenerates to `[]` either way.
+  // declared result type and means an empty results list here.
   const resultTypes = decl.resultType === null
     ? []
     : ctx.resultTypes(decl.resultType);
@@ -114,54 +87,24 @@ export function createTaskReturn(
       "task.return: cannot leave component instance (may_leave violation)",
     );
     trapIf(!task.opts.async_, "task.return from a non-async task");
-    // `trap_if(result_type != task.ft.result)` (definitions.py:2388): the
+    // `canon_task_return`'s `trap_if(result_type != task.ft.result)`: the
     // trampoline's interned result tuple must be the lifted function's result
     // type. Compared structurally — the plan's type table interns by
     // structure, so identity comparison would reject valid components.
     //
-    // Plan v3 enables this for FACT cross-component tasks too: the callee
-    // task's declared result type is now resolvable from the raw
-    // `TypeTupleIndex` `prepare-call` carried (the task-return trampoline's
-    // raw `results` key + interned `resultType`, contracts/plan-format.md
-    // schema; wired in fact_calls.ts). It remains skipped for the one
-    // case v3 does not answer — a callee the plan maps no `task.return`
-    // tuple for, where `ft.results` is a placeholder rather than a
-    // declaration (`factResultTypesKnown === false`); comparing against a
-    // placeholder would be a false rejection, not a check.
+    // FACT tasks with no mapping for their raw TypeTupleIndex carry placeholder
+    // results, not a declaration; only those skip this comparison.
     trapIf(
       (!task.factPassthrough || task.factResultTypesKnown) &&
         !valTypesEqual(resultTypes, task.ft.results),
       "task.return with a result type that is not the task's result type",
     );
-    // `trap_if(not LiftOptions.equal(opts, task.opts))` (definitions.py:2389).
-    // The MEMORY half stays skipped for FACT tasks, and plan v3 does NOT
-    // change that: the relaxation was never about the type mapping. The
-    // task's memory is reconstructed from `prepare-call`'s `memory` field,
-    // which is the *adapter's* view of the lift options
-    // (`adapter.lift.options...memory`) and is `None` for callees whose own
-    // `task.return` options do name a memory — the 17-param async-lifted
-    // callees of `test/async/cross-abi-calls.wast` are exactly that shape.
-    // The information simply is not in the plan, at v3 as at v2; restoring
-    // the check needs `prepare-call`'s indices related to the callee's
-    // canonical options, which remains open contract friction.
-    //
-    // definitions.py `LiftOptions.equal` (line 643) compares string encoding
-    // *and* memory identity. Both halves are checked for a host-boundary task.
-    //
-    // For a FACT task the memory half is skipped, and the reason is specific
-    // rather than "we can't be bothered": the task's memory is reconstructed
-    // from `prepare-call`'s `memory` field, which carries the *adapter's* view
-    // of the lift options (`adapter.lift.options...memory`) and is `None`
-    // for callees whose own `task.return` options do name a memory —
-    // `test/async/cross-abi-calls.wast`'s 17-param async-lifted callees are
-    // exactly that shape. wasmtime tolerates the mismatch because its check is
-    // *one-sided*: `concurrent.rs:3344-3358` treats "the `task.return` site
-    // specifies no memory" as valid and only compares when it does, against a
-    // lift memory it holds first-hand. We hold ours second-hand, so applying
-    // either form of the memory comparison produces a false rejection.
-    //
-    // The string-encoding half IS checked on both paths: `prepare-call` passes
-    // the encoding directly, so that reconstruction is exact.
+    // `LiftOptions.equal` compares string encoding and memory identity.
+    // Both are checked for host-boundary tasks. FACT tasks skip memory
+    // identity: prepare-call carries the adapter's memory, which can be null
+    // even when the callee's task.return names one (cross-abi-calls.wast's
+    // 17-param async lifts). Restoring this check needs a reliable mapping
+    // to the callee's lift memory. Encoding is passed directly and checked.
     trapIf(
       !liftOptionsEqual(
         { stringEncoding: opts.stringEncoding, memory: opts.memory },
@@ -171,10 +114,7 @@ export function createTaskReturn(
       ),
       "task.return with canonical options differing from the task's",
     );
-    // Type-aware per-lane normalization: `normalizeFlat`'s blanket `>>> 0`
-    // silently truncated float lanes (a `task.return` of f64 -1.1 arrived at
-    // `[async-return]` as 4294967295). `normalizeCoreValues` consults the
-    // declared lane types, so only i32 lanes are coerced.
+    // Normalize by declared lane type; integer coercion must not touch floats.
     const flat = normalizeCoreValues(
       flatArgs,
       opts.coreType.params,
@@ -194,7 +134,7 @@ export function createTaskReturn(
   };
 }
 
-/** definitions.py `canon_task_cancel` (line 2397). */
+/** definitions.py `canon_task_cancel`. */
 export function createTaskCancel(): CoreFn {
   return () => {
     const task = currentTask() as Task;
@@ -211,14 +151,7 @@ export function createTaskCancel(): CoreFn {
 // backpressure
 // ---------------------------------------------------------------------------
 
-// `canon_backpressure_set` is not ported: wasmtime 47 emits no
-// `BackpressureSet` trampoline (`component/info.rs` has only
-// `BackpressureInc`/`BackpressureDec`), and the reference's own copy was
-// unreachable dead code until upstream removed it (CM PR #690; see
-// upstream-component-model-repo-findings.md CM-2, RESOLVED). The counter
-// below is the live interface.
-
-/** definitions.py `canon_backpressure_inc` (line 2368). */
+/** definitions.py `canon_backpressure_inc`. */
 export function createBackpressureInc(inst: ComponentInstanceState): CoreFn {
   return () => {
     assert_(
@@ -230,7 +163,7 @@ export function createBackpressureInc(inst: ComponentInstanceState): CoreFn {
   };
 }
 
-/** definitions.py `canon_backpressure_dec` (line 2375). */
+/** definitions.py `canon_backpressure_dec`. */
 export function createBackpressureDec(inst: ComponentInstanceState): CoreFn {
   return () => {
     assert_(
@@ -246,7 +179,7 @@ export function createBackpressureDec(inst: ComponentInstanceState): CoreFn {
 // waitable sets
 // ---------------------------------------------------------------------------
 
-/** definitions.py `canon_waitable_set_new` (line 2406). */
+/** definitions.py `canon_waitable_set_new`. */
 export function createWaitableSetNew(inst: ComponentInstanceState): CoreFn {
   return () => {
     trapIf(
@@ -258,16 +191,9 @@ export function createWaitableSetNew(inst: ComponentInstanceState): CoreFn {
 }
 
 /**
- * definitions.py `canon_waitable_set_wait` (line 2414).
- *
- * The reference blocks the calling thread until the set has an event. From a
- * stackless (callback-ABI) guest there is no wasm stack to suspend, so this
- * only succeeds when an event is *already* pending — which is the reference's
- * own non-blocking branch of `Thread.wait_until`. Otherwise: `needsJspi`.
- *
- * A guest using the callback ABI is expected to return the `WAIT` callback
- * code rather than call this built-in; hitting the JSPI path here means the
- * component uses the stackful async ABI.
+ * definitions.py `canon_waitable_set_wait`. Returns a pending event directly,
+ * or suspends the calling wasm frame using JSPI until an event or cancellable
+ * task cancellation arrives. Plain mode cannot perform the blocking case.
  */
 export function createWaitableSetWait(
   decl: { options: number },
@@ -276,16 +202,11 @@ export function createWaitableSetWait(
   mode: SuspensionMode = "plain",
 ): CoreFn {
   const opts = ctx.options(decl.options);
-  // `cancellable` is a *canonical option*, not a trampoline field: wasmtime's
-  // `Trampoline::WaitableSetWait` carries only `{instance, options}`
-  // (wasmtime-environ 47.0.3 `component/info.rs:815`), while
-  // `CanonicalOptions.cancellable` (info.rs:540) is what the guest declared.
-  // It reaches definitions.py as `canon_waitable_set_wait`'s first parameter
-  // (line 2414).
+  // `cancellable` is a canonical option, not a trampoline field.
   const cancellable = opts.cancellable;
   return (si?: number, ptr?: number) => {
     // Guest-supplied index/pointer are u32; core wasm delivers i32 args
-    // signed (F3, R2). Normalize at the entry boundary.
+    // signed. Normalize at the entry boundary.
     si = (si ?? 0) >>> 0;
     ptr = (ptr ?? 0) >>> 0;
     trapIf(
@@ -298,36 +219,16 @@ export function createWaitableSetWait(
     if (task.deliverPendingCancel(cancellable)) {
       event = [EventCode.TASK_CANCELLED, 0, 0];
     } else if (wset.hasPendingEvent()) {
-      // Non-blocking branch: definitions.py `Thread.wait_until` may return
-      // immediately when the condition already holds.
-      //
-      // This deliberately skips `wait_for_event_and`, and with it the
-      // `num_waiting += 1 / -= 1` bracket around the block
-      // (`WaitableSet.wait_for_event_and`, line 829). That is unobservable:
-      // `num_waiting` is read only by `WaitableSet.drop`
-      // (`trap_if(self.num_waiting > 0)`, line 852), and since we never yield
-      // between the increment and the decrement here, no other code could run
-      // to observe a non-zero value. Incrementing and immediately decrementing
-      // would be pure ceremony.
+      // No waiter count is needed for immediate delivery: no other thread can
+      // observe the reference's increment/decrement bracket without a yield.
       traceCopy(`waitable-set.wait si=${si} FAST (pending event)`);
       event = wset.getPendingEvent();
     } else if (mode === "jspi") {
       traceCopy(`waitable-set.wait si=${si} BLOCKS`);
-      // SITE 2 (lit). definitions.py `WaitableSet.wait_for_event_and`
-      // (line 829): block until the set has an event, then take it.
-      //
-      // The `num_waiting` bracket is real now. Skipping it was justified only
-      // while this path could not actually yield; a genuine block CAN be
-      // observed, because `WaitableSet.drop` traps on `num_waiting > 0`
-      // (line 852). Incremented before blocking and decremented in
-      // `onSettled`, which runs exactly once on EVERY terminal transition —
-      // normal resume, cancelled resume, produce-throw, and `abandon`
-      // (#106: decrementing in `produce` missed the abandon leg, leaving
-      // `numWaiting` elevated forever and a later `waitable-set.drop`
-      // trapping spuriously). The decrement is not idempotent, so it lives
-      // ONLY here, not in `produce` as well; nothing can observe the still-
-      // elevated count between `produce` and the hook — both run
-      // synchronously inside the settle, before any other code.
+      // `WaitableSet.drop` must see this blocked waiter. Decrement exactly
+      // once in onSettled, including abandonment and produce-time traps.
+      // produce and the hook run synchronously, so no thread observes a
+      // completed wait with its count still elevated.
       wset.numWaiting += 1;
       return blockCurrentActivation({
         store: inst.store,
@@ -355,7 +256,7 @@ export function createWaitableSetWait(
   };
 }
 
-/** definitions.py `canon_waitable_set_poll` (line 2431). */
+/** definitions.py `canon_waitable_set_poll`. */
 export function createWaitableSetPoll(
   decl: { options: number },
   ctx: AsyncTrampolineContext,
@@ -377,10 +278,10 @@ export function createWaitableSetPoll(
   };
 }
 
-/** definitions.py `canon_waitable_set_drop` (line 2441). */
+/** definitions.py `canon_waitable_set_drop`. */
 export function createWaitableSetDrop(inst: ComponentInstanceState): CoreFn {
   return (i?: number) => {
-    // Guest-supplied index is u32; core wasm delivers i32 args signed (F3, R2).
+    // Guest-supplied index is u32; core wasm delivers i32 args signed.
     i = (i ?? 0) >>> 0;
     trapIf(
       !inst.mayLeave,
@@ -396,7 +297,7 @@ export function createWaitableSetDrop(inst: ComponentInstanceState): CoreFn {
   };
 }
 
-/** definitions.py `canon_waitable_join` (line 2451). */
+/** definitions.py `canon_waitable_join`. */
 export function createWaitableJoin(inst: ComponentInstanceState): CoreFn {
   return (wi?: number, si?: number) => {
     wi = (wi ?? 0) >>> 0;
@@ -406,10 +307,7 @@ export function createWaitableJoin(inst: ComponentInstanceState): CoreFn {
     trapIf(!(w instanceof Waitable), "waitable.join: handle is not a waitable");
     trapIf(
       (w as Waitable).hasSyncWaiter,
-      // Wording per the suite's assertions
-      // (test/async/trap-if-sync-and-waitable-set.wast:301-307,
-      // test/async/reentrance.wast:837): a waitable claimed synchronously and
-      // a waitable in a set are the two halves of one rule, spelled the same.
+      // A synchronous claim and waitable-set membership are mutually exclusive.
       "waitable cannot be used synchronously while added to a waitable set " +
         "(waitable.join)",
     );
@@ -426,7 +324,7 @@ export function createWaitableJoin(inst: ComponentInstanceState): CoreFn {
 // subtasks
 // ---------------------------------------------------------------------------
 
-/** definitions.py `canon_subtask_drop` (line 2494). */
+/** definitions.py `canon_subtask_drop`. */
 export function createSubtaskDrop(inst: ComponentInstanceState): CoreFn {
   return (i?: number) => {
     i = (i ?? 0) >>> 0;
@@ -438,14 +336,6 @@ export function createSubtaskDrop(inst: ComponentInstanceState): CoreFn {
   };
 }
 
-/**
- * definitions.py `canon_subtask_cancel` (line 2469).
- *
- * The synchronous form blocks (`thread.wait_until(subtask.resolved)`) when the
- * callee does not resolve promptly; from a stackless guest that is JSPI
- * territory. The async form returns `BLOCKED` instead of blocking, and is
- * fully supported.
- */
 /**
  * The tail shared by `subtask.cancel`'s blocking and non-blocking exits:
  * take the delivered SUBTASK event, check it is the one we expect, and report
@@ -470,6 +360,11 @@ function finishSubtaskCancel(
   };
 }
 
+/**
+ * definitions.py `canon_subtask_cancel`: sync waits for resolution; async
+ * reports BLOCKED if unresolved. JSPI also waits for callee determinacy,
+ * making the async form non-atomic (docs/architecture.md §6, issue #92).
+ */
 export function createSubtaskCancel(
   decl: { async?: boolean },
   inst: ComponentInstanceState,
@@ -478,19 +373,8 @@ export function createSubtaskCancel(
   const async_ = decl.async === true;
   return (i?: number) => {
     i = (i ?? 0) >>> 0;
-    // The handle table is the **declared** instance's, not
-    // `current_thread().task.inst`. definitions.py `canon_subtask_cancel`
-    // (line 2469) uses the latter because the reference has no fused
-    // adapters, so the running task and the subtask's owner always coincide.
-    // With FACT they do not: `async-start-call` adds the subtask to
-    // `prepare-call`'s `caller_instance`, which for a nested component is a
-    // *different* instance from the one whose task is running — observed as
-    // caller=2 vs task.inst=3 in `big-interleaving-test.wast:1584`, where the
-    // lookup then failed with "table index out of range". wasmtime names the
-    // owner on the trampoline for exactly this reason
-    // (`Trampoline::SubtaskCancel { instance, .. }`), which is the same
-    // correction already applied to every other instance-scoped built-in —
-    // see this module's header.
+    // FACT adds the handle to prepare-call's caller instance, which need not
+    // be the ambient task's instance. Use the declared table owner.
     trapIf(!inst.mayLeave, "subtask.cancel: cannot leave component instance");
     const subtask = inst.handles.get(i);
     trapIf(
@@ -510,10 +394,7 @@ export function createSubtaskCancel(
     // definitions.py `canon_subtask_cancel`: `trap_if(subtask.in_waitable_set())`
     // is unconditional — BOTH forms trap, because either form may claim the
     // subtask synchronously (`has_sync_waiter`, below) and a subtask in a set
-    // is not the claimer's to take. Corroborated by
-    // test/async/trap-if-sync-and-waitable-set.wast:325-327, which asserts the
-    // trap for `subtask-cancel-sync-when-in-set` AND
-    // `subtask-cancel-async-when-in-set`, with the wording used here.
+    // is not the claimer's to take.
     trapIf(
       st.inWaitableSet(),
       "waitable cannot be used synchronously while added to a waitable set " +
@@ -536,47 +417,22 @@ export function createSubtaskCancel(
       // `on_cancel()` can run the cancelled callee synchronously, and that
       // callee may reenter this instance: the reentrant frame must see the
       // subtask as claimed and trap in `canon_waitable_join`
-      // (`trap_if(w.has_sync_waiter)`) — test/async/reentrance.wast:837.
-      // `parked` hands the clear over to the park's `produce`/`onSettled`
-      // (the async form clears it at park entry instead — #295, below)
-      // (#106: `abandon` never runs `produce`, so the flag needs the
-      // `onSettled` backstop or it stays set forever and a later
-      // `waitable.join` traps spuriously).
+      // (`trap_if(w.has_sync_waiter)`). A sync park keeps the claim until
+      // produce/onSettled; an async determinacy park ends it at park entry.
       st.hasSyncWaiter = true;
       let parked = false;
       try {
         st.onCancel!(inst);
 
-        // Is the callee's state safe to READ yet? Under jspi it may not be.
-        // `request_cancellation` delivers TASK_CANCELLED by settling the
-        // callee's suspension, and the engine runs the resumed activation on
-        // a LATER microtask (pin (j)); the reference has no such hop —
-        // `Task.request_cancellation` -> `Thread.resume` runs the resumed
-        // thread to its next block point or exit synchronously, so when
-        // `on_cancel()` returns the callee is never mid-hop.
+        // Cancellation may resume the callee on a later JSPI microtask.
+        // Wait until all its threads finish or it genuinely parks in the
+        // scheduler. Unlike async-start-call, resolution alone is NOT enough:
+        // a resolved-but-mid-hop callee may still hold exclusiveThread and
+        // affect the next cancellation's answer. Host-import subtasks have
+        // no callee task and are immediately determinate, even if unresolved.
         //
-        // DETERMINATE = every callee thread finished, or the callee is parked
-        // on a scheduler condition — exactly `async-start-call`'s rule
-        // (fact_calls.ts). Deliberately NOT "or `st.resolved()`":
-        // resolved-but-mid-hop is precisely the stale state this park exists
-        // to avoid. A callee whose callback already ran `task.cancel` and
-        // returned EXIT is resolved while its `Thread` is still parked on
-        // `awaitValue` holding `inst.exclusiveThread`; answering from here
-        // then makes the NEXT `subtask.cancel` see the instance excluded and
-        // report BLOCKED, and the guest's `subtask.drop` traps "not yet
-        // resolved" (test/async/reentrance.wast:517).
-        //
-        // A callee with a pending (undeliverable) cancel sits parked
-        // non-cancellably, which is determinate, so the genuine BLOCKED
-        // answer is still immediate. Host-import subtasks carry no callee
-        // task and cannot be mid-hop: the default onCancel resolves them
-        // before this point, and a `deferCancel` import's no-op onCancel
-        // leaves them simply unresolved — either way the answer is immediate.
-        //
-        // NAMED DIVERGENCE (docs/architecture.md §6, #92): this park makes
-        // the async built-in non-atomic — other ready threads may run while
-        // it waits, a reordering within the reference's Store.tick freedom
-        // taken one built-in early.
+        // The async determinacy park is the named non-atomicity divergence
+        // (#92): other ready threads may run before this built-in returns.
         const callee = st.calleeTask as
           | { threads: { done(): boolean }[] }
           | null;
@@ -590,10 +446,8 @@ export function createSubtaskCancel(
         // The SYNC form additionally blocks until the callee actually
         // resolves (definitions.py `canon_subtask_cancel`:
         // `thread.wait_until(subtask.resolved)`), then reports the resolved
-        // state through the same tail as the non-blocking path — SITE 5
-        // (lit), mirroring SITE 4 (stream_builtins.ts) and
-        // `Waitable.waitForPendingEvent`. The ASYNC form answers BLOCKED as
-        // soon as the callee is determinate and still unresolved.
+        // state through the same tail as the non-blocking path. The ASYNC
+        // form answers BLOCKED once determinate and still unresolved.
         const ready = (): boolean => determinate() && (async_ || st.resolved());
 
         if (mode !== "jspi") {
@@ -608,16 +462,10 @@ export function createSubtaskCancel(
         }
         if (!ready()) {
           parked = true;
-          // #295: the ASYNC form's claim ends where the reference's does —
-          // `canon_subtask_cancel` clears `has_sync_waiter` before returning
-          // BLOCKED (definitions.py:2459-2461), so the flag is held only
-          // across the synchronous claim window around `on_cancel()`. The
-          // #92 determinacy park below is not part of that window; holding
-          // the flag across it would trap a sibling thread's
-          // `waitable.join` on this subtask where the reference succeeds
-          // (#92 licenses a reordering, not a new trap condition). The SYNC
-          // form keeps it set across its wait, as the reference does
-          // (`thread.wait_until(subtask.resolved)` precedes the clear).
+          // Async cancellation releases its synchronous claim before the
+          // determinacy park, allowing a sibling's waitable.join. Issue #92
+          // permits reordering, not a new trap condition. Sync cancellation
+          // retains the claim through its resolution wait, as in the reference.
           if (async_) st.hasSyncWaiter = false;
           return blockCurrentActivation({
             store: inst.store,
@@ -647,7 +495,7 @@ export function createSubtaskCancel(
 // ---------------------------------------------------------------------------
 
 /**
- * definitions.py `canon_thread_yield` (line 2728).
+ * definitions.py `canon_thread_yield`.
  *
  * Yielding blocks the calling wasm frame until the scheduler comes back to
  * it. A callback-ABI guest expresses the same intent by returning the `YIELD`
@@ -669,11 +517,11 @@ export function createThreadYield(
     // (definitions.py `Thread.yield_` -> `wait_until` -> `deliver_pending_cancel`).
     if (thread.task.deliverPendingCancel(cancellable)) return 1;
     if (mode === "jspi") {
-      // SITE 3 (lit). definitions.py `Thread.yield_` is
+      // definitions.py `Thread.yield_` is
       // `wait_until(lambda: True, cancellable)`: immediately ready, but it
       // goes through the scheduler, so other threads get a turn first. A
       // suspension point with an always-true `readyFunc` is exactly that --
-      // `Store.tick` will resume it, after whatever else is already ready.
+      // `Store.tick` selects it under the configured scheduling policy.
       return blockCurrentActivation({
         store: thread.task.inst.store,
         task: thread.task,
@@ -707,15 +555,12 @@ function requireWaitableSet(
 }
 
 /**
- * The two event payload words. Hoisted out of `unpackEvent` because
- * cabi/layout.ts and cabi/types.ts memoize on `ValType` identity (issue
- * #261): a fresh literal per call is a guaranteed cache miss plus a
- * `WeakMap.set` on immediate garbage, twice per event delivered.
+ * Shared type for both payload words so event delivery reuses cached layouts.
  */
 const EVENT_PAYLOAD_TYPE: ValType = Object.freeze({ kind: "u32" });
 
 /**
- * definitions.py `unpack_event` (line 2422): store the two payload words at
+ * definitions.py `unpack_event`: store the two payload words at
  * `ptr` and return the event code.
  */
 function unpackEvent(
@@ -731,9 +576,5 @@ function unpackEvent(
   return event;
 }
 
-// Structural `ValType` equality (the circular-structure bugfix) moved to cabi/types.ts
-// (`valTypesEqual`) when the #18 tls smoke found its stream-element sibling;
-// the contract note lives there now.
-
-/** Unused-import guard: `trap` is re-exported for symmetry with cabi. */
+/** Unused-import guard. */
 void trap;

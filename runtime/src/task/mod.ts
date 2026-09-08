@@ -1,16 +1,5 @@
-// The 0.3 task model (docs/architecture.md §6): `ComponentInstance`, `Task`, and the
-// re-export surface of the task core. Thread, Waitable/WaitableSet, Subtask
-// and the scheduler live in sibling modules; see ./scheduler.ts for the
-// scheduling-policy rationale and the generator-based thread model.
-//
-// Structural correspondence to definitions.py is the design constraint here:
-// where this file diverges, the divergence is called out in a comment with
-// the reference's line number. The two systematic divergences are
-//
-//   1. threads are generators, not OS threads (./scheduler.ts header), and
-//   2. the shared-everything-threads built-ins (`thread.suspend-then-resume`
-//      and friends, 🧵) are absent rather than approximated — https://github.com/polymorph-components/polyengine/issues/12
-//      defers that feature with memory64.
+// Component-instance and task state, following definitions.py `ComponentInstance`
+// and `Task`. Scheduler policy and JSPI ordering live in ./scheduler.ts.
 
 import { Table } from "../cabi/handles.ts";
 import { COMPONENT_INSTANCE } from "../cabi/context.ts";
@@ -42,25 +31,11 @@ export * from "./streams.ts";
 export type HandleTableEntry = unknown;
 
 /**
- * Per-component-instance runtime state (definitions.py `ComponentInstance`,
- * line 191).
- *
- * `mayLeave` is backed by a real `WebAssembly.Global(i32, mutable)` because
- * FACT adapters import that global (`flags` namespace) and read/write it as
- * the may_leave boolean (wasmtime 47 FACT treats the whole flags global as
- * may_leave; there is no bitmask). Initial value 1 (true).
- *
- * There is no `may_enter` counterpart and no instance tree: at the pinned
- * reference (definitions.py @ 2f13265, CM#705) there is no `may_enter`,
- * `parent`, `entering_set`, `enter_from` or `leave_to`, so nothing gates
- * entry into a live instance. What polyengine adds beyond the reference is
- * per-instance POISONING — a named divergence
- * living entirely in ./scheduler.ts (`isInstancePoisoned`, `entryRefusal`),
- * not in any state on this class.
- *
- * `COMPONENT_INSTANCE` brands this class as a real component instance for
- * the layers that only see the structural `ComponentInstanceLike`
- * (cabi/handles.ts `isComponentInstance`; cabi must not import task/).
+ * Per-instance state. FACT shares mayLeave through a mutable i32 global
+ * containing a boolean, not a bitmask. Task admission uses backpressure and
+ * exclusiveThread, not a general reentry lock. Poison refusal lives separately
+ * in scheduler.ts. COMPONENT_INSTANCE lets cabi identify real instances
+ * without importing the task layer.
  */
 export class ComponentInstanceState implements ComponentInstanceLike {
   readonly index: number;
@@ -93,7 +68,7 @@ export class ComponentInstanceState implements ComponentInstanceLike {
   }
 }
 
-/** definitions.py `Task.State` (line 445). */
+/** definitions.py `Task.State`. */
 export type TaskState =
   | "initial"
   | "started"
@@ -105,14 +80,13 @@ export type OnStart = () => ComponentValue[];
 export type OnResolve = (result: ComponentValue[] | null) => void;
 
 /**
- * Canonical options as the task model needs to see them (definitions.py
- * `Task.opts`): only the two flags that change task *semantics*.
+ * Task execution flags and the lift-option identity checked by task.return.
  */
 export interface TaskOptions {
   async_: boolean;
   callback: boolean;
   /**
-   * The two fields definitions.py's `LiftOptions.equal` (line 643) compares.
+   * The two fields definitions.py's `LiftOptions.equal` compares.
    * `canon_task_return` requires the options at the `task.return` site to
    * equal the ones the task was lifted with, so the task has to remember
    * them.
@@ -121,7 +95,7 @@ export interface TaskOptions {
   memory: unknown | null;
 }
 
-/** definitions.py `LiftOptions.equal` (line 643): encoding + memory identity. */
+/** definitions.py `LiftOptions.equal`: encoding + memory identity. */
 export function liftOptionsEqual(
   a: { stringEncoding: string; memory: unknown | null },
   b: { stringEncoding: string; memory: unknown | null },
@@ -129,10 +103,6 @@ export function liftOptionsEqual(
   return a.stringEncoding === b.stringEncoding && a.memory === b.memory;
 }
 
-/**
- * One export activation (definitions.py `class Task`, line 444). Also the
- * task-side borrow scope: `numBorrows` satisfies cabi's `TaskBorrowScope`.
- */
 const ADMIT_TRACE = (() => {
   try {
     return Deno.env.get("CE_SP_TRACE") === "1";
@@ -141,6 +111,8 @@ const ADMIT_TRACE = (() => {
   }
 })();
 
+/** One call and its threads (`Task` in definitions.py), also a cabi borrow
+ * scope. Resolution delivers the result; remaining threads may keep running. */
 export class Task {
   state: TaskState = "initial";
   /** TaskBorrowScope (cabi/context.ts): live borrows lowered into this task. */
@@ -149,54 +121,18 @@ export class Task {
   implicitThread: Thread | null = null;
   readonly threads: Thread[] = [];
   /**
-   * True for a task created by a FACT cross-component call
-   * (`prepare-call`, see intrinsics/fact_calls.ts).
-   *
-   * Such a task's `onStart` / `onResolve` carry **flat core values**, not
-   * lifted component values: FACT fuses the caller-side lift and callee-side
-   * lower into a pair of adapter functions (`[async-start]` / `[async-return]`)
-   * that run *in wasm*, so the host only shuttles the core values between
-   * them. definitions.py has no analogue because it has no fused adapters —
-   * there, `canon_lift` lowers the params and `canon_lower`'s `on_resolve`
-   * lifts the results, both in the host. The observable semantics are
-   * identical; only which side of the boundary performs the copy differs.
-   *
-   * `canon_task_return` consults this to decide whether to lift its flat
-   * arguments (host-boundary task) or pass them straight through (FACT task).
+   * FACT tasks shuttle flat core values through onStart/onResolve; wasm
+   * adapters perform the conversions. canon_task_return passes those values
+   * through rather than applying the host-boundary result lift.
    */
   factPassthrough = false;
   /**
-   * Plan v3: does `ft.results` hold this FACT task's *declared* result type?
-   *
-   * A FACT callee task's result type arrives as the raw wasmtime
-   * `TypeTupleIndex` `prepare-call` passes as `task_return_type`; v3's
-   * `task-return.results` / `resultType` pair is the dictionary for it
-   * (the task-return trampoline's raw `results` key + interned `resultType`;
-   * contracts/plan-format.md schema). It resolves for every callee
-   * that has a `task.return` trampoline of its own — which is every callee
-   * that can call `task.return` — but a callee with none (sync-lifted,
-   * reached through an async-to-sync adapter) contributes no entry, and then
-   * `ft.results` is the empty placeholder it was before v3. Only when this is
-   * true may `canon_task_return` compare against it.
+   * Whether ft.results is the declared FACT result type rather than an
+   * empty placeholder. prepare-call's raw tuple index resolves through the
+   * plan's task-return results/resultType mapping. Callees without such a
+   * trampoline may lack a mapping; only known types may be compared.
    */
   factResultTypesKnown = false;
-  /**
-   * In-flight FACT sync-call brackets for THIS task
-   * (`enter-sync-call`/`exit-sync-call`).
-   *
-   * MOVED to `Thread` (see `Thread.syncCallStack`). Per-task was already an
-   * improvement on per-executor, but it is still not the right unit: a task
-   * can own several threads, so one activation's `exit-sync-call` could pop a
-   * sibling activation's scope. Tracing big-interleaving showed exactly that
-   * -- tasks whose `enter` count exceeded their `exit` count by one, and other
-   * tasks taking an `exit` at depth 0, with the `ctx` fallback never firing.
-   *
-   * The bracket belongs to the ACTIVATION that opened it: FACT emits the
-   * matching `enter-sync-call` and `exit-sync-call` from the same wasm
-   * activation by construction, so riding the activation identity makes the
-   * exit find the same stack the enter used no matter which task the scheduler
-   * considers current in between (the 3i bracket-spans-suspension ruling).
-   */
 
   constructor(
     public ft: FuncType,
@@ -207,9 +143,9 @@ export class Task {
   ) {}
 
   /**
-   * definitions.py `Task.needs_exclusive` (line 473): an async-typed task
+   * definitions.py `Task.needs_exclusive`: an async-typed task
    * needs the instance's exclusive thread unless it is a *stackful* async
-   * lift. Sync-lowered (`not opts.async_`) and callback-ABI tasks both do.
+   * lift. Sync canonical lifts (`not opts.async_`) and callback-ABI tasks both do.
    */
   needsExclusive(): boolean {
     assert_(this.ft.async === true, "needs_exclusive on a sync-typed task");
@@ -217,7 +153,7 @@ export class Task {
   }
 
   /**
-   * definitions.py `Task.enter_implicit_thread` (line 477) — the backpressure
+   * definitions.py `Task.enter_implicit_thread` — the backpressure
    * and exclusivity gate, in full.
    *
    * Returns false when the task was cancelled while waiting to enter, in
@@ -264,7 +200,7 @@ export class Task {
     return true;
   }
 
-  /** definitions.py `Task.register_thread` (line 497). */
+  /** definitions.py `Task.register_thread`. */
   registerThread(thread: Thread): void {
     assert_(
       !this.threads.includes(thread) && thread.task === this,
@@ -275,16 +211,13 @@ export class Task {
     thread.index = this.inst.threads.add(thread);
   }
 
-  /** definitions.py `Task.exit_implicit_thread` (line 503). */
+  /** definitions.py `Task.exit_implicit_thread`. */
   exitImplicitThread(thread: Thread): void {
     assert_(thread === this.implicitThread, "exit of a non-implicit thread");
     this.unregisterThread(thread);
     if (this.ft.async === true && this.needsExclusive()) {
-      // definitions.py lines 506-508, verbatim shape: assert-held, then
-      // release. The former release-if-held tolerance existed only for the
-      // removed release-at-BLOCK divergence (issue #43); under the hold rule
-      // the implicit thread of a needs-exclusive task holds the slot from
-      // `enter_implicit_thread` to here, without exception.
+      // Callback waits release and retake the slot between invocations;
+      // the final invocation must still own it when exiting.
       assert_(
         this.inst.exclusiveThread === thread,
         "exit_implicit_thread without holding the exclusive thread",
@@ -293,7 +226,7 @@ export class Task {
     }
   }
 
-  /** definitions.py `Task.unregister_thread` (line 510). */
+  /** definitions.py `Task.unregister_thread`. */
   unregisterThread(thread: Thread): void {
     const i = this.threads.indexOf(thread);
     assert_(i !== -1 && thread.task === this, "unregister of a foreign thread");
@@ -311,13 +244,13 @@ export class Task {
   }
 
   /**
-   * definitions.py `Task.request_cancellation` (@ 2f13265). Delivered to a
+   * definitions.py `Task.request_cancellation`. Delivered to a
    * cancellable thread if one exists; otherwise recorded as pending, to be
    * picked up at the next cancellable block point (`deliverPendingCancel`).
    *
    * `caller` is retained for the call-site shape (fact_calls.ts's
    * `subtask.onCancel`) and for diagnostics; no condition here consults it
-   * (CM#705: entry into a live instance is ungated).
+   * (live-instance reentry is allowed).
    */
   requestCancellation(caller: ComponentInstanceState | null): void {
     void caller;
@@ -330,20 +263,9 @@ export class Task {
       this.state === "started",
       `request_cancellation in state ${this.state}`,
     );
-    // Candidates are CANCELLABLE BLOCK POINTS of this task. The reference
-    // only ever finds them among `self.threads`, because its threads block
-    // *in place* (`wait_until` marks the thread itself cancellable). Under
-    // jspi the same block point is a `SuspensionPoint` parked in
-    // `store.waiting` — the wasm frame is suspended mid-built-in and the
-    // Thread that owns the activation sits non-cancellably on its
-    // `awaitValue` — so a scan of `threads` alone finds nothing and a
-    // cancellation the reference delivers synchronously was silently
-    // deferred to `pending-cancel` (cancellable.wast:322, test 1: a
-    // cancellable `waitable-set.wait` must observe TASK_CANCELLED).
-    // A resumed SuspensionPoint hands `cancelled` to its `produce`, which
-    // every cancellable built-in already translates (TASK_CANCELLED for
-    // waits, 1 for thread.yield), so delivery works unchanged once the
-    // point is simply *found*.
+    // Include JSPI SuspensionPoints: their owning generator waits on a
+    // non-cancellable awaitValue, while the actual cancellable park is in
+    // store.waiting. Resume delivers the flag to that point's produce callback.
     type Cancellable = {
       cancellable: boolean;
       resume(cancelled?: boolean): void;
@@ -353,10 +275,7 @@ export class Task {
     if (excludeImplicit) {
       candidates = candidates.filter((t) => t !== this.implicitThread);
     }
-    // Suspension points of this task's activation are frames OF the implicit
-    // thread, so they obey the same exclusion (definitions.py line 526: with
-    // another thread holding the exclusive slot, the implicit thread may not
-    // run).
+    // The implicit thread's SuspensionPoints obey the same exclusivity test.
     if (!excludeImplicit) {
       const store = this.inst.store as unknown as {
         waiting: ({ task?: unknown } & Cancellable)[];
@@ -370,28 +289,13 @@ export class Task {
         }
       }
     }
-    // Merged reference (definitions.py @ 2f13265): `if candidates: deliver`,
-    // full stop — no enterability condition, no bracket (CM#705).
-    //
-    // ONE divergence conjunct survives: a POISONED instance is a corpse whose
-    // threads never resume, so the request parks as pending-cancel forever —
-    // which is the honest state, since a corpse can never reach a cancellable
-    // suspension to deliver at. The reference never faces this because a trap
-    // there kills the whole store. The marker is the authoritative input.
+    // Poisoned instances cannot run a cancellation recipient.
     if (candidates.length > 0 && !isInstancePoisoned(this.inst)) {
       this.state = "cancel-delivered";
       try {
         chooseCandidate(candidates).resume(CANCELLED_TRUE);
       } catch (e) {
-        // A trap escaping the delivery poisons the callee instance
-        // (polyengine#164/#212) — polyengine's per-instance corpse divergence;
-        // the reference wraps this `resume(Cancelled.TRUE)` in no handler at
-        // all and simply ends the world.
-        //
-        // Capability signals are the exception, exactly as in `tick`: they
-        // mark this RUNTIME incomplete, not the component faulted, and in the
-        // reference the blocking operation they stand in for completes
-        // normally.
+        // Escaping delivery failures poison the recipient, except capability signals.
         if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
           notifyInstancePoisoned(
             this.inst as unknown as { handles: Iterable<unknown> },
@@ -406,15 +310,10 @@ export class Task {
   }
 
   /**
-   * Is the implicit thread cancellable *right now*?
-   *
-   * The reference makes cancellability a live predicate — the callback loop
-   * passes `cancellable = lock_available` (definitions.py 2167/2175), false
-   * while a sibling activation of the instance holds the exclusive slot. We
-   * carry a static flag per block point instead, so this is where the "and
-   * the lock is free" conjunct lives: both `request_cancellation`'s candidate
-   * filter and `Thread.wait_until`'s pending-cancel wakeup disjunct consult
-   * it.
+   * Live exclusivity conjunct for cancellability. `canon_lift`'s callback
+   * waits use lock_available; static park flags alone cannot represent a
+   * sibling taking the slot. Both delivery selection and pending-cancel
+   * readiness consult this predicate.
    */
   implicitThreadCancellable(): boolean {
     return !(this.ft.async === true && this.needsExclusive() &&
@@ -422,12 +321,12 @@ export class Task {
       this.inst.exclusiveThread !== this.implicitThread);
   }
 
-  /** definitions.py `Task.has_pending_cancel` (line 533). */
+  /** definitions.py `Task.has_pending_cancel`. */
   hasPendingCancel(): boolean {
     return this.state === "pending-cancel";
   }
 
-  /** definitions.py `Task.deliver_pending_cancel` (line 536). */
+  /** definitions.py `Task.deliver_pending_cancel`. */
   deliverPendingCancel(cancellable: boolean): boolean {
     if (cancellable && this.hasPendingCancel()) {
       this.state = "cancel-delivered";
@@ -436,18 +335,17 @@ export class Task {
     return false;
   }
 
-  /** definitions.py `Task.start` (line 542). */
+  /** definitions.py `Task.start`. */
   start(): ComponentValue[] {
     assert_(this.state === "initial", "start on a started task");
     this.state = "started";
     return this.onStart();
   }
 
-  /** definitions.py `Task.return_` (line 547). */
+  /** definitions.py `Task.return_`: deliver the result before setting state.
+   * Resolution does not unregister threads or release callback exclusivity. */
   return_(result: ComponentValue[]): void {
     trapIf(this.state === "resolved", "task.return on a resolved task");
-    // Wording parity with wasmtime's exit-time check, pinned by
-    // drop-cross-task-borrow.wast:309.
     trapIf(
       this.numBorrows > 0,
       "borrow handles still remain at the end of the call",
@@ -456,7 +354,7 @@ export class Task {
     this.state = "resolved";
   }
 
-  /** definitions.py `Task.cancel` (line 554). */
+  /** definitions.py `Task.cancel`. */
   cancel(): void {
     trapIf(
       this.state !== "cancel-delivered",

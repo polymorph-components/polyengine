@@ -1,15 +1,14 @@
-// Leg 2 — polymorph-iroh's exec-model probe: the lann/jco#11 kill shot.
+// Leg 2: polymorph-iroh's detached-task execution-model probe (lann/jco#11).
 //
-//   deno run --allow-read leg2_exec_model.ts
+//   deno task leg2
 //
 // Artifact: polymorph-iroh/target/wasm32-wasip2/release/iroh_exec_model_guest.wasm
 // Guest source: polymorph-iroh/experiments/exec-model/guest/src/lib.rs
 // jco reference driver: polymorph-iroh/host-jco/src/run-exec.mjs
 //
-// The probe order below is the diagnostic: jco's execution-slot queue
-// serializes task lifetimes, so `start-pump()` leaves a detached task holding
-// an in-flight `wait-for` and every LATER export call deadlocks before its
-// first wasm slice. We drive exactly that order and assert each step.
+// The historical jco issue serialized task lifetimes: a detached `start-pump()`
+// task waiting on `wait-for` prevented later exports from entering. This probe
+// asserts those exports can progress; it does not audit current jco behavior.
 //
 // Host glue implemented here (throwaway; the real thing is the shim):
 //   - wasi:clocks/monotonic-clock@0.3.0 `wait-for` — an async host function
@@ -45,11 +44,7 @@ function check(cond: boolean, msg: string) {
   console.log(`  ${cond ? "PASS" : "FAIL"}  ${msg}`);
   if (!cond) failures.push(msg);
 }
-// Retightened after the R-fix round: probes 4a/4b originally carried
-// `xfail(...)` wrappers against findings R-1 (host-pump starvation of
-// pendingHostCalls) / R-2 (check-then-act poisoning via hostFailure); both are
-// fixed (runtime/tests/host_pump_test.ts pins them), so every probe is now a
-// hard assertion and a regression fails this leg.
+// Every probe is a hard assertion; starvation and host-failure regressions fail.
 function note(msg: string) {
   console.log(`  ....  ${msg}`);
 }

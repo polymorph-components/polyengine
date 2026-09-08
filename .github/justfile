@@ -1,7 +1,4 @@
-# CI job bodies: each workflow job runs exactly one `gha::` recipe, so
-# `just ci` is exactly CI and the workflow files carry no logic beyond
-# environment setup (checkout, toolchains, caches). Step-level rationale
-# lives on the root-justfile recipes these compose.
+# CI job bodies; recipe-specific rationale lives in the root justfile.
 
 set working-directory := '..'
 
@@ -24,9 +21,7 @@ _step recipe:
         just {{recipe}}
     fi
 
-# Like _step, but failures are tolerated: the CI-side replacement for the
-# workflow-level `continue-on-error` the collapsed steps used to carry. A
-# failure surfaces as a ::warning annotation, never as a job failure.
+# Like _step, but report failures as warnings rather than failing the job.
 [private]
 _step-tolerated recipe:
     #!/usr/bin/env bash
@@ -43,16 +38,9 @@ _step-tolerated recipe:
         just {{recipe}} || echo "just {{recipe}}: FAILED (tolerated in CI; see the recipe's comment)"
     fi
 
-# The required per-push/PR matrix job (ci.yml `core`).
-# `version-guard-local` runs first, unconditionally — label-free/event-free
-# tree checks (lockstep agreement, monotonicity, the protocol byte-identity
-# tear check) that need no PR context, so a direct push to main is covered
-# too (the #232 gap: `version-guard-pr` no-ops without PR_NUMBER, and #232
-# only got caught because it happened to go through a `pull_request` run).
-# `version-guard-pr` runs right after and costs seconds: a versioning
-# mistake is cheap to hear about before a 40-minute matrix, and the recipe
-# no-ops outside pull_request runs (no PR_NUMBER), so pushes and `just ci`
-# are unaffected. ci.yml supplies PR_NUMBER / PR_BASE_SHA / GH_TOKEN.
+# Context-free checks precede PR checks (no-op without PR_NUMBER).
+# ci.yml supplies PR_NUMBER / PR_BASE_SHA / GH_TOKEN.
+# Required core matrix.
 core:
     @just gha::_step version-guard-local
     @just gha::_step version-guard-pr
@@ -76,9 +64,8 @@ core:
     @just gha::_step conformance
     @just gha::_step sched-seeds
 
-# The post-merge browser job (ci.yml `browser`; gates the prerelease).
-# The worker / shared-worker realm rows (issue #129) reuse each engine's
-# expectation verbatim — a delta is a realm leak and fails naming the realm.
+# Page and worker realms share per-engine expectations; WebKit is best-effort.
+# Post-merge browser job; gates prerelease artifacts, not PR mergeability.
 browser:
     @just gha::_step shim
     @just gha::_step corpus
@@ -99,9 +86,7 @@ browser:
     @just gha::_step-tolerated "browsers-install-webkit --with-deps"
     @just gha::_step-tolerated "browser-lane webkit"
 
-# Never gates: the drivers themselves exit 0 on deviations, 2 on
-# infrastructure failure.
-# The findings-only canary lanes (canary.yml, x64 leg).
+# Findings-only x64 canaries: deviations exit 0; infrastructure failures exit 2.
 canary:
     @just gha::_step shim
     @just gha::_step corpus
@@ -109,8 +94,7 @@ canary:
     @just gha::_step "shell-lane jsc-trunk --json jsc-results.json"
     @just gha::_step "deno-canary --json deno-canary-results.json"
 
-# JSC trunk has no arm64 channel — the two lanes with arm64 coverage.
-# The findings-only canary lanes (canary.yml, arm64 leg).
+# Findings-only arm64 canaries; JSC has no arm64 channel.
 canary-arm:
     @just gha::_step shim
     @just gha::_step corpus

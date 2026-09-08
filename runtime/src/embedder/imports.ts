@@ -2,10 +2,7 @@
 // import leaves (contracts/embedder-api.md §"Module wiring and
 // instantiation").
 //
-// `plan.imports` proved the right authority, and every embedder
-// that needed it would otherwise hand-roll the same walk.
-// Blessing it removes that. It is also this layer's own input: the facade
-// builds its import wrappers from exactly this list.
+// The facade builds its import wrappers from this same plan.imports walk.
 
 import type { WirePlan } from "../plan/format.ts";
 import { loadPlan } from "../plan/loader.ts";

@@ -10,12 +10,12 @@
 //
 //     PLAYWRIGHT_BROWSERS_PATH=$PWD/.browser-cache \
 //       deno run -A npm:playwright@1.62.1 install chromium
-//     # …and `firefox` / `webkit` for the stretch lanes.
+//     # Repeat for firefox and, optionally, webkit.
 //
 //   Then, from the repo root:
 //
 //     just browser-lane chromium     # required lane
-//     just browser-lane firefox      # findings lane
+//     just browser-lane firefox      # required lane
 //     just browser-lane webkit       # findings lane
 //
 //   or directly:
@@ -42,29 +42,14 @@
 //   lane's overlay (`harness/browser/expectations/<lane>.ts`), prints the
 //   per-directory table, and exits non-zero when a required lane deviates.
 //
-//   Exit codes: 0 = lane matched its expectation; 1 = unexpected results in a
+//   Exit codes: 0 = expected results or findings-only deviations; 1 = deviations in a
 //   required lane; 2 = infrastructure failure (no browser, no corpus, page
 //   crash).
 //
-//   LANE NOTES (measured 2026-08-09, linux-arm64, playwright 1.62.1)
-//   ---------------------------------------------------------------
-//   chromium  HeadlessChrome/151 — REQUIRED lane, ~23 s. JSPI on by default.
-//   firefox   Firefox/153 — runs the full corpus in ~26 s. JSPI works behind
-//             `javascript.options.wasm_js_promise_integration`, which this
-//             driver sets via `firefoxUserPrefs` (launch.ts FIREFOX_PREFS).
-//   webkit    WebKit 26.5 (WPE headless) — runs the full corpus in ~10 s.
-//             JSPI works unflagged. On a host that is not Ubuntu 24.04 the
-//             bundled build will not launch until its Ubuntu-24.04-ABI
-//             libraries are supplied; the exact recipe (and why exporting
-//             `LD_LIBRARY_PATH` around this driver does NOT work) is in
-//             `harness/browser/expectations/webkit.ts`. Run that lane with
-//             `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1`.
-//
-//   Historical note: all three lanes originally carried FINDING M3A-1 (the
-//   scheduler's ambient rode `node:async_hooks`, absent in every browser —
-//   80 async/ commands). Fixed by explicit ambient threading in the
-//   scheduler; chromium now runs at exact Deno parity (deltas: []) and the
-//   stale-delta detector keeps it that way.
+//   launch.ts supplies JSPI flags/preferences and forwards the environment.
+//   WebKit may need Ubuntu-24.04-compatible libraries on other Linux hosts;
+//   see harness/browser/expectations/webkit.ts. Lane policy and deltas live
+//   in the per-engine expectations, not in measured timings here.
 // ============================================================================
 
 import { startServer } from "./serve.ts";
@@ -88,10 +73,8 @@ const repoRoot = normalize(
 );
 
 /**
- * JS realm the corpus runs in (issue #129). `page` is the historical
- * behavior; the worker realms run the SAME corpus through the SAME driver and
- * are judged against the SAME per-engine expectation — same engine + same
- * corpus means identical totals, so any delta at all is a realm leak.
+ * Execution realms share corpus and per-engine expectations, so realm-specific
+ * failures cannot be hidden by separate overlays.
  */
 const REALMS = ["page", "worker", "shared-worker"] as const;
 type Realm = typeof REALMS[number];

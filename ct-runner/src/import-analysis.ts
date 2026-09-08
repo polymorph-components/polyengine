@@ -48,10 +48,8 @@ export interface ImportAnalysis {
  * WITHOUT instantiating anything (translate-only; `requiredImports` reads
  * only the plan). Detects:
  *  - whether `test-context` is imported (only then does the runner provide
- *    it — pre-composed bundles with the provider already linked must work
- *    too, per the dispatch);
- *  - a caller/runner collision on `test-context` (the runner "merges,
- *    erroring on collisions" per the dispatch's import-wiring spec);
+ *    it; pre-composed bundles already include their provider);
+ *  - a caller/runner collision on `test-context`;
  *  - every other top-level import key the suite needs but `provided` lacks,
  *    via the same version-canonical resolution `instantiate` itself uses
  *    (`ImportResolver`, contracts/embedder-api.md §"Version canonicalization").

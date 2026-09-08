@@ -1,9 +1,6 @@
-// Deno canary channel probe (issue #22 — substitutes for a V8/d8 lane; see
-// the issue's scope-decision comment). Fetches the latest per-commit canary
-// Deno build, reports its version (which embeds the V8 version — printed
-// alongside the pinned lane's V8 for a diff), runs the shell capability
-// preamble under it, then runs the FULL conformance suite with the canary
-// binary and reports the table against the pinned lane's expected totals.
+// Deno canary probe for newer V8 behavior. Reuses the cached build, or fetches
+// the latest canary when uncached; reports Deno/V8 identity, capabilities and
+// conformance results against the pinned lane's expected totals.
 //
 // Usage: deno run -A tools/shell/deno-canary.ts [--json <path>]
 //
@@ -94,8 +91,7 @@ async function runCanary(
   const cmd = new Deno.Command(bin, {
     args,
     cwd,
-    // Env-clean per issue #22's dispatch: no ambient PLAYWRIGHT_* etc leak
-    // into the canary's conformance run.
+    // Keep ambient browser/tool settings out of the canary run.
     clearEnv: true,
     env: { PATH: Deno.env.get("PATH") ?? "" },
     stdout: "piped",

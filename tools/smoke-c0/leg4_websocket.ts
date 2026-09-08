@@ -1,12 +1,10 @@
 // Leg 4 (best-effort, translate-only) — the polymorph-websocket
 // conformance suite.
 //
-//   deno run --allow-read leg4_websocket.ts
+//   deno task leg4
 //
-// Both artifacts were ALREADY BUILT in the consumer tree (see
-// polymorph-websocket/conformance/driver-ct/justfile `compose-suite`), so this
-// leg only reads them — nothing here builds, composes, or writes anything in
-// the consumer working trees.
+// Requires prebuilt consumer artifacts. This leg only reads them; it never
+// builds, composes or writes into consumer working trees.
 //
 //   bare:     target/wasm32-wasip2/release/conformance_guest_ct.wasm
 //             — the suite with `polymorph:websocket` still IMPORTED. Its

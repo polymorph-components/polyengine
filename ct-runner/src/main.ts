@@ -16,7 +16,7 @@
 // translator-shim wasm explicitly — required when this CLI runs outside a
 // polyengine checkout (e.g. imported by URL at a release tag, with the wasm
 // taken from that release's `polyengine-translator-shim.wasm` asset; see
-// docs/consumers.md and issue #16's interim release scheme). Inside a
+// docs/consumers.md). Inside a
 // checkout it defaults to the local release build under `target/`.
 
 import { Translator } from "../../runtime/src/shim/mod.ts";

@@ -1,7 +1,6 @@
-// Host-boundary wiring: lifted-export invocation (reference `canon_lift`,
-// sync path) and lowered-import bodies (reference `canon_lower`, sync path),
-// built on the cabi v1 interpreter (runtime/src/cabi/) driven by the plan's
-// canonical options — docs/architecture.md §4.3 items 2 and 5, degenerate sync case.
+// Canonical host boundary: sync, callback and stackful lifts, host-import
+// lowers, destructor entries, and store drivers. See definitions.py
+// `canon_lift` / `canon_lower` and docs/architecture.md §5-7.
 
 import {
   type CanonicalOptions,
@@ -181,21 +180,9 @@ export interface ResolvedOptions {
   postReturn: (() => CoreFn | undefined) | null;
   callback: (() => CoreFn | undefined) | null;
   async: boolean;
-  /**
-   * `CanonicalOptions.cancellable` (wasmtime-environ 47.0.3
-   * `component/info.rs:540`), i.e. whether a built-in reached through these
-   * options is a *cancellable* block point.
-   *
-   * It lives in the options, not in the trampoline: `Trampoline::
-   * WaitableSetWait`/`WaitableSetPoll` carry only `{instance, options}`
-   * (info.rs:815-831). definitions.py takes it as the first parameter of
-   * `canon_waitable_set_wait` / `canon_waitable_set_poll` (lines 2414/2431),
-   * which is the same information arriving by a different route.
-   *
-   * (`thread.yield` and `subtask.cancel` are the exceptions: wasmtime puts
-   * their `cancellable` / `async` flags on the *trampoline*, and those
-   * built-ins read them from the decl.)
-   */
+  /** Cancellability for option-indexed built-ins, including
+   * `canon_waitable_set_wait` / `canon_waitable_set_poll`. Other built-ins
+   * such as thread.yield carry their flags on the trampoline declaration. */
   cancellable: boolean;
   coreType: CoreFuncType;
   instance: ComponentInstanceState;
@@ -226,34 +213,15 @@ export function cabiOptions(opts: ResolvedOptions): CanonicalOptions {
     },
     postReturn: null, // post-return handled by the task layer, not cabi
     async_: opts.async,
-    // Truthiness only: `flattenFunctype` branches on whether a callback
-    // exists (async lifts with a callback return a packed i32; stackful ones
-    // return nothing). Passing the resolver rather than `null` is what makes
-    // the callback-ABI core type come out right.
+    // Flattening tests callback presence, not its resolved function value.
     callback: opts.callback === null ? null : opts.callback,
   };
 }
 
 /**
- * Call a core function, mapping core-wasm exceptions to canonical-ABI traps
- * (reference `call_and_trap_on_throw`). Component traps and internal errors
- * of ours propagate unchanged.
- */
-/**
- * Layering rule: a core-wasm trap's message is engine-specific text (V8,
- * SpiderMonkey, JSC each word `unreachable` differently, for instance) and is
- * passed through here UNTOUCHED — it is diagnostics only, "engine-flavored"
- * and not normalized to any particular host's wording. The runtime never
- * emulates another host's (e.g. wasmtime's) message text.
- *
- * Suite-wording normalization (matching the official test suite's
- * `assert_trap` expectations, which are typically worded per wasmtime) lives
- * in the harness instead: see `TRAP_MESSAGE_EQUIVALENTS` in
- * harness/src/runner.ts, which maps engine-specific spellings to the
- * suite-expected forms at comparison time. (The FACT *adapter* traps take a
- * different route entirely — they arrive as numeric codes through the `trap`
- * trampoline and are runtime-authored text, see `FACT_TRAP_MESSAGES` in
- * intrinsics/mod.ts; that table is untouched by this layering rule.)
+ * Call core wasm and map RuntimeError to a canonical trap (`call_and_trap_on_throw`).
+ * Preserve engine diagnostic text; suite wording normalization belongs to
+ * harness/src/runner.ts, not the runtime. Other exceptions pass through.
  */
 
 export function callCore(fn: CoreFn, args: CoreValue[]): CoreValue[] {
@@ -269,19 +237,8 @@ export function callCore(fn: CoreFn, args: CoreValue[]): CoreValue[] {
 }
 
 /**
- * The `call_and_trap_on_throw` translation, factored so BOTH routes a core
- * trap can take reach it:
- *
- *   * a synchronous throw out of `fn(...args)` (`callCore` above — the plain
- *     path, and jspi pre-suspension);
- *   * a **rejection of a `promising` entry's Promise** (jspi pin (e): a trap
- *     after a resumption arrives as an ordinary rejection). That rejection
- *     carries the raw `WebAssembly.RuntimeError`, and before this helper was
- *     applied on the awaited path (`awaitCore` below), a post-suspension
- *     guest trap escaped to the embedder as `RuntimeError: unreachable`
- *     instead of the wasmtime-worded `Trap` — every deliberate guest trap
- *     under detection scored as a harness failure
- *     (big-interleaving-test.wast:836's assert_trap "unreachable").
+ * Shared translation for synchronous core throws and promising-entry
+ * rejections: post-suspension traps arrive through the Promise path.
  */
 function mapCoreException(e: unknown): unknown {
   if (e instanceof WebAssembly.RuntimeError) {
@@ -336,37 +293,10 @@ function resultsToHost(results: ComponentValue[]): unknown {
 // Driving the scheduler from the host boundary
 // ---------------------------------------------------------------------------
 //
-// run_tests.py's `lift_and_run` (line 55) is the reference embedding:
-//
-//   ```python
-//   func_inst = inst.store.lift(callee, ft, opts, inst)
-//   _ = inst.store.invoke(func_inst, on_start, on_resolve)
-//   while inst.store.waiting:
-//     inst.store.tick()
-//   ```
-//
-// i.e. enter the component, then pump the store until nothing is waiting.
-// `drive` below is that loop, with two additions the reference does not need:
-//
-//   1. **A deadlock verdict.** The reference's `while store.waiting` spins
-//      forever if no waiting thread is ready, because its host functions run
-//      on real OS threads and always eventually make progress. Ours cannot
-//      spin: when no thread is ready and no host promise is outstanding, the
-//      task can never resolve, which is the same condition `canon_lift`'s
-//      sync loop traps on (`trap_if(not candidates)`), so we trap too.
-//
-//   2. **Host promises.** A host import implemented as an `async` JS function
-//      resolves its subtask on a *microtask turn*, not on a thread. When the
-//      only way forward is such a promise, `drive` returns a Promise and the
-//      lifted export's return value becomes a Promise. This needs no JSPI:
-//      the guest is stackless (callback ABI), so nothing is suspended mid-wasm
-//      — the guest already returned WAIT and the host merely resumes it later.
-//
-// Consequence for callers: a lifted export returns `T` when the whole call
-// completed synchronously, and `Promise<T>` when a host promise was involved.
-// The conformance harness invokes exports synchronously
-// (harness/src/runtime-executor.ts) and the official suite has no
-// promise-returning host imports, so it only ever sees the synchronous shape.
+// Unlike `canon_lift`'s instance-local sync loop, these embedding drivers
+// service the whole store, including host promises and JSPI continuations.
+// Callback-ABI host waits need no suspended wasm frame; JSPI entry hops also
+// make a call asynchronous even when no host import returned a Promise.
 
 /** True for thenables, which is what "is this host call asynchronous" means. */
 function isPromiseLike(v: unknown): v is PromiseLike<unknown> {
@@ -377,15 +307,8 @@ function isPromiseLike(v: unknown): v is PromiseLike<unknown> {
 }
 
 // ---------------------------------------------------------------------------
-// Handshake probe
+// Optional driver tracing
 // ---------------------------------------------------------------------------
-//
-// Env-gated tracing of the drive loops. This exists because site 1 is the
-// first *lit* suspension site, so the `SuspensionPoint` <-> `Store.tick` <->
-// `driveAsync` handshake had never executed before it; a pure-microtask stall
-// there is invisible from the outside (no trap, no rejection -- just an await
-// nothing settles). Off unless POLYENGINE_DRIVE_TRACE is set, and the getter is read
-// once at module load so normal runs pay a boolean test.
 const DRIVE_TRACE = (() => {
   try {
     return Deno.env.get("POLYENGINE_DRIVE_TRACE") === "1";
@@ -446,44 +369,18 @@ function traceDrive(
 }
 
 /**
- * What a driving loop does when it runs out of moves with `done()` still
- * false — the reference's empty-candidate-set state.
- *
- * `"trap"` is definitions.py `canon_lift`'s `trap_if(not candidates)` (line
- * 2189) and the default for every driver in this runtime: the sync-lift
- * paths, the destructor entry, and the pumps (which cannot reach the verdict
- * anyway — see `driveStoreAsync`).
- *
- * `"exit"` returns instead, with the verdict `"idle"` (`DriveExit`) for the
- * caller to act on.
- * It exists for ONE caller: an **async-typed** lifted export (#292). The
- * reference's driving loop is guarded by `if not ft.async_`, so for such an
- * export `canon_lift` returns right after the first `thread.resume()` and the
- * driving — with it, the idle verdict — belongs to the embedder's
- * `Store.tick`, which never traps. wasmtime draws the same line:
- * `run_concurrent` is `poll_until(trap_on_idle=false)` (a `call_concurrent`
- * future simply stays pending on idle), and the trapping variant
- * `run_concurrent_trap_on_idle` is `pub(super)`, backing only the blocking
- * `[Typed]Func::call_async`. Polyengine's Promise-shaped export is
- * `call_concurrent` under an always-live `run_concurrent` (docs/architecture.md
- * §"Mapping the reference model"), hence "exit".
+ * No-progress policy while `done()` is false. Sync-typed lifts trap, matching
+ * definitions.py `canon_lift`'s empty-candidate check. Async-typed lifts exit
+ * idle and leave their result Promise pending for a later driver; the
+ * reference does not run its sync loop for them. The harness can opt into
+ * trapping idle async calls. Pump predicates stop before the idle trap.
  */
 type IdlePolicy = "trap" | "exit";
 
 /**
- * WHY a driving loop returned: `"done"` means `done()` held at the exit test,
- * `"idle"` means the loop ran out of moves with `done()` still false and
- * `idle: "exit"` let it return instead of trapping (only an async-typed lift
- * asks for that; see `IdlePolicy`).
- *
- * The verdict is a RETURN VALUE, not something the caller re-derives, because
- * `done` is a predicate over shared, time-varying store state: between a
- * driver's exit test and its caller's continuation (one microtask later)
- * another driver of the same store can flip it. That is polyengine#310 — a
- * lift that exited `done` re-tested `driveDone()` in its `.then`, the
- * settlement pump had meanwhile hop-parked a background activation, and the
- * lift took the never-completing background path. The exit verdict is a fact
- * about the past and cannot rot; the predicate can.
+ * Snapshot of why the driver exited: its predicate held, or it ran out of
+ * moves under `idle: "exit"`. Callers must use this verdict, not re-test a
+ * shared-store predicate after an await; another driver may have changed it.
  */
 type DriveExit = "done" | "idle";
 
@@ -503,10 +400,7 @@ function drive(
   try {
     return driveLoop(store, done, what, idle);
   } catch (e) {
-    // EXIT BY EXCEPTION IS STILL AN EXIT. A trap unwinds this call, but the
-    // sibling work this loop already started — a registered host call, a
-    // queued tail (which gates `Store.tick`) — does not unwind with it. The
-    // `done()` path hands both to the settlement pump; so must this one.
+    // Sibling host calls and activation tails survive this driver's failure.
     ensureSettlementPump(store);
     throw e;
   }
@@ -521,16 +415,8 @@ function driveLoop(
 ): DriveExit | Promise<DriveExit> {
   for (;;) {
     traceDrive("drive", store, done, "top");
-    // The synchronous drain must not run while a thread is parked on a
-    // Promise: `tick` cannot see those, so a thread that re-parks READY on
-    // every resume (a callback-ABI guest spinning YIELD) would hold this
-    // loop forever while the promise-parked thread that would stop the spin
-    // never gets serviced (drop-subtask.wast:139 under detection: the
-    // Looper spins YIELD until `return` runs, and `return`'s caller sat
-    // parked on its activation promise). In jspi mode the lifted export
-    // returns a Promise anyway, so handing off to `driveAsync` — whose
-    // drain interleaves fairly — costs nothing; in plain mode `awaiting`
-    // is always empty and this loop is bit-for-bit what it was.
+    // Promise-parked threads need microtasks; a synchronous YIELD loop would
+    // starve them. Hand those stores to the interleaved async drain.
     while (store.awaiting.size === 0 && store.tick()) {
       traceDrive("drive", store, done, "ticked");
       if (store.hostFailure !== undefined) throw takeHostFailure(store);
@@ -538,28 +424,19 @@ function driveLoop(
     if (store.hostFailure !== undefined) throw takeHostFailure(store);
     if (done()) {
       traceDrive("drive", store, done, "EXIT-done");
-      // Fully-synchronous completion: no `driveAsync` ran, so its exit hook
-      // will not fire — arm the settlement pump here for any host calls the
-      // guest registered fire-and-forget during this drive.
+      // No async finally will run: hand off any background work here.
       ensureSettlementPump(store);
       return "done";
     }
-    // A thread parked on a Promise (jspi) can only progress after a microtask
-    // turn, exactly like an outstanding host call. So can an outstanding
-    // pending resumption of THIS store: a suspension has been settled and its
-    // activation has not run yet (see `Store.tick`).
+    // Awaiting activations and pending resumptions need an event-loop turn.
     if (store.awaiting.size > 0 || store.hasPendingResumptions()) {
       traceDrive("drive", store, done, "->async(awaiting/pending)");
       return driveAsync(store, done, what, idle);
     }
     if (store.pendingHostCalls.size === 0) {
-      // The idle verdict. Under "exit" (an async-typed lift, #292) this is
-      // not a fault at all: the task simply has nothing to run right now and
-      // the export's Promise stays pending until a later driver finishes it.
+      // An idle async task remains live for a later driver.
       if (idle === "exit") {
         traceDrive("drive", store, done, "EXIT-idle");
-        // Same hand-off as the `done()` exit above: work this loop started
-        // outlives it.
         ensureSettlementPump(store);
         return "idle";
       }
@@ -582,12 +459,7 @@ type AwaitWinner = {
     awaiting: Promise<unknown> | null;
     resumeWith(v: unknown, f?: { error: unknown }): void;
   };
-  /**
-   * The promise this tag was minted from — i.e. what `t.awaiting` held at
-   * `tagAwait` time. Carried so a resumption site can check that the thread is
-   * still parked on THAT promise and not on a later one (see the guard at the
-   * race's resumption site).
-   */
+  /** Park identity: membership alone cannot distinguish a later re-park. */
   p: Promise<unknown>;
   value: unknown;
   failure: { error: unknown } | undefined;
@@ -614,22 +486,10 @@ function tagAwait(t: AwaitWinner["t"]): Promise<AwaitWinner> {
 }
 
 /**
- * THE asynchronous driving loop, exported for the one other driver in the
- * runtime: `HostActivity` in exec/host_streams.ts, which must pump the store
- * BETWEEN export calls (when no lifted call is in flight) with exactly these
- * semantics — service settled tails, tick to quiescence, then await the race
- * of every outstanding promise (parked activations AND `pendingHostCalls`),
- * repeat. Reimplementing it there diverged: that copy only drained
- * `store.awaiting` and never awaited `pendingHostCalls`, so a guest parked on
- * a Promise-returning host import was never resumed and the host's read of
- * the stream it was feeding hung (host-pump starvation of `pendingHostCalls`).
- *
- * Callers that must not hit the deadlock traps below (the host pump: an
- * embedder that never does its half is documented to hang, not trap) can
- * exclude them entirely — BOTH trap sites require
- * `store.pendingHostCalls.size === 0`, and both are reached only through the
- * synchronous fall-through from `done()`, so a `done` that returns true
- * whenever `pendingHostCalls` is empty provably never traps.
+ * Shared async driver for host activity and settlement pumps. Service tails,
+ * tick, then race awaiting activations and host calls. A pump that must stay
+ * pending rather than trap on idle must make `done()` true whenever
+ * `pendingHostCalls` is empty; idle traps require the opposite exit decision.
  */
 export async function driveStoreAsync(
   store: Store,
@@ -642,64 +502,15 @@ export async function driveStoreAsync(
 }
 
 /**
- * How many `driveAsync` loops are live on a store.
+ * Live async drivers per store. Concurrent exports may overlap; fallback
+ * pumps stand down cooperatively when another driver arrives. There is no
+ * single-driver invariant.
  *
- * THE INVARIANT is not "only one loop may ever run" — concurrent export calls
- * have always produced concurrent loops, and the host-stream pump's stand-down
- * below is cooperative, so a *bounded overlap window* remains by construction
- * (an export call can start while the pump is parked mid-`await`; the pump
- * notices at its next `done()` evaluation, which the driver-arrival one-shot
- * below now makes prompt — before issue #239 it was "whenever the host happens
- * to answer", i.e. not bounded at all). The invariant is:
- *
- *   **no activation is resumed twice for one settlement, and no activation is
- *   resumed with a value from a settlement it has already consumed.**
- *
- * Overlap is benign for that invariant because of three mechanisms, in
- * decreasing order of how much weight they carry:
- *
- *   (a) LOAD-BEARING — `resumeWith` synchronously deletes the thread from
- *       `store.awaiting` (task/thread.ts `Thread.resumeWith`), and every
- *       resumption site here is guarded by an `store.awaiting.has(...)` test
- *       evaluated synchronously immediately before the call. The loser of a
- *       race therefore sees the deletion. The ordering that makes this
- *       airtight is microtask FIFO: both loops' race continuations were
- *       queued when the *tag* settled, which is strictly before the winner's
- *       `resumeWith` can run and therefore strictly before any re-park the
- *       resumed activation performs can queue a new settlement. So the loser
- *       observes "deleted", never a re-park that restored membership.
- *   (b) `tagAwait` memoizes per PROMISE (not per thread), so overlapping loops
- *       racing the same parked thread await the *same* tag object and see one
- *       settlement, not two independent ones. This is what makes (a)'s
- *       "queued at tag settlement" premise hold across loops.
- *   (c) The store's pending-resumption set (`Store.pendingResumptions`)
- *       serializes the resumption path WITHIN a store: every loop driving
- *       that store yields at its top while `store.hasPendingResumptions()`,
- *       so a settled activation runs before anything else is scheduled.
- *       (Until 2026-08-22 this was a module-global single slot with a
- *       one-claimant assert; per-store multi-entry replaced it — issues #158
- *       mechanism B and #210. Overlapping loops in the sense meant here are
- *       loops on the SAME store, which is exactly what (c) still covers;
- *       loops on different stores never shared a settlement to race for.)
- *
- * (a) is the guarantee; (b) and (c) are what make (a) apply across loops
- * rather than only within one. The one corner (a) does NOT cover — a thread
- * resumed by the *other* loop's `tick`, re-parked on a NEW promise, whose OLD
- * promise then settles late — is closed separately at the resumption site
- * below by comparing promise identity, not just membership.
- *
- * What overlap is NOT benign for is throughput and blame: two loops ticking
- * the same store interleave their `serviceSettled`/`tick` phases, and the
- * host-stream pump was observed to trip `Trap: table entry empty` out of
- * `runCallbackLoop` when it drove unconditionally alongside an export call's
- * loop. Export calls own their loops and cannot yield to anyone; the pumps
- * are *fallback* drivers — the host-activity pump for embedder operations
- * that land BETWEEN export calls, the settlement pump (below) for host-call
- * settlements that land between them — so they are the side that stands
- * down, using the two accessors below, narrowing the window to the
- * cooperative residue described above. When an export call's loop is live it
- * already races `pendingHostCalls` and `store.awaiting`, i.e. it pumps host
- * activity on the embedder's behalf.
+ * Each settlement must be delivered once to its original park. `resumeWith`
+ * deletes awaiting membership synchronously; race winners check both that
+ * membership and promise identity, then remove queued copies before resuming.
+ * Per-promise tags share settlement reactions across racers. Per-store
+ * pending-resumption gates give engine continuations a turn before more ticks.
  */
 const driverDepth = new WeakMap<Store, number>();
 const driverIdle = new WeakMap<Store, { p: Promise<void>; r: () => void }>();
@@ -722,27 +533,11 @@ export function whenStoreDriverIdle(store: Store): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Driver arrival: closing the overlap window (issue #239)
+// Driver arrival
 // ---------------------------------------------------------------------------
 //
-// The stand-down above ("the pumps are *fallback* drivers") is evaluated only
-// at a driver's next `done()`, so the doc's "bounded overlap window" is really
-// bounded by whatever the incumbent driver is parked on — and its longest park
-// is `Promise.race([...parked tags, ...pendingHostCalls])`, i.e. HOST-CONTROLLED
-// time. That is a stall in its own right, and it is fatal in combination with
-// the SPECULATIVE resume entry the race holds: `Store.pendingResumptions` is a
-// store-wide scheduling gate, so a second driver on the same store spins at
-// `driveAsync`'s top and dies at the 10,000-hop internal-bug assert in ~311ms
-// (issue #239 — the same-store half of the cross-store stall #210 fixed; see
-// `tests/cross_store_driver_test.ts`, whose header describes this gate being
-// "held for the entire duration of a guest's wait on a slow host import").
-//
-// So drivers announce themselves: every `driveAsync` that finds itself the
-// second (or later) loop on a store fires this one-shot, which every driver
-// races alongside its parked tags. The incumbent wakes within a microtask,
-// drops the speculative entry on its way out of the race, and re-evaluates
-// `done()` — which is exactly the stand-down the pumps were always supposed to
-// perform, now prompt instead of "whenever the host happens to answer".
+// Wake incumbents so they release speculative gates and re-evaluate `done`
+// without waiting for a possibly unbounded host call to settle.
 const driverArrivals = new WeakMap<
   Store,
   { p: Promise<null>; r: () => void }
@@ -772,45 +567,13 @@ function fireDriverArrival(store: Store): void {
 }
 
 // ---------------------------------------------------------------------------
-// Host-call arrival: the other stale snapshot
+// Host-call arrival
 // ---------------------------------------------------------------------------
 //
-// Every park that watches host calls does it by SNAPSHOT — `[...
-// store.pendingHostCalls]` is spread once, when the racer parks. A parked
-// driver therefore watches the calls that existed at park time and nothing
-// else, and the calls a store owns are not a fixed set: guest execution
-// registers new ones at the two `pendingHostCalls.add` sites below.
-//
-// The driver-arrival one-shot above does NOT cover this. It fires when a new
-// *driver* starts (`driveAsync` at depth > 1), and the registration that
-// opens the hole routinely happens under no new driver at all. Two paths run
-// guest code without bumping the driver depth: an export entered through the
-// synchronous `drive` path, and `HostActivity.pump()`'s synchronous drain
-// (exec/host_streams.ts) while its async half is already parked in
-// `driveAsync` — the stream-dom shape, a `readDirect` session live and every
-// import awaited from an event handler. Either way the guest lowers a host
-// import, the call is registered — and the incumbent parked driver, whose
-// snapshot predates it, never hears about it. When that call settles, its
-// continuation readies the guest thread and deletes itself from
-// `pendingHostCalls`, but nobody drives: the settlement pump is standing down
-// because `storeDriverDepth > 0` (the parked driver counts), and the parked
-// driver is still waiting on promises that may never settle. The guest is
-// resumed by the next unrelated export call. That is the same class as #239 —
-// liveness held hostage by whatever an incumbent driver happens to be parked
-// on — with the registration, not the arrival of a second loop, as the event
-// that goes unheard.
-//
-// So registrations announce themselves too, on the same one-shot discipline:
-// fired by `registerHostCall` below (THE path for both sites) and raced by
-// every `driveAsync` park that spreads `pendingHostCalls`, alongside the
-// snapshot. A racer wakes within a microtask, re-snapshots (which now includes
-// the new call), and re-parks. The settlement pump does not need it: see the
-// note at its race.
-//
-// Kept separate from driver arrival rather than folded into it because the
-// two mean different things — "another loop is driving this store, stand
-// down" versus "your snapshot is stale, re-take it" — and only the first is
-// what `fireDriverArrival`'s callers and doc comment assert.
+// Promise races watch snapshots. Synchronous export entry or host-activity
+// draining can register a call without starting a new async driver. Announce
+// every registration so parked drivers refresh their snapshots independently
+// of the driver-arrival stand-down signal.
 const hostCallArrivals = new WeakMap<
   Store,
   { p: Promise<null>; r: () => void }
@@ -840,16 +603,9 @@ function fireHostCallArrival(store: Store): void {
 }
 
 /**
- * Register an outstanding host call on `store` and announce it to every
- * parked racer. THE registration path for real host calls — the two lowering
- * sites below go through it, and so does the regression test that pins the
- * announcement (tests/parked_driver_host_call_test.ts), because a raw
- * `pendingHostCalls.add` is exactly the silent registration this closes.
- *
- * (`HostActivity`'s arm in exec/host_streams.ts is deliberately NOT a caller:
- * it re-arms on every embedder notification and means "the embedder may still
- * act", not "the host owes an event" — the same distinction `hasRealHostCall`
- * draws.)
+ * Register real host work and wake parked racers. Use this rather than adding
+ * directly to `pendingHostCalls`. HostActivity arms are different: they mean
+ * the embedder may act, not that an external result is outstanding.
  */
 export function registerHostCall(
   store: Store,
@@ -863,52 +619,12 @@ export function registerHostCall(
 // The settlement pump: liveness between export calls
 // ---------------------------------------------------------------------------
 //
-// A host-import promise that settles while a driver is live is serviced by
-// that driver (`driveAsync` races `store.pendingHostCalls`). One that settles
-// while NO driver is live only mutates scheduler state — the registration
-// site's continuation delivers results and readies threads, but nothing calls
-// `serviceSettled`/`tick`, so the work sits queued until the next export call
-// or host stream/future operation happens to drive the store. For a guest
-// with genuinely background work — the canonical shape is a task parked WAIT
-// on a waitable set whose pending host call is a clock (a componentize-go
-// keep-alive ticker, a wasi:clocks `wait-for`) — that turned "the host will
-// wake me" into "the embedder's next unrelated call will wake me": a liveness
-// gap, not a policy (wasmtime's event loop delivers such wakeups whenever the
-// embedder dwells in `run_concurrent`; on a JS host the event loop is always
-// dwelling).
-//
-// The settlement pump closes the gap: whenever a driver exits leaving real
-// host calls outstanding (`hasRealHostCall` — activity arms excluded, they
-// mean "the embedder may still act", not "the host owes an event"), a
-// detached keeper parks on `Promise.race` of those calls and, when one
-// settles, drives the store to quiescence with the same loop and the same
-// cooperative discipline as the host-activity pump above it in the driver
-// hierarchy:
-//
-//   * it stands down whenever an export call's loop is live
-//     (`storeDriverDepth` / `whenStoreDriverIdle`, plus the `> 1` clause in
-//     its `done`, exactly as `HostActivity.#pumpAsync`);
-//   * its `done` returns true whenever `pendingHostCalls` is empty, which is
-//     the precondition of BOTH deadlock traps in `driveAsync` — the pump can
-//     therefore never convert the documented embedder-never-acts hang into a
-//     trap (see the `driveStoreAsync` note above);
-//   * failures park on `store.hostFailure` for the next embedder call to
-//     surface, the channel every between-calls driver already uses.
-//
-// Every real `pendingHostCalls` entry is born during guest execution, i.e.
-// inside some driver, so arming at driver exit (`driveAsync`'s finally and
-// `drive`'s synchronous completion) observes every registration. A
-// HOST-initiated resource dtor (embedder `drop()` between calls) is no
-// exception since #160: it is a lifted call like any other, so it brings its
-// own driver, and any host call its activation makes is registered inside
-// that driver.
-//
-// STALE SNAPSHOTS: the keeper races the real host calls it saw when it
-// parked. A drive it performs can register NEW calls (the keep-alive ticker
-// re-arming is the routine case), and `ensureSettlementPump` may be called
-// while the keeper is already parked. Both are handled by a nudge promise
-// raced alongside the snapshot: arming an already-live pump fires the nudge,
-// the keeper wakes, re-snapshots, and re-parks.
+// Every driver exit, including exceptions, hands off real host calls, queued
+// tails and hop-parked activations. The keeper drives their wakeups without
+// requiring another export call. It stands down for live drivers, stops at
+// quiescence rather than task completion, and parks failures on hostFailure.
+// Activity arms are excluded. Re-arming a live keeper nudges it to refresh its
+// snapshot, including calls registered by a drive it performed itself.
 
 const settlementPumps = new WeakSet<Store>();
 const settlementNudges = new WeakMap<
@@ -936,11 +652,7 @@ function fireSettlementNudge(store: Store): void {
 }
 
 /**
- * What an exiting driver must hand over: real host calls it was watching, a
- * queued activation tail (which gates `Store.tick` for every later driver),
- * or a hop-parked thread — the #280 rule ("a driver is not done while ANY
- * thread of ANY task is hop-parked") applied to the exits that cannot
- * evaluate their `done` predicate, i.e. the exception exits.
+ * Work needing an owner after driver exit, including exception exits.
  */
 function pumpWork(store: Store): boolean {
   return hasRealHostCall(store) || store.settled.length > 0 ||
@@ -948,7 +660,7 @@ function pumpWork(store: Store): boolean {
 }
 
 /**
- * Ensure a settlement pump is watching `store`'s real outstanding host calls.
+ * Ensure a settlement pump owns outstanding host calls, tails and entry hops.
  * Idempotent and cheap; called at every driver exit. Never throws.
  */
 export function ensureSettlementPump(store: Store): void {
@@ -978,10 +690,7 @@ async function settlementPumpLoop(store: Store): Promise<void> {
       // it in a loop.
       if (store.hostFailure !== undefined) return;
       const real = realHostCalls(store);
-      // A queued tail is serviceable RIGHT NOW: drive without parking. A
-      // hop-parked thread lands on the engine's own schedule, so its promise
-      // is raced alongside the host calls — that is how an exception exit's
-      // orphaned hop (F4/#280) gets an owner.
+      // Queued tails need no await; orphaned entry hops are raced with host work.
       const hops = store.settled.length > 0
         ? []
         : entryHopThreads(store).map((t) => t.awaiting).filter((
@@ -990,13 +699,8 @@ async function settlementPumpLoop(store: Store): Promise<void> {
       if (store.settled.length === 0) {
         if (real.length === 0 && hops.length === 0) return;
         const nudge = armSettlementNudge(store);
-        // The host-call arrival one-shot does NOT ride here, deliberately: a
-        // registration this snapshot misses always reaches `ensureSettlementPump`
-        // (which fires the nudge) — `driveAsync`'s finally, `drive`'s synchronous
-        // completion, and `HostActivity.pump()`'s async half is itself a
-        // `driveStoreAsync`. Any driver live meanwhile is what we stand down for.
-        // Rejections are not this pump's to report: the registration site's
-        // own continuation parks them on `store.hostFailure`.
+        // Driver exits nudge this snapshot; active drivers own new work meanwhile.
+        // Registration continuations, not this race, report host rejections.
         await Promise.race([
           ...real.map((p) => p.then(() => {}, () => {})),
           ...hops.map((p) => p.then(() => {}, () => {})),
@@ -1004,19 +708,11 @@ async function settlementPumpLoop(store: Store): Promise<void> {
         ]);
         if (storeDriverDepth(store) > 0) continue;
       }
-      // Drive unconditionally after a wake: `storeQuiescent` cannot see a
-      // READY waiting thread (the usual product of a settlement — the
-      // continuation readied the guest and deleted its own host call), so
-      // gating the drive on it skips exactly the work this pump exists to
-      // do. `driveAsync` drains ready threads before consulting `done`, and
-      // a vacuous round exits on its first `done` evaluation.
+      // Drain after every wake: storeQuiescent does not count ready waiters
+      // left by a host settlement that already removed its call registration.
       await driveStoreAsync(
         store,
-        // Quiescence, not completion — and the same three exit clauses as
-        // the host-activity pump: nothing only an event-loop turn could
-        // advance; `pendingHostCalls` empty (the deadlock traps'
-        // precondition, so this pump provably never traps); another driver
-        // appeared (ours is the 1).
+        // Stop before idle traps, at quiescence, or when another driver arrives.
         () =>
           store.pendingHostCalls.size === 0 ||
           storeQuiescent(store) ||
@@ -1048,50 +744,21 @@ async function driveAsync(
 ): Promise<DriveExit> {
   const depth = storeDriverDepth(store) + 1;
   driverDepth.set(store, depth);
-  // An incumbent driver may be parked in the awaiting-race holding the
-  // speculative resume entry — a store-wide gate this loop would otherwise
-  // spin on until the 10,000-hop assert (issue #239). Announce ourselves so it
-  // stands down within a microtask.
+  // Wake incumbents to release speculative gates and let fallback pumps stand down.
   if (depth > 1) fireDriverArrival(store);
   try {
     let claimHops = 0;
     for (;;) {
       traceDrive("driveAsync", store, done, "top");
-      // FIRST: service every settled-but-unserviced activation tail, in settle
-      // order (`Store.settled` — armed eagerly at park time). A settled
-      // `awaitValue` is the rest of an activation that already finished its
-      // wasm; the reference runs that bookkeeping atomically inside
-      // `Thread.resume`, so nothing may be scheduled past it (`Store.tick`
-      // refuses while the queue is non-empty). Servicing after ticking let a
-      // freshly-resumed caller race into an entry gate while a finished
-      // callee's body had yet to release the exclusive slot — cancellable.wast
-      // then reported STARTING for an entry the reference admits.
+      // Complete settled activation bookkeeping before any scheduling decision.
       store.serviceSettled();
       if (store.hostFailure !== undefined) throw takeHostFailure(store);
-      // A pending resumption of THIS store is an engine-driven resumption in
-      // flight: its activation has not yet parked again or finished. It will
-      // die on its own — parking consumes it (`blockCurrentActivation`),
-      // finishing releases it (`Store.noteAwaiting`'s settle continuation) — so
-      // yield microtasks until it does. The driver must NOT blanket-clear here:
-      // an entry may have been taken by a guest built-in settling another
-      // activation's suspension (`subtask.cancel` delivering a cancellation),
-      // and clearing it before that activation runs re-opens the
-      // mis-attribution window the entry exists to close.
-      //
-      // PER-STORE (issue #210): read only THIS store's entries. Activations
-      // never cross stores, so another store's pending resumption is none of
-      // this loop's business — and a gate shared across stores would spin an
-      // idle store's driver here, to its death at the hop bound below in
-      // ~311ms, merely because ANOTHER store's guest was dwelling on a slow
-      // host import.
+      // Yield for this store's engine resumptions. Only their execution/park
+      // or settlement may release them; never clear other owners' entries.
       if (store.hasPendingResumptions()) {
         traceDrive("driveAsync", store, done, "yield-pending");
-        // Bounded: a pending entry that never dies is an internal bug (every
-        // path out of a resumed activation releases it — park, finish, trap),
-        // and a pure-microtask wait would otherwise starve the event loop and
-        // every stall timer with it. Interleave macrotask hops so timers stay
-        // alive, and fail loudly rather than spin forever. Scoped per store,
-        // this is again the internal-bug detector it was meant to be.
+        // Bound leaked claims, interleaving timer turns to avoid starving
+        // the event loop while diagnosing an internal scheduling failure.
         claimHops++;
         assert_(
           claimHops < 10_000,
@@ -1108,13 +775,8 @@ async function driveAsync(
       claimHops = 0;
       while (store.tick()) {
         if (store.hostFailure !== undefined) throw takeHostFailure(store);
-        // FAIRNESS between tick-able threads and promise-parked ones. A thread
-        // that is READY again on every resume (the callback-ABI YIELD spin)
-        // would otherwise monopolize this drain while a parked thread's
-        // settled promise waits (the starvation that hung
-        // drop-subtask.wast:139), and the engine's own continuations (jspi
-        // pin (j)) only ever land on microtask turns. One hop per tick; bail
-        // to the top the moment an activation tail lands.
+        // A READY/YIELD loop must not starve promise settlements. Give engine
+        // continuations a microtask per tick and service any landed tails first.
         if (store.awaiting.size > 0) {
           await Promise.resolve();
           if (store.hasServiceableSettled()) break;
@@ -1125,54 +787,22 @@ async function driveAsync(
         traceDrive("driveAsync", store, done, "EXIT-done");
         return "done";
       }
-      // Only a SERVICEABLE tail is a reason to loop again: a queue holding
-      // only tails DEFERRED on a non-enterable instance (issue #156) would
-      // spin this loop hot — nothing in the cycle awaits.
+      // Queued tails and pending resumptions take priority over parking.
       if (store.hasServiceableSettled() || store.hasPendingResumptions()) {
         continue;
       }
-      // Service promise-parked threads (jspi).
-      //
-      // This must NOT block on one chosen thread's promise. A thread parked on a
-      // promising-wrapped nested activation only settles once that activation's
-      // own suspension points have been resumed -- and resuming those is
-      // `Store.tick`'s job, i.e. *this loop's* job. Awaiting a single promise
-      // therefore stops the scheduler while waiting for something that needs the
-      // scheduler: a pure-microtask stall with no trap and no rejection.
-      // Observed on `async/async-calls-sync.wast` the moment site 1 became the
-      // first lit suspension site: turn N serviced a promise that
-      // never settled while three other parked threads and three ready-able
-      // suspension points went unexamined.
-      //
-      // So: race every outstanding promise (parked threads AND host calls) and
-      // service whichever settles first, re-ticking each turn. The claim is
-      // taken in the tagged continuation -- as close to settlement as we can get
-      // -- so pin (i)'s window (engine-driven wasm resumption running built-ins
-      // before our continuation) is still covered for the thread that actually
-      // resumed, without falsely claiming the ambient for threads that did not.
+      // Race all activations and host calls. Awaiting one chosen activation
+      // alone could stop the scheduler that its nested suspension needs.
       if (store.awaiting.size > 0) {
-        // Is this actually progress, or a deadlock wearing its clothes?
-        //
-        // Everything in `store.awaiting` is an INTERNAL promise: a
-        // promising-wrapped wasm activation. Such a promise settles either on
-        // its own (the activation ran to completion -- which happens within one
-        // macrotask turn, since the work is already done and only the microtask
-        // hop remains) or because WE resume a suspension point it is waiting
-        // behind. If no thread is ready, no host call is outstanding, and a full
-        // macrotask turn passes with nothing settling, then nobody can move: the
-        // awaited promises need us and we need them. That is the deadlock trap
-        // (definitions.py `canon_lift`'s empty-candidate-set `trap_if`), and
-        // without this check it presents as a silent stall instead -- which is
-        // exactly what `tests/jspi/deadlock_test.ts` caught the moment site 2
-        // was lit.
+        // With no external work or pending resumption, allow a timer turn for
+        // engine hops to settle before declaring idle. Internal activation
+        // promises alone do not establish that further progress is possible.
         if (
           store.pendingHostCalls.size === 0 && !store.hasPendingResumptions()
         ) {
           traceDrive("driveAsync", store, done, "deadlock-probe");
-          // Exclude threads whose settle is already QUEUED in `store.settled`
-          // (issue #156): their promise has settled, so racing them wins
-          // instantly off the memoized `tagAwait` tag, forever, in an unbounded
-          // microtask chain — the tail is `serviceSettled`'s to run.
+          // Queued tails belong to serviceSettled; racing their settled tags
+          // repeatedly would create an unbounded microtask loop.
           const queued = new Set(store.settled.map((s) => s.t));
           const parked = ([...store.awaiting] as AwaitWinner["t"][]).filter(
             (t) => !queued.has(t),
@@ -1188,20 +818,8 @@ async function driveAsync(
             `deadlock-probe:progressed=${progressed}`,
           );
           if (!progressed) {
-            // The race covered a SNAPSHOT of the awaiting set. A thread that
-            // parked during the macrotask turn (a promising callee's body
-            // yielding its awaitValue mid-hop — jspi pin (j) makes this
-            // routine) was not raced, and its promise may already be settled;
-            // trapping now would declare a deadlock one iteration before the
-            // loop would have serviced it. Membership change ⇒ re-probe.
-            //
-            // `fresh` gets the SAME queued-entry filter `parked` got (issue
-            // #156), against a RECOMPUTED queued set — the settled queue can
-            // change across the probe's await. Comparing a filtered snapshot
-            // against an unfiltered one would read "changed" on every turn in
-            // the all-deferred wedge state, so the verdict below could never
-            // be reached and the wedge would present as a silent
-            // macrotask-paced busy idle instead of a trap.
+            // Revalidate the snapshot after awaiting. Apply the same queued-tail
+            // filter to both snapshots, using the current queue for the new one.
             const freshQueued = new Set(store.settled.map((s) => s.t));
             const fresh = ([...store.awaiting] as AwaitWinner["t"][]).filter(
               (t) => !freshQueued.has(t),
@@ -1209,29 +827,8 @@ async function driveAsync(
             const changed = fresh.length !== parked.length ||
               fresh.some((t, i) => t !== parked[i]);
             if (changed) continue;
-            // The probe's precondition can also expire WITHOUT the awaiting
-            // set changing: the same activation resumes off an engine
-            // continuation chunk during the probe's macrotask turn (jspi
-            // pin (j) — a sync-completing Suspending import still defers its
-            // continuation), runs, and re-parks through the suspending mark arm, which
-            // registers a fresh `pendingHostCalls` entry. The activation
-            // promise never settled and `awaiting` membership is unchanged,
-            // but the park is externally wakeable now — the verdict's own
-            // precondition (`pendingHostCalls.size === 0`) no longer holds.
-            // Observed on wasi-shims' stream/future round-trip poll (sync fast path): probe sampled
-            // hostCalls=0 between a settled park and the next one, then
-            // trapped a live workload with hostCalls=1. Re-check ⇒ re-probe.
-            // Likewise a SERVICEABLE settled entry (issue #156): dispatching
-            // it is progress, so this is not a deadlock verdict — re-probe.
-            // A deferred-only queue deliberately does NOT re-probe: nothing
-            // can dispatch it while the lock is held, and if no host call is
-            // outstanding nothing will ever release that lock, so it falls
-            // THROUGH to the verdict below — the same loud-wedge treatment the
-            // servicing race's own all-deferred fallthrough gets. Per the #156
-            // analysis that state is unreachable (a lock spanning this loop's
-            // await always has a `pendingHostCalls` entry, which fails this
-            // probe's precondition); keeping it loud is what makes it an
-            // internal-wedge detector rather than dead code.
+            // Even unchanged awaiting membership can acquire external work,
+            // pending resumptions or queued tails during the probe.
             if (
               store.pendingHostCalls.size > 0 ||
               store.hasPendingResumptions() ||
@@ -1252,63 +849,24 @@ async function driveAsync(
                   `and none is ready)`,
               );
             }
-            // No promise settled, but a thread became READY while we waited --
-            // typically a suspension point whose `readyFunc` turned true because
-            // another activation ran during the macrotask turn. The way forward
-            // is `Store.tick`, not a promise: go back to the top and resume it.
-            // Falling through to the servicing block instead would await
-            // promises that nothing will settle while a runnable thread sits
-            // there -- the `async/sync-barges-in.wast` stall exactly.
+            // A thread became ready: tick it rather than awaiting its dependents.
             continue;
           }
-          // Progress IS possible: fall through to the normal servicing below,
-          // which resumes the settled thread. Returning to the top instead would
-          // spin -- the memoized tag is already settled, so the race would win
-          // instantly, forever, without anyone being resumed.
+          // Consume the settlement, either through the queue or the race below.
         }
-        // Re-check membership: the deadlock probe above AWAITS, and everything
-        // below reads `[...store.awaiting][0]` as if the set were still
-        // non-empty. A thread resumed during the probe (its settle continuation
-        // runs `resumeWith`, which deletes it) can empty the set, and the
-        // snapshot's `parked[0]` is then `undefined` — the exact check-then-act
-        // shape that made the host pump's copy of this loop throw
-        // `TypeError: ... (reading 'awaiting')` into `store.hostFailure`, where
-        // it poisoned a later unrelated call via check-then-act on `store.hostFailure`. Nothing to
-        // service ⇒ go back to the top and re-evaluate `done`.
-        // Same re-check for the settled queue, and for the same reason: the
-        // probe's macrotask turn can land a fresh, SERVICEABLE activation tail
-        // (that is exactly what "progress IS possible" above usually means).
-        // The queue owns those threads — the race below deliberately excludes
-        // them (issue #156) — so the way forward is the top of the loop, where
-        // `serviceSettled` dispatches them. Without this, filtering the
-        // just-settled thread out of the race left the loop awaiting promises
-        // that only its dispatch could settle (observed: tests/jspi/
-        // handshake_test.ts stalled, then tripped the claim assert).
+        // The probe awaited: another driver may have consumed the park, or
+        // noteAwaiting may have queued its tail. Recheck before selecting one.
         if (store.awaiting.size === 0 || store.hasServiceableSettled()) {
           continue;
         }
-        // Claim the ambient for ONE parked thread and await its promise -- as
-        // before, so pin (i)'s window is covered exactly as it was -- but race
-        // that promise against every other outstanding promise so this loop can
-        // never be held hostage by it. The claimed thread's promise may only be
-        // settleable by further scheduler progress (a promising-wrapped nested
-        // activation whose own suspension points this loop must still resume);
-        // blocking on it alone is the pure-microtask stall described above.
-        // Same exclusion as the probe (issue #156): a thread whose tail is
-        // already queued in `store.settled` must not be raced — its tag is
-        // settled, so it re-wins instantly and livelocks the event loop,
-        // starving the very host-call settle that would release the lock.
+        // Race only parks not already owned by the settled queue.
         const queued = new Set(store.settled.map((s) => s.t));
         const parked = ([...store.awaiting] as AwaitWinner["t"][]).filter(
           (t) => !queued.has(t),
         );
         if (parked.length === 0) {
-          // UNREACHABLE BY CONSTRUCTION. `parked` is `store.awaiting` minus
-          // the threads whose tails are already queued in `store.settled`, and
-          // we only get here with `awaiting` non-empty and
-          // `hasServiceableSettled()` false — which means the settled queue is
-          // EMPTY, so nothing was excluded. Retained as a wedge detector, not
-          // as expected behavior.
+          // Defensive fallback: the checks above imply a non-empty awaiting
+          // set and empty settled queue, so filtering cannot remove all parks.
           if (store.pendingHostCalls.size > 0) {
             await Promise.race([
               ...store.pendingHostCalls,
@@ -1317,10 +875,6 @@ async function driveAsync(
             ]).catch(() => {});
             continue;
           }
-          // Per the issue #156 analysis this is unreachable (a spanning lock
-          // always has a `pendingHostCalls` entry; a synchronous lock cannot
-          // span this loop's await). An internal-wedge detector, not expected
-          // behavior.
           traceDrive("driveAsync", store, done, "DEADLOCK-TRAP-deferred");
           trapIf(
             true,
@@ -1337,63 +891,17 @@ async function driveAsync(
         for (const h of store.pendingHostCalls) {
           others.push(h.then(() => null, () => null));
         }
-        // A SPECULATIVE entry: the chosen thread is a promising-wrapped
-        // activation, and the engine may run its wasm during this await (pin
-        // (i)). It is dropped on the way out — if the activation is genuinely
-        // mid-resumption its own exact entry (minted by
-        // `SuspensionPoint.resume`) is what carries it, and dropping an entry
-        // that names a thread already gone from the set is a no-op.
-        //
-        // ONLY ITS OWN ENTRY (issue #158): the `finally` must drop the entry
-        // THIS loop added and nothing else. A guest-synchronous delivery during
-        // the await takes a fresh entry of its own, and clearing that one here
-        // would re-open early the very window it exists to close — which is why
-        // the gate is a set of entries rather than a single slot.
-        //
-        // SOLE DRIVER ONLY, AND ONLY UNTIL ONE ARRIVES (issue #239). The entry
-        // is a claim over a window this loop cannot bound: the race settles when
-        // the HOST answers, which may be never. As a store-wide scheduling gate
-        // (`Store.tick` refuses; every driver yields at its top) that is a wedge
-        // the moment a second driver exists — it spins at the top of its own
-        // loop and dies at the 10,000-hop assert in ~311ms, an internal-bug
-        // detector firing on a perfectly ordinary suspended guest. Two concurrent
-        // export calls with one slow suspending import were enough; the reported
-        // shape was a detached guest task cancelling an in-flight import, which
-        // parks mid-frame with no export call outstanding and leaves the
-        // settlement pump holding this entry.
-        //
-        // What the entry protects — "the engine may run `chosen`'s wasm during
-        // this await" — it protects by refusing OTHER `Store.tick` callers, and
-        // this loop is not one of them while it awaits. The tick callers that
-        // can reach a store mid-race are another `driveAsync` loop and
-        // `HostActivity.pump`'s synchronous drain (exec/host_streams.ts) — the
-        // latter is not gated by driver depth, so scoping the entry to "sole
-        // driver" does hand it a window an unscoped entry would close at
-        // depth >= 2.
-        // What holds regardless is the invariant the `driverDepth` note names:
-        // a genuine resumption is preceded by `SuspensionPoint.resume`'s OWN
-        // entry (jspi/bridge.ts, minted before the settle), and every
-        // resumption site here re-checks membership and promise identity
-        // synchronously — mechanisms (a) and (b), which is where that note
-        // already puts the weight.
-        // ONLY IF WE ADDED IT (issue #158, same rule as the `finally` below):
-        // `pendingResumptions` is a Set by identity, so a genuine entry for
-        // `chosen` minted meanwhile — or already held — collapses with ours,
-        // and removing "ours" would drop the genuine one.
+        // A sole driver may gate ticks speculatively while the engine runs
+        // chosen's activation. Driver arrival breaks the race and releases the
+        // gate, preventing an unbounded host wait from blocking a second loop.
+        // Remove only an identity this loop inserted, never clear the set.
+        // Genuine SuspensionPoint resumptions establish their own entries.
         const sole = storeDriverDepth(store) === 1;
         const added = sole && !store.pendingResumptions.has(chosen);
         if (added) store.addPendingResumption(chosen);
         let winner: AwaitWinner | null;
         try {
-          // `armDriverArrival` rides the race for every driver, not just the one
-          // holding the entry: waking on a new arrival is also how a fallback
-          // pump reaches its next `done()` — i.e. its stand-down — promptly.
-          // `armHostCallArrival` rides for the sibling reason: the tags below
-          // are a snapshot of what was parked when we entered the race, so a
-          // host call registered after that under no new driver (a sync `drive`
-          // export, `HostActivity.pump()`'s sync drain — neither fires a driver
-          // arrival) can ready a thread with no racer watching for it. See the
-          // host-call arrival note above.
+          // Arrivals trigger stand-down or snapshot refresh without host settlement.
           winner = await Promise.race([
             chosenTag,
             ...others,
@@ -1403,23 +911,9 @@ async function driveAsync(
         } finally {
           if (added) store.removePendingResumption(chosen);
         }
-        // Resume whichever thread actually settled -- not necessarily the one we
-        // claimed. Resuming only the claimed thread would spin: its promise may
-        // never settle, the same thread would be chosen again next turn, and the
-        // already-settled tags would win the race instantly forever (observed as
-        // an OOM, not a hang). Our own entry is dropped above before any resumption,
-        // exactly as on the original single-promise path, so this does not widen
-        // the ambient window; it only ensures the loop always makes progress.
-        // Membership is not enough: the corner it misses is a thread the OTHER
-        // overlapping loop resumed via `tick`, which then re-parked on a NEW
-        // promise, after which its OLD promise settles late — membership is
-        // true again but the tag's value belongs to a settlement this thread
-        // has already consumed. Compare promise identity too.
-        // ONE SETTLEMENT, ONE DELIVERY (definitions.py `Thread.resume` is
-        // atomic). `noteAwaiting` records settlements EAGERLY, so this
-        // promise's `store.settled` entry is already queued; left there, a
-        // body that re-parks SYNCHRONOUSLY inside `resumeWith` gets the OLD
-        // value delivered against its NEW park by the next `serviceSettled`.
+        // Deliver the actual winner only if its park is still current.
+        // Delete queued copies before resumeWith can synchronously re-park;
+        // otherwise serviceSettled could deliver this result to the new park.
         if (
           winner !== null && store.awaiting.has(winner.t) &&
           winner.t.awaiting === winner.p
@@ -1445,28 +939,11 @@ async function driveAsync(
         );
       }
       traceDrive("driveAsync", store, done, "await-race");
-      // Settlement order among several outstanding host calls is the host's,
-      // not ours — this is genuine, unavoidable nondeterminism at the boundary
-      // (the reference has the same freedom in `Store.tick`). Everything
-      // *inside* the component stays deterministic per scheduler.ts.
-      //
-      // The driver-arrival one-shot rides here too. This is the routine park of
-      // a quiet guest with a real host call outstanding — no speculative entry
-      // is held, so there is no wedge to break, but a fallback pump parked here
-      // would otherwise not reach its `done()` (i.e. its stand-down) until the
-      // HOST answered, leaving two loops interleaving `serviceSettled`/`tick`
-      // for that whole window. That interleaving is what the `driverDepth` note
-      // above calls out as bad for throughput and blame.
+      // Host settlement order is external. Arrivals must also wake this park
+      // so fallback drivers can stand down and all drivers refresh snapshots.
       await Promise.race([
         ...store.pendingHostCalls,
         armDriverArrival(store),
-        // ... and the host-call-arrival one-shot, because the spread above is a
-        // SNAPSHOT: a host call registered while we are parked here under no
-        // new driver (a sync `drive` export, `HostActivity.pump()`'s sync drain
-        // — neither fires a driver arrival) would otherwise be watched by
-        // nobody at all (the settlement pump stands down while we, the parked
-        // driver, keep `storeDriverDepth` positive). See the host-call arrival
-        // note above.
         armHostCallArrival(store),
       ]).catch(() => {});
     }
@@ -1477,9 +954,7 @@ async function driveAsync(
       const w = driverIdle.get(store);
       driverIdle.delete(store);
       w?.r();
-      // The store just went driver-idle; if real host calls remain, hand
-      // liveness to the settlement pump (which stands down again the moment
-      // any driver starts).
+      // The last async driver hands off any remaining pump work.
       ensureSettlementPump(store);
     }
   }
@@ -1496,64 +971,23 @@ function takeHostFailure(store: Store): unknown {
 // ---------------------------------------------------------------------------
 
 /**
- * Build the host-callable function for one lifted export (reference
- * `Store.lift` + `canon_lift`, definitions.py lines 578 and 2154).
- *
- * All three lift shapes go through one `Task` + implicit `Thread`:
- *
- *   * **sync** (`not ft.async`) — call, lift results, `task.return_`,
- *     post-return, then the sync driving loop until the task resolves;
- *   * **async + callback** (stackless) — the packed-code loop
- *     (EXIT / YIELD / WAIT), fully implemented here;
- *   * **async, no callback** (stackful) — the guest blocks mid-stack, which
- *     needs genuine wasm-frame suspension: `needsJspi`, at the precise point.
- */
-/**
- * The plain-entered variant of a **sync-typed** lifted export in jspi mode,
- * attached to the promising-wrapped lifted function under this symbol
- * (contracts/embedder-api.md §"Functions and async", §"Functions and async").
- *
- * In jspi mode every promising-wrapped entry returns a Promise even when the
- * activation completes without suspending (jspi pin (e)). Some host contexts
- * cannot use a Promise no matter how promptly it resolves, so each sync-typed
- * export carries a second lifted function whose ENTRY is plain (unwrapped):
- * a guest activation that completes synchronously — the overwhelmingly common
- * case for sync-typed WIT — delivers its results synchronously through it.
- *
- * Two consumers, one mechanism:
- *
- *  * **resource constructors** — a WIT constructor is surfaced as a JS class
- *    constructor (§"Resources") and a JS constructor cannot await, so the
- *    embedder layer reads this symbol unconditionally for `[constructor]`
- *    exports;
- *  * **the embedder `sync()` adapter** — the explicit per-use
- *    synchronous view of any sync-typed export.
- *
- * The cost is confined to genuinely-suspending activations: a blocking
- * built-in reached through the plain entry signals `NeedsJspi` (a capability
- * error, instance left enterable), and a `Suspending`-wrapped host import
- * reached from the unwrapped frame fails as a trap. Both name the export
- * rather than silently deadlocking. A call made while the instance has
- * hop-parked activations refuses with `SyncEntryBusy` before entering
- * (`refuseOnEntryHops` below).
+ * Plain-entry variant of a sync-typed export, used by resource constructors
+ * and the embedder's `sync()` adapter (contracts/embedder-api.md §"Functions
+ * and async"). It avoids the Promise shape of promising entries but cannot
+ * suspend: blocking capability failures raise `NeedsJspi`, and reaching a
+ * Suspending import without an eligible stack traps. Pending instance entry
+ * hops cause a pre-entry, non-poisoning `SyncEntryBusy` refusal.
  */
 export const SYNC_ENTRY: unique symbol = Symbol("polyengine.syncEntry");
 
 // ---------------------------------------------------------------------------
-// Pending async-typed lifts, and their poisoning (#292)
+// Pending async-typed lift results
 // ---------------------------------------------------------------------------
 //
-// An async-typed export whose driver exited idle (see `IdlePolicy`) leaves a
-// host-visible Promise settled by nothing but the task itself finishing. If
-// the task instead dies — a LATER driver runs it and traps — the instance is
-// poisoned and that task's threads will never unregister, so the Promise
-// would hang forever. That is precisely the failure #66 fixed for parked
-// stream/future ends, and it gets the same treatment: a poisoning listener
-// that rejects every pending lift of the instance with the poisoning cause.
-//
-// Registered on the extra-listener seam rather than `setOnInstancePoisoned`
-// (which streams.ts owns) — see `addInstancePoisonedListener` for the
-// evaluation-order reason both are seams.
+// An idle exit transfers result settlement to the task's onResolve callback.
+// If a later driver poisons the instance first and async-end retirement returns,
+// this listener rejects pending results. A throwing retirement hook prevents
+// this notification; recording the poison cause alone does not settle them.
 const pendingLifts = new WeakMap<object, Set<(cause: unknown) => void>>();
 
 function registerPendingLift(inst: object, reject: (c: unknown) => void): void {
@@ -1579,6 +1013,9 @@ addInstancePoisonedListener((inst, cause) => {
   for (const r of waiters) r(cause);
 });
 
+/** Build a `Store.lift` / `canon_lift` entry with a Task and implicit Thread.
+ * Canonical options select sync result lifting, callback dispatch, or stackful
+ * execution; the function type separately selects the sync/async idle policy. */
 export function createLiftedFunction(input: {
   name: string;
   ft: FuncType;
@@ -1606,49 +1043,23 @@ export function createLiftedFunction(input: {
    */
   allInstances?: () => Iterable<{ mayLeave: boolean }>;
   /**
-   * Opt out of the reference's *synchronous* driving loop (`driveSyncLift`,
-   * definitions.py `canon_lift` line 2213) for a sync-typed lift whose caller
-   * does not need a synchronous answer — today only the host-initiated
-   * resource destructor (#160; `createDtorEntry` below, `drop(): void` is
-   * documented non-blocking).
-   *
-   * This is not a weakening of the deadlock trap: `drive` below enforces the
-   * same "no ready thread, no pending host call, nothing awaiting" trap, just
-   * asynchronously — which is exactly the substitution jspi mode already
-   * makes unconditionally (see the comment at the `driveSyncLift` call).
-   * It matters only when a *plain*-mode core returns a thenable, i.e. a
-   * host-supplied JS destructor: the sync loop sees a thread parked on a
-   * Promise, which it can never advance, and declares a bogus deadlock.
+   * Let host-initiated destructors complete asynchronously even in plain
+   * mode. Skip driveSyncLift, which cannot advance a host JS dtor's Promise;
+   * the store driver still applies the sync-typed idle trap.
    */
   allowAsyncCompletion?: boolean;
   /** Nested guest destructor only: preserve the caller and use the reference
    * sync lift drive, not the host's store-wide completion policy. */
   guestDtorCaller?: ComponentInstanceState | null;
   /**
-   * Refuse — synchronously, before entering — a call made while the instance
-   * has HOP-parked activations, instead of deferring it (§"Functions and async",
-   * failure-ladder arm 2).
-   *
-   * Set for the `SYNC_ENTRY` variant, which is built with
-   * `suspensionMode: "plain"` inside a *jspi-mode* instantiation: the
-   * hop-quiescence gate below is keyed on this function's own mode and so is
-   * dead for that variant, yet the hazard it exists to prevent is the
-   * instance's, not the entry's — a hop-parked activation's pending lift
-   * reads memory a fresh guest turn would mutate (see the gate's comment).
-   * A synchronous caller cannot be deferred, so it refuses instead. The
-   * refusal is pre-enter, hence non-poisoning: nothing was entered, so there
-   * is nothing to poison — the same structural safety as `entryRefusal`.
+   * Refuse instance entry hops rather than deferring. SYNC_ENTRY uses plain
+   * mode inside a JSPI instantiation, so its own mode cannot identify this
+   * instance-wide result-memory hazard. Refusal occurs before entry.
    */
   refuseOnEntryHops?: boolean;
   /**
-   * Make **async-typed** exports trap on idle instead of leaving their
-   * Promise pending (#292). Default false; see `IdlePolicy`.
-   *
-   * `InstantiateInput.trapOnIdle`'s only consumer is the conformance harness,
-   * whose `invoke` directive is a *blocking* call — the wast semantics
-   * wasmtime serves with `run_concurrent_trap_on_idle` behind
-   * `[Typed]Func::call_async`, not with `call_concurrent`. It is deliberately
-   * absent from the embedder layer's options.
+   * Harness-only blocking-call policy: trap idle async-typed exports rather
+   * than leaving their Promise pending. Default false; see `IdlePolicy`.
    */
   trapOnIdle?: boolean;
 }): (...args: ComponentValue[]) => unknown {
@@ -1666,10 +1077,7 @@ export function createLiftedFunction(input: {
   const store = inst.store;
   const mode: SuspensionMode = input.suspensionMode ?? "plain";
   const guestDtor = input.guestDtorCaller !== undefined;
-  // Entry wrapping, half of jspi/bridge.ts's invariant: a lifted export's core
-  // function is one of the three activations that can reach a blocking
-  // built-in, so it is `promising`-wrapped exactly when the imports are
-  // `Suspending`-wrapped.
+  // Pair JSPI entries with suspension-capable imports; guest dtors use plain mode.
   const enteredCore = enterWasm(core, mode);
   // See the comment at the `drive` call in `invokeNow` and `IdlePolicy`.
   const idlePolicy: IdlePolicy = ft.async === true && input.trapOnIdle !== true
@@ -1709,11 +1117,8 @@ export function createLiftedFunction(input: {
     // Depth of the sync-call scope stack on entry; see the `finally` below.
     const syncCallDepth = syncCallStack?.length ?? 0;
 
-    // Reference `Store.lift` (@ 2f13265) runs `canon_lift` with NO gate
-    // (CM#705), so host entry into a live instance is valid. What this adds
-    // is polyengine's per-instance
-    // poisoning divergence — a poisoned instance is a corpse, and its refusal
-    // names the original trap (polyengine#145 ask 1).
+    // Poison refusal is separate from task admission; preserve the guest
+    // destructor's caller for same-instance semantics.
     {
       const refusal = entryRefusal(
         inst,
@@ -1727,9 +1132,7 @@ export function createLiftedFunction(input: {
     let resolved: ComponentValue[] | null = null;
     let resolvedSeen = false;
     /**
-     * One-shot: set only by `backgroundCompletion` below, fired here when the
-     * task resolves. See there for why the resolve callback — not thread
-     * drain — is the host's answer event (polyengine#313).
+     * Idle-path result waiter. onResolve, not thread drain, supplies the answer.
      */
     let onResolvedHook: (() => void) | null = null;
     const task = new Task(
@@ -1782,22 +1185,9 @@ export function createLiftedFunction(input: {
     };
 
     const unwind = (): void => {
-      // Unwind any FACT sync-call brackets a trap escaped.
-      //
-      // A trap thrown inside an adapter skips that adapter's
-      // `exit-sync-call`, so its `SyncCallScope` (and the `num_lends` it
-      // holds on the caller's handles) would otherwise survive the call.
-      // wasmtime does not need this: it poisons the whole store on trap
-      // (`Store::call_hook`/panic-on-reuse semantics), so no later call can
-      // observe the stale state. This runtime deliberately supports
-      // post-trap re-entry — the `trapState.pending` reset above exists for
-      // exactly that — so the state has to be unwound instead. Leaving it
-      // would attach the next `transfer-borrow` to a dead scope and leave
-      // lent handles permanently un-droppable ("while borrowed" forever).
+      // Failed adapters may skip exit-sync-call; release this task's lenders
+      // so unaffected instances do not retain abandoned borrows.
       if (completed) return;
-      // Per-ACTIVATION now (see `Thread.syncCallStack`): unwind the brackets
-      // of every activation this task owns, which a trap inside a FACT adapter
-      // skipped. A task can have several threads, so the loop is over threads.
       for (const t of task.threads as { syncCallStack: unknown[] }[]) {
         while (t.syncCallStack.length > 0) {
           (t.syncCallStack.pop() as LenderScope).releaseLenders();
@@ -1805,20 +1195,9 @@ export function createLiftedFunction(input: {
       }
       void syncCallStack;
       void syncCallDepth;
-      // FACT clears the callee's / caller's `may_leave` flag around each
-      // lift and lower (`fact/trampoline.rs`, `set_may_leave_false`) and
-      // restores it afterwards. A trap in between skips the restore, so an
-      // instance can be left permanently unable to leave — every later call
-      // through an adapter then trips FACT's own `CannotLeaveComponent`
-      // check. With the stack unwound to the host boundary no lift or lower
-      // is in flight, so `may_leave` is true for every instance by
-      // definition; assert that resting state rather than leaving the
-      // component bricked.
-      //
-      // The ENTERED instance is excluded: it is poisoned by this trap (see
-      // `poison` below) and must stay exactly as the trap left it. Restoring
-      // its `may_leave` would be tidying the state of an instance that is no
-      // longer allowed to run at all.
+      // Host-boundary unwind restores sibling mayLeave flags skipped by FACT.
+      // A guest destructor is nested inside a live caller, so it must not
+      // restore store-wide flags. The entered instance is excluded in either case.
       for (const i of guestDtor ? [] : allInstances?.() ?? []) {
         if (i as unknown as ComponentInstanceState !== inst) {
           i.mayLeave = true;
@@ -1827,29 +1206,11 @@ export function createLiftedFunction(input: {
     };
 
     /**
-     * A trap escaped the task: mark the instance poisoned.
-     *
-     * polyengine's NAMED DIVERGENCE. definitions.py has no notion of a
-     * post-trap instance at all — a Trap is the end of the world — and
-     * wasmtime's answer is to poison the whole store. This runtime keeps the
-     * component graph alive and buries only the instance that trapped: it is
-     * not in a known state, so it may never be entered again, and the next
-     * call reports `cannot enter component instance` with the recorded cause
-     * appended (polyengine#145 ask 1).
-     * `test/async/builtin-trap-poisons-instance.wast` asserts exactly this,
-     * twice; the marker (`notifyInstancePoisoned`) is the whole mechanism.
-     *
-     * Only `inst` is affected; sibling instances stay usable.
-     *
-     * Poisoned instances can never rendezvous again, so their handle tables'
-     * live stream/future ends are retired here (#66): parked host operations
-     * settle (DROPPED) instead of hanging forever, and the recorded failure
-     * lets the embedder layer reject them loudly.
+     * Record this instance's failure and retire its async ends/pending lifts.
+     * Per-instance poisoning is a runtime policy beyond definitions.py;
+     * sibling instances remain usable.
      */
     const poison = (e: unknown): void => {
-      // Through the seam (not retireInstanceAsyncEnds directly) so the
-      // poison marker is recorded too — `Thread.resumeWith` retires this
-      // instance's late settles against it instead of assert-cascading.
       notifyInstancePoisoned(
         inst as unknown as { handles: Iterable<unknown> },
         e,
@@ -1857,61 +1218,17 @@ export function createLiftedFunction(input: {
     };
 
     /**
-     * Is `e` a *capability* signal rather than a genuine trap?
-     *
-     * `NeedsJspi` and `PendingCapability` mean "this runtime is incomplete",
-     * not "the component faulted". Poisoning on them is wrong on the
-     * reference's own terms: the operation they stand in for — a synchronous
-     * stream copy, `waitable-set.wait`, a blocking cross-component call —
-     * *blocks and then completes* in definitions.py. Every one of those
-     * executions returns normally there, so the instance stays healthy.
-     * Poisoning would attribute a permanent fault to a component
-     * that, on a complete runtime, is perfectly healthy — and it cascades:
-     * one unsupported operation made every later call on that instance report
-     * `cannot enter component instance`, which is neither our real behaviour
-     * nor the reference's.
-     *
-     * What unwinding must still do on this path, and what it must not:
-     *
-     *  - MUST unwind the FACT sync-call scopes and restore `may_leave`
-     *    (`unwind`), for exactly the reasons it does after a trap: a bail-out
-     *    mid-adapter skips `exit-sync-call` and the `may_leave` restore, and
-     *    that state is shared with sibling instances.
-     *  - MUST NOT try to "finish" the abandoned operation. A stream end left
-     *    in `CopyState.COPYING` with its buffer parked in the shared object is
-     *    the honest record of "this copy never happened"; the counterpart has
-     *    not been notified and must not be, because on a complete runtime the
-     *    copy would still be pending. Likewise a `prepare-call` slot consumed
-     *    by a `*-start-call` that then bailed is already cleared by
-     *    `takePrepared`, so nothing leaks there.
-     *  - MUST NOT resolve or cancel the task: the host call fails, and the
-     *    task simply never resolved.
-     *
-     * In other words the instance is left exactly as a *pending* operation
-     * would leave it, which is the truthful state, and the only thing the
-     * embedder loses is the result of this one call.
+     * Capability failures unwind adapter bookkeeping without poisoning.
+     * They do not synthesize operation completion, task resolution or cancellation.
      */
     const isCapabilitySignal = (e: unknown): boolean =>
       e instanceof NeedsJspi || e instanceof PendingCapability;
 
     try {
       thread.resume();
-      // definitions.py `canon_lift` (line 2213): the sync driving loop runs
-      // *inside* the enter/leave bracket, over the callee instance's threads.
-      //
-      // It is skipped in jspi mode, and must be. That loop resumes *ready*
-      // threads and traps when there are none — the reference's deadlock
-      // trap. A thread parked on a Promise is neither ready nor waiting: only
-      // a microtask turn can advance it, which a synchronous loop cannot give.
-      // Running it anyway declared a bogus deadlock the moment a sync-lifted
-      // export's activation suspended, which then trap-poisoned the instance
-      // and abandoned the activation mid-bracket — the orphaned
-      // `exit-sync-call` traced across phases 3h-3j.
-      //
-      // `drive` below is the correct driver in that mode: it knows about
-      // `store.awaiting`, still enforces the deadlock trap (no ready thread,
-      // no pending host call, nothing awaiting), and returns a Promise, which
-      // a jspi-mode lifted export returns anyway.
+      // The reference sync loop drives callee-instance threads. JSPI and
+      // asynchronous host dtors need the store driver instead so Promise
+      // continuations can run before the idle verdict.
       if (!ft.async && mode !== "jspi" && !input.allowAsyncCompletion) {
         driveSyncLift(task);
       }
@@ -1925,49 +1242,18 @@ export function createLiftedFunction(input: {
     }
 
     /**
-     * The task outlived its driver (#292): hand the host a Promise settled by
-     * the task itself.
+     * After an idle exit, settle from onResolve, not the last thread's exit
+     * (#315 result-settlement rule; definitions.py `Task.return_`). Background
+     * producers may retain threads indefinitely. Already-captured results
+     * settle immediately; otherwise register resolution and poison waiters.
      *
-     * Reached ONLY when this lift's own driver exited with the verdict
-     * `"idle"` (`DriveExit`) — it ran out of moves with the task unfinished.
-     * It is never reached after a `"done"` exit, however the store's state
-     * may have moved on since (polyengine#310).
-     *
-     * Resolution rides `finishHostEntry` unchanged — it already holds
-     * `completed`/`resultsToHost` — fired from THE TASK'S RESOLVE CALLBACK,
-     * i.e. `task.return` (polyengine#313). That is the reference's own answer
-     * event: definitions.py delivers a task's result to its caller through
-     * `on_resolve`, called from `Task.return_`, and run_tests.py's
-     * `lift_and_run` keeps ticking the store afterwards for OTHER work, not to
-     * produce the result. wasmtime's `call_concurrent` is the same shape.
-     *
-     * It used to fire on the task's LAST thread unregistering, which is not an
-     * event a callback-ABI task need ever reach: a guest that keeps spawned
-     * futures alive for the instance's life (wit-bindgen `spawn_local` — an
-     * event loop, a driver, an accept loop) leaves `task.threads` non-empty
-     * forever, so a lift that went idle before `task.return` and was later
-     * woken by another driver had its results captured and its host Promise
-     * left hanging. Nor does the answer need deferring to "no wasm call in
-     * flight": `driveDone`'s `midWasmCall`/`hopParked` clauses keep a DRIVER
-     * driving under a suspended activation, and on this path there is no lift
-     * driver left to stop — whichever driver is running when `task.return`
-     * happens keeps driving the store.
-     *
-     * Rejection has two sources: `finishHostEntry` itself throwing, and the
-     * instance being poisoned by a later driver that ran this task into a
-     * trap. Neither calls `unwind()`. A trap on the background path happens
-     * under ANOTHER driver's `invokeNow`, whose own `catch` already unwinds
-     * the FACT sync-call scopes and restores `may_leave` — running it twice
-     * would restore sibling instances' `may_leave` from underneath a lift
-     * that driver is still mid-flight in. This mirrors what already happens
-     * to a post-`task.return` producer thread that traps later.
+     * This callback only shapes lifted values. It does not stop whichever
+     * driver now owns the task, nor unwind another driver's active FACT scopes.
      */
     const backgroundCompletion = (): Promise<unknown> =>
       new Promise((resolve, reject) => {
-        // Already resolved, and only a driver-liveness clause of `driveDone`
-        // (a foreign hop, this task's own suspended thread, `driveAsync`'s
-        // idle probe) kept the verdict off `"done"`. The answer is in hand:
-        // settle now, nothing further will fire.
+        // An idle verdict can follow resolution while a driver-liveness
+        // clause remains false. Do not wait for an event that already fired.
         if (resolvedSeen) {
           try {
             resolve(finishHostEntry());
@@ -1997,81 +1283,15 @@ export function createLiftedFunction(input: {
 
     let outcome: DriveExit | Promise<DriveExit>;
     try {
-      // Completion is "the task resolved AND its threads have drained", not
-      // merely "resolved". `task.return` resolves the task, but the activation
-      // is not finished until its implicit thread reaches
-      // `exit_implicit_thread` — for a callback task that means running the
-      // loop out to EXIT, which releases `inst.exclusiveThread`.
-      //
-      // In plain mode the two almost always coincide, because the generator
-      // runs to completion inside one `resume()`. Under JSPI they do not: the
-      // guest calls `task.return` while the activation is still suspended, so
-      // the old predicate let the driver return early and the thread was
-      // abandoned mid-loop — leaking the exclusive thread and its table slot.
-      // The lifted call is over when the task has resolved AND this task's
-      // activation is no longer mid-wasm-call. Those are two different events
-      // and both matter:
-      //
-      //   * "task resolved" alone abandons a still-running activation. Under
-      //     JSPI the guest calls `task.return` while suspended, so returning
-      //     there left the callback loop parked forever — leaking the
-      //     exclusive thread and its table slot.
-      //   * "activation finished" alone deadlocks a *producer* guest, which
-      //     legitimately keeps forwarding after `task.return`
-      //     (wit-bindgen `wit_stream::new()` + a spawned loop).
-      //
-      // The distinguishing question is *what* the thread is parked on. An
-      // `awaitValue` park means a wasm call is in flight and will settle on
-      // its own, so we must keep draining. A park in `store.waiting` means the
-      // activation is waiting on a scheduler condition only the embedder can
-      // satisfy — that is a **background activation**: we return to the host
-      // and leave the thread live, and later `drive`/`pump` calls (host stream
-      // writes, the next export call) go on servicing it.
-      //
-      // AND THE PARK NEED NOT BE THIS TASK'S (issue #280). Scoping the
-      // wasm-call test to `task.threads` under-approximates the reference
-      // embedding, whose loop drains the whole store (`while store.waiting:
-      // store.tick()`, run_tests.py `lift_and_run`). What it missed is an
-      // activation THIS DRIVER PUT IN FLIGHT: a background task's host import
-      // settles on a microtask while this driver is live, this driver's
-      // `tick` resumes that task's callback activation, the promising entry
-      // hop-parks it (jspi pin (j) — contracts/intrinsics.md §"JSPI
-      // integration constraints" 4), and then this predicate — blind to
-      // another task's threads — declared the driver done. Nobody else owned
-      // that hop: the settlement pump arms only on outstanding real host
-      // calls, and the call that caused the resumption had already settled
-      // and left `pendingHostCalls`. Trace: `EXIT-done ... awaiting=1`, then
-      // an activation nothing services until an unrelated later call happens
-      // to drive the store.
-      //
-      // So the rule: a driver is not done while ANY thread of ANY task is
-      // hop-parked. A hop settles on the engine's own schedule, so waiting
-      // for it is bounded — the driver that caused it must see it land. The
-      // two tests are complementary and both stay: `hopParked` deliberately
-      // EXCLUDES genuinely JSPI-suspended activations (SuspensionPoint-owned
-      // parks, which only the embedder can satisfy and which are exactly the
-      // "background activation" case above), and `midWasmCall` is what still
-      // covers this task's own suspended thread.
+      // Driver completion is not thread exhaustion. Require a captured result,
+      // no awaiting wasm call of this task, and no entry hop anywhere in the
+      // store. Other tasks' genuine SuspensionPoint parks may remain background
+      // work, but any engine hop this driver started still needs servicing.
+      // Callback tasks can retain waiting threads after task.return; awaiting
+      // those threads' final exit would prevent long-lived producers returning.
       const midWasmCall = () => task.threads.some((t) => store.awaiting.has(t));
       const hopParked = () => entryHopThreads(store).length > 0;
       const driveDone = () => resolvedSeen && !midWasmCall() && !hopParked();
-      // ASYNC-TYPED EXPORTS DO NOT TRAP ON IDLE (#292). definitions.py
-      // `canon_lift` runs the driving loop — and with it the
-      // empty-candidate-set `trap_if` — only `if not ft.async_` (line 2189);
-      // for an async-typed export it returns right after the first
-      // `thread.resume()` and driving is the embedder's `Store.tick`, which
-      // never traps. wasmtime splits the same way (`run_concurrent` =
-      // `poll_until(trap_on_idle=false)` vs the `pub(super)`
-      // `run_concurrent_trap_on_idle` behind the blocking `call_async`), and
-      // polyengine's Promise-shaped export is the `call_concurrent` side.
-      // So the driver EXITS — it does not park and does not trap — and the
-      // task is left live for whichever driver next runs the store (the next
-      // export call, the settlement pump, a host stream op): exactly the
-      // between-calls liveness that already services post-`task.return`
-      // producer threads. Repro: an async export parked WAITing on an
-      // intra-component future a later export call writes.
-      // Sync-typed exports are unchanged: their loop traps on idle in every
-      // mode, which is what the paragraphs above describe.
       outcome = drive(
         store,
         driveDone,
@@ -2083,22 +1303,7 @@ export function createLiftedFunction(input: {
       throw e;
     }
     /**
-     * Branch on the driver's EXIT VERDICT, never on a fresh `driveDone()`
-     * (polyengine#310).
-     *
-     * `driveDone` is a predicate over store-wide state that other drivers
-     * mutate. Re-evaluating it here — a microtask after the driver returned,
-     * on the asynchronous path — reads a different instant than the one the
-     * driver decided on. Observed: this lift's driver exited `EXIT-done`,
-     * then the settlement pump (servicing a settled host call belonging to
-     * another task) resumed a background activation that transiently
-     * hop-parked, so `hopParked()` read true in the continuation and the lift
-     * took `backgroundCompletion()` — a wait on an event that had already
-     * happened for this task (today a harmless detour; when the misroute was
-     * traced, `backgroundCompletion` waited for the task's LAST thread to
-     * unregister, i.e. never, for a task holding long-lived spawned futures).
-     * The verdict cannot rot that way: `"done"` means the driver saw the task
-     * finished, which stays true.
+     * Use the captured exit verdict, not a fresh shared-store predicate.
      */
     const finish = (verdict: DriveExit): unknown =>
       verdict === "idle" ? backgroundCompletion() : finishHostEntry();
@@ -2117,11 +1322,7 @@ export function createLiftedFunction(input: {
   };
 
   return (...hostArgs: ComponentValue[]): unknown => {
-    // sync() arm 2: the synchronous variant refuses rather than deferring, and
-    // does so FIRST — before the arity check's sibling logic reaches
-    // `invokeNow` — because the refusal must be pre-enter to stay
-    // non-poisoning. See `refuseOnEntryHops` above for why the mode-keyed
-    // gate below cannot cover this variant.
+    // Synchronous callers refuse before entry rather than waiting on JSPI hops.
     if (input.refuseOnEntryHops && entryHopThreads(store, inst).length > 0) {
       throw new SyncEntryBusy(name);
     }
@@ -2130,26 +1331,10 @@ export function createLiftedFunction(input: {
         `${name}: expected ${ft.params.length} argument(s), got ${hostArgs.length}`,
       );
     }
-    // THE HOP-QUIESCENCE GATE (jspi mode only; hop_atomicity_test.ts).
-    //
-    // A promising-wrapped entry settles a microtask AFTER the guest's core
-    // call returns, even when nothing suspended (jspi pin (j)) — so there
-    // is a hop between core return and the host-side result LIFT, with
-    // nothing holding the instance against another host entry. In the
-    // reference no such window exists: `canon_lift` for sync options runs
-    // core + lift atomically. Admitting another host call into the
-    // window lets a full guest turn mutate the memory the pending lift
-    // will read — observed as `Trap: list too long` lifting the wosh
-    // engine's `tick` (`list<list<u8>>`) after a concurrent `feed-keys`
-    // turn reused the return area.
-    //
-    // The gate: defer this call until the instance has no HOP-parked
-    // activation. A hop-park is an `awaiting` thread with no owning
-    // `SuspensionPoint` — the same discriminator `hasRunnableWork` uses;
-    // genuinely JSPI-suspended activations (SuspensionPoint-owned) keep
-    // today's documented interleaving (the wasmtime-tracking divergence in
-    // jspi/bridge.ts), which host-import re-entry patterns rely on.
-    // Plain mode has no hops and keeps its synchronous fast path exactly.
+    // Preserve core-return/result-lift ordering across promising-entry hops:
+    // a new call must not reuse this instance's return memory before lifting.
+    // Genuine SuspensionPoint parks are excluded, allowing host-import reentry
+    // (`runtime/tests/jspi/hop_atomicity_test.ts`). This is not a general entry lock.
     if (mode === "jspi" && entryHopThreads(store, inst).length > 0) {
       return awaitHopQuiescence(store, inst).then(() => invokeNow(hostArgs));
     }
@@ -2158,16 +1343,9 @@ export function createLiftedFunction(input: {
 }
 
 /**
- * Threads parked on a promising-entry hop: in `store.awaiting` with no
- * `SuspensionPoint` owner in `store.waiting` (that would be a genuine JSPI
- * suspension). Mirrors `Store.hasRunnableWork`'s (b)/(c) split.
- *
- * `inst` narrows the result to one component instance — what the
- * hop-quiescence gate needs, since the memory a pending lift will read
- * belongs to that instance. Omitted, the result is store-wide: what the
- * export driver's `done` predicate needs (issue #280), where the question is
- * not whose memory is at risk but whether any activation this driver put in
- * flight is still mid-hop.
+ * Awaiting threads without a SuspensionPoint owner are crossing entry hops,
+ * not genuine scheduler parks. Narrow by instance for result-memory safety;
+ * omit `inst` for store-wide driver-completion and hand-off checks.
  */
 function entryHopThreads(
   store: Store,
@@ -2192,14 +1370,9 @@ function entryHopThreads(
 }
 
 /**
- * Wait until `inst` has no hop-parked activation. Each settled hop is
- * serviced synchronously (`serviceSettled` runs the lift segment), after
- * which the activation either completed or re-parked; re-derive and
- * repeat. Progress is guaranteed: a hop promise settles on the engine's
- * own schedule, independent of any other activation of the instance, and
- * a settled-but-unserviced hop resolves the race instantly. Multiple
- * gated callers re-derive independently (no strict FIFO; starvation-free
- * in practice because hops are sub-microtask).
+ * Await entry hops and service their tails before rechecking. Hops settle on
+ * the engine's schedule; genuinely blocked activations are excluded. Multiple
+ * gated callers recheck independently, with no FIFO admission guarantee.
  */
 async function awaitHopQuiescence(store: Store, inst: unknown): Promise<void> {
   for (;;) {
@@ -2218,12 +1391,11 @@ async function awaitHopQuiescence(store: Store, inst: unknown): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Host-initiated resource destructors (#160)
+// Resource destructor entries
 // ---------------------------------------------------------------------------
 
 /**
- * The canonical function type of a destructor: definitions.py
- * `canon_resource_drop` (line 2326) — `FuncType([U32Type()], [], async_ = False)`.
+ * `canon_resource_drop` uses a sync function taking a u32 rep and no results.
  */
 const DTOR_FT: FuncType = {
   params: [{ kind: "u32" }],
@@ -2232,9 +1404,7 @@ const DTOR_FT: FuncType = {
 };
 
 /**
- * `CanonicalOptions(async_ = False)` (definitions.py line 2325): every field
- * at its inert default. A dtor takes one flat `i32` and returns nothing, so
- * no memory / realloc / post-return / callback is ever reached.
+ * `canon_resource_drop`'s sync options: no memory, realloc, post-return or callback.
  */
 function dtorOptions(instance: ComponentInstanceState): ResolvedOptions {
   return {
@@ -2251,27 +1421,14 @@ function dtorOptions(instance: ComponentInstanceState): ResolvedOptions {
 }
 
 /**
- * Build the host-callable entry for a resource destructor — a full canonical
- * **lift**, exactly as definitions.py `canon_resource_drop` (line 2319) does:
+ * Build the canonical destructor lift with its own Task and implicit Thread
+ * (`canon_resource_drop`). Host drops may use promising entry and return a
+ * Promise; their store driver owns async completion.
  *
- * ```python
- *   opts = CanonicalOptions(async_ = False)
- *   ft = FuncType([U32Type()], [], async_ = False)
- *   dtor = rt.dtor or (lambda rep: [])
- *   callee = inst.store.lift(dtor, ft, opts, rt.impl)
- * ```
- *
- * The host-initiated paths (embedder `drop()`, the GC backstop, `dropOwn`)
- * route through this harness rather than calling the dtor bare, because the
- * activation then has a real `Task` + implicit `Thread`: built-ins reached
- * inside the dtor are well-attributed (a bare call leaves `currentTask()`
- * with no ambient task — `PendingCapability`, or a foreign-task
- * misattribution, the #24 class), and settled tails flow through
- * `serviceSettled` like any other lifted sync call.
- *
- * The returned function takes the rep and returns either `undefined` (the
- * activation completed synchronously — the overwhelmingly common case) or a
- * Promise, exactly like any lifted sync export in jspi mode.
+ * A present guestCaller selects a nested, plain sync lift, including when
+ * its value is null. Preserve the caller for same-instance poison semantics,
+ * reject thenable dtors, and finish without the host's store-wide hop drain.
+ * A guest dtor cannot suspend through this JS trampoline frame.
  */
 export function createDtorEntry(input: {
   /** Diagnostic name; appears in deadlock/trap messages. */
@@ -2295,14 +1452,9 @@ export function createDtorEntry(input: {
   const guest = input.guestCaller !== undefined;
   const mode = guest ? "plain" : input.suspensionMode ?? "plain";
   const raw: CoreFn = input.dtor ?? (() => undefined);
-  // A dtor's core type is `(i32) -> ()`, but the *host*-supplied dtors this
-  // helper also serves (embedder test doubles, `ResourceTypeInfo` built
-  // directly) are ordinary JS functions whose incidental return value would
-  // otherwise trip `normalizeCoreValues`' arity check. Discard it — except a
-  // thenable, which is the activation itself and must reach `awaitCore`'s
-  // park. Not applied in jspi mode: `WebAssembly.promising` only accepts a
-  // wasm callable, so the core must be passed through untouched there (and a
-  // real wasm dtor returns nothing by construction).
+  // Plain JS dtors may return incidental values; discard them. Preserve host
+  // thenables for awaitCore, but reject guest ones. Promising requires the raw
+  // wasm callable, whose result arity already matches `(i32) -> ()`.
   const core: CoreFn = mode === "jspi" ? raw : ((rep: number) => {
     const r = raw(rep);
     trapIf(
@@ -2330,24 +1482,14 @@ export function createDtorEntry(input: {
 }
 
 /**
- * Run a host-initiated drop of a guest (or host-implemented) resource rep —
- * the observable remainder of `canon_resource_drop` for an owning handle when
- * the holder is the host (`caller = None`, `Store.invoke`).
- *
- * A failure that arrives asynchronously has no frame to propagate into, so it
- * is parked on the store's host-failure channel (first failure wins), where
- * the next driven call surfaces it. The completion promise is deliberately
- * NOT registered in `store.pendingHostCalls`: that registration was #160's
- * lie — it claims *external* work for a promise whose settlement may need
- * this very scheduler. The dtor's genuine external dependencies (its host
- * imports) register themselves when they park. Poisoning on a trap now
- * happens inside the lift harness (`poison()` in `createLiftedFunction`).
+ * Drop a host-held resource rep. Async failures go to the store's host-failure
+ * channel (first failure wins); traps are poisoned by the lifted entry.
+ * Do not register the dtor completion Promise as external work: it may need
+ * this scheduler. Its host imports register their own external dependencies.
  */
 export function hostDtorCall(rt: ResourceTypeInfo, rep: number): void {
   const impl = rt.impl;
-  // An imported (host-implemented) resource has `impl === null` by
-  // construction (executor `bindImportedResources`): there is no component
-  // instance to gate entry into, so the dtor is called directly, as before.
+  // Imported host resources have no implementing component instance to enter.
   if (impl === null) {
     rt.dtor?.(rep);
     return;
@@ -2373,16 +1515,9 @@ export function hostDtorCall(rt: ResourceTypeInfo, rep: number): void {
 }
 
 /**
- * Call into wasm and hand back the result, awaiting it only if it is a
- * Promise.
- *
- * This is the whole of the jspi entry seam. In **plain** mode the entry is not
- * `promising`-wrapped, `callCore` returns core values, and this returns them
- * without yielding — no await, no Promise allocation, the identical
- * synchronous path plain mode always used. In **jspi** mode the entry *is* wrapped, so the
- * call returns a Promise (jspi pin (e)) and we park the thread on it via the
- * `awaitValue` block request; the driving loop resumes us with the values, or
- * throws the rejection in (a post-resume trap).
+ * Enter wasm under a synchronous ambient bracket. Plain results return
+ * directly; promising results park the generator until a driver delivers
+ * their value or throws their translated rejection into the body.
  */
 export function* awaitCore(
   fn: CoreFn,
@@ -2390,10 +1525,7 @@ export function* awaitCore(
   // deno-lint-ignore no-explicit-any
   thread: any,
 ): Generator<BlockRequest, CoreValue[], unknown> {
-  // Enter wasm with the activation-attached ambient in scope. In jspi mode the
-  // engine captures this context when it registers its resumption, so a
-  // built-in called by the resumed activation can recover its thread even when
-  // nobody is driving (see `withActivation`).
+  // The bridge explicitly maintains ambient claims after this bracket unwinds.
   const raw = withActivation(thread, () => callCore(fn, args));
   // `callCore` normalizes a bare value to a one-element array; a promising
   // entry yields `[Promise]`.
@@ -2401,10 +1533,7 @@ export function* awaitCore(
     const settled = yield {
       readyFunc: null,
       cancellable: false,
-      // A rejection of the promising Promise is a core trap by another route
-      // (jspi pin (e)); translate it exactly as `callCore` translates a
-      // synchronous throw, so the embedder sees one `Trap` vocabulary in both
-      // modes (see `mapCoreException`).
+      // Map post-resumption RuntimeError just like a synchronous core throw.
       awaitValue: Promise.resolve(raw[0] as unknown as Promise<unknown>).then(
         undefined,
         (e) => {
@@ -2420,7 +1549,7 @@ export function* awaitCore(
   return raw;
 }
 
-/** definitions.py `CallbackCode` (line 2220). */
+/** definitions.py `CallbackCode`. */
 enum CallbackCode {
   EXIT = 0,
   YIELD = 1,
@@ -2428,7 +1557,7 @@ enum CallbackCode {
 }
 const CALLBACK_CODE_MAX = 2;
 
-/** definitions.py `unpack_callback_result` (line 2226). */
+/** definitions.py `unpack_callback_result`. */
 export function unpackCallbackResult(
   packed: number,
 ): [code: CallbackCode, waitableSetIndex: number] {
@@ -2444,9 +1573,7 @@ export function unpackCallbackResult(
 }
 
 /**
- * The body of `canon_lift`'s implicit thread (definitions.py line 2155),
- * as a generator so its block points are real suspension points of the
- * host-side thread model (see task/scheduler.ts).
+ * `canon_lift`'s implicit-thread body, with generator block points for the driver.
  */
 function* liftBody(input: {
   name: string;
@@ -2496,17 +1623,8 @@ function* liftBody(input: {
   }
 
   if (opts.callback === null) {
-    // definitions.py line 2179: `[] = call_and_trap_on_throw(callee, flat_args)`
-    // — the guest keeps running on its own stack and blocks inside wasm at
-    // whatever built-in it chooses. There is no return-to-host between the
-    // call and the block, so the only way to model it is genuine wasm-frame
-    // suspension.
-    //
-    // In jspi mode that is exactly what happens and no special handling is
-    // needed: the entry is `promising`-wrapped, so the activation suspends on
-    // whichever blocking built-in it reaches and `awaitCore` parks this thread
-    // until it finishes. Results arrive through `task.return`, so there is
-    // nothing to lift here.
+    // Stackful async execution needs JSPI. Results arrive through task.return,
+    // not the core function's return value.
     if (input.mode !== "jspi") {
       needsJspi(
         `stackful async lift of export '${name}' (async canonical options ` +
@@ -2518,16 +1636,8 @@ function* liftBody(input: {
     return;
   }
 
-  // --- callback ABI (definitions.py lines 2183-2214) ----------------------
-  //
-  // Stackless by construction: every wasm activation *returns* a packed code,
-  // and all waiting happens on the host side between activations. This is the
-  // path wit-bindgen 0.60 emits for every async export, and it needs no JSPI.
-  // The callback export is the second of the three entries that can reach a
-  // blocking built-in (jspi/bridge.ts's invariant), so it is wrapped exactly
-  // like the lifted core. Leaving it plain while the core was promising was a
-  // *mixed* activation, which pin (c) punishes: the first Suspending import
-  // it reached would trap.
+  // Callback ABI waits between invocations without JSPI, but callbacks in
+  // JSPI mode need the same promising wrapper as the initial core entry.
   const callback = enterWasm(
     require(opts.callback, `${name} callback`)!,
     input.mode,
@@ -2546,23 +1656,10 @@ function* liftBody(input: {
 // ---------------------------------------------------------------------------
 
 /**
- * Build the core-callable body for one lowered host import (reference
- * `canon_lower`, definitions.py line 2242).
- *
- * Sync and async lowers share one `Subtask` and one pair of
- * `on_start`/`on_resolve` closures, exactly as the reference does; the sync
- * case is the degenerate one where the callee resolves before returning.
- *
- * The host callee is a plain JS function. If it returns a **Promise**, the
- * subtask resolves when that promise settles:
- *
- *   * async lower — fully supported and JSPI-free. The guest gets a STARTED
- *     subtask back, joins it to a waitable set, returns WAIT from its
- *     callback, and the scheduler delivers the SUBTASK event once the promise
- *     settles. This is the flagship capability of this phase: an ordinary
- *     `async` JS function is a valid Component Model async import.
- *   * sync lower — the guest's wasm frame would have to block
- *     (`thread.wait_until(subtask.resolved)`, line 2286), so: `needsJspi`.
+ * Build a `canon_lower` host-import body. Async lowers return a subtask handle
+ * for pending host Promises and deliver results through events. A sync lower
+ * must wait inside the caller's wasm frame, requiring both JSPI mode and the
+ * declaration's `suspending()` marker. Both forms share resolution/lender rules.
  */
 export function createLoweredImport(input: {
   name: string;
@@ -2610,7 +1707,7 @@ export function createLoweredImport(input: {
     );
   }
 
-  // definitions.py lines 2250-2256.
+  // `canon_lower`: async results are written indirectly, not returned in lanes.
   const maxFlatParams = opts.async ? MAX_FLAT_ASYNC_PARAMS : MAX_FLAT_PARAMS;
   const maxFlatResults = opts.async ? 0 : MAX_FLAT_RESULTS;
 
@@ -2676,42 +1773,12 @@ export function createLoweredImport(input: {
       subtask.resolve(SubtaskState.RETURNED, flatResults);
     };
 
-    // --- invoke the host callee (the reference's `callee(...)`, line 2283) --
-    //
-    // definitions.py assigns the callee's `OnCancel` here:
-    //   `subtask.on_cancel = callee(on_start, on_resolve, caller = ...)`
-    //
-    // The `OnCancel` is the CALLEE's to supply: `Store.invoke` takes it back
-    // from the callee it invoked (`on_cancel = f(on_start, on_resolve, caller
-    // = None)`, definitions.py line 572), i.e. the reference expects the
-    // embedding to hand back the cancellation behaviour of whatever it is
-    // hosting. A wasmtime host gets a real one for free — dropping a Rust
-    // future IS cancellation. A JS Promise has no such channel, so polyengine
-    // answers on the host's behalf; §"Functions and async" makes the DEFAULT answer the
-    // reference's prompt-cancel host (`on_cancel = () => on_resolve(None)`),
-    // installed by the async arm below.
-    //
-    // The no-op assigned HERE is only the placeholder for paths where
-    // `subtask.cancel` is unreachable, so no answer can ever be demanded of
-    // it: an eagerly-resolving callee never mints a subtask handle (the
-    // fast-path return below is a bare state), and a sync-typed import's suspending mark
-    // park never mints one either. It is also the FINAL handler for a
-    // `deferCancel()`-branded import — accept and ignore, the pre-cancellation discard
-    // behaviour, now per-declaration.
-    //
-    // Leaving `on_cancel` null instead made a *legal* `subtask.cancel` crash
-    // with an internal AssertionError, which is neither reference behaviour
-    // nor a sanctioned incompleteness signal.
+    // The host supplies cancellation policy (`canon_lower`'s on_cancel).
+    // This no-op is final for deferCancel imports and paths without a subtask
+    // handle. Pending async calls otherwise install prompt discard below.
     subtask.onCancel = () => {};
-    // abortable() (contracts/embedder-api.md §"Functions and async"): a marked import
-    // is handed a fresh `AbortSignal` after its WIT-declared parameters. The
-    // mark controls the SIGNATURE UNCONDITIONALLY — a marked function receives
-    // a signal on every call, including the paths where it can never fire
-    // (sync-typed, eager resolve, `deferCancel`) — so the host's arity is a
-    // property of its declaration, not of how a particular call happened to
-    // go. `new AbortController()` is evaluated only for marked imports, which
-    // keeps bare engine shells with no `AbortController` off this path for the
-    // whole unmarked corpus.
+    // abortable changes the signature on every call, even when cancellation
+    // cannot fire. Unmarked imports do not require AbortController support.
     const controller = abortable ? new AbortController() : null;
     const args = onStart();
     const raw = controller === null
@@ -2723,20 +1790,9 @@ export function createLoweredImport(input: {
     if (isPromiseLike(raw)) {
       if (!opts.async) {
         if (mode !== "jspi" || !suspendable) {
-          // definitions.py line 2286: `thread.wait_until(subtask.resolved)` —
-          // blocking the calling *wasm frame*. Parking needs BOTH jspi mode
-          // and the embedder's per-declaration `suspending()` marker: the
-          // Suspending wrap is applied per-declaration (`importValue`), so an
-          // unmarked import physically cannot suspend, whatever the mode.
-          //
-          // A capability signal is expressly NON-poisoning (the
-          // trap-unwind/lender-release obligation, contracts/intrinsics.md §A):
-          // the caller keeps running, so the borrows
-          // `onStart` lifted into this subtask must be discharged here or
-          // its lenders stay elevated forever and later `resource.drop`s
-          // trap "handle still lent out" on a healthy instance (found
-          // during the #106 closure; same class as the fact_calls.ts #91
-          // sites).
+          // An unmarked import cannot suspend even in JSPI mode. This
+          // non-poisoning capability exit must release onStart's lenders
+          // (contracts/intrinsics.md, trap-unwind/lender-release obligation).
           subtask.unwindLenders();
           needsJspi(
             suspendable
@@ -2749,32 +1805,11 @@ export function createLoweredImport(input: {
                 `(contracts/embedder-api.md §"Functions and async")`,
           );
         }
-        // The park: the reference's plain, NON-cancellable wait — a
-        // cancel request against the caller stays pending-cancel and is
-        // delivered at its next cancellable wait, exactly as for any other
-        // mid-frame block. The instance-entry gate stays HELD across the park
-        // (the #43 hold rule; see `blockCurrentActivation`'s GATE LIFETIME
-        // note).
-        //
-        // The settle handler only RECORDS the outcome. All CABI work —
-        // `onResolve`'s result lowering (which may re-enter the guest through
-        // realloc) and `deliverResolve` — is deferred to `produce`, which
-        // runs at resume time under the suspension point's ambient claim.
-        // Lowering from the bare promise continuation instead would execute
-        // guest code in an unattributed chunk — the issue-#24 class the
-        // attribution sentinels exist to prevent.
+        // `canon_lower`'s sync wait is non-cancellable: pending cancellation
+        // waits for the caller's next cancellable point. Parking does not
+        // release callback exclusivity. Record the host outcome here, but do
+        // CABI lowering and lender delivery in produce at scheduler resume.
         let outcome: { value: unknown } | { error: unknown } | undefined;
-        // The async arm runs `onResolve` — result lowering, including possible
-        // realloc re-entry into the guest — in this bare promise continuation,
-        // where the sync arm above defers all CABI work to `produce` (the
-        // issue-#24 attribution note). The asymmetry is deliberate (#93): here
-        // no wasm frame is suspended mid-call — the guest returned BLOCKED and
-        // is between activations, which is exactly when the reference's
-        // `on_resolve` runs (the callee's turn), so there is no activation for
-        // the sentinels to attribute this chunk to. Lowering failures are host
-        // failures, not guest traps: they land on `store.hostFailure` and the
-        // driving loop raises them site-named (pinned by
-        // tests/async_lower_onresolve_failure_test.ts).
         const promise = Promise.resolve(raw).then(
           (v) => {
             store.pendingHostCalls.delete(promise);
@@ -2785,37 +1820,10 @@ export function createLoweredImport(input: {
             outcome = { error: e };
           },
         );
-        // Registered so the driver's deadlock probe counts this park as
-        // externally-wakeable (driveAsync: `pendingHostCalls.size === 0` is a
-        // precondition of the deadlock verdict) and so teardown can observe
-        // the outstanding call, mirroring the async arm below.
+        // Mark this park externally wakeable for drivers and teardown.
         registerHostCall(store, promise);
-        // LENDER DISCHARGE ON EVERY SETTLE PATH (#106, the sibling of the
-        // fact_calls.ts sync-start park's #102 enumeration):
-        //
-        //  * produce SUCCESS   -> `onResolve` + `deliverResolve` release the
-        //    lenders; the `onSettled` backstop below observes
-        //    `resolveDelivered()` and is a no-op.
-        //  * produce THROW     -> exempt under the trap-unwind/lender-release
-        //    obligation (contracts/intrinsics.md §A: release is owed only on exits
-        //    that do NOT poison the caller). Every rejection that reaches
-        //    this park is a poisoning trap in the CALLER's own frame:
-        //    branded `ComponentException`s on fallible imports were already resolved
-        //    into err-shaped VALUES by the conventions layer
-        //    (embedder/instantiate.ts `#wrapImportFn`'s `fail` — they take
-        //    the success arm above), every other conventions-layer throw is
-        //    a `Trap`, and a raw-executor rejection is a declared host bug
-        //    that traps (empirical fact (e)). No capability signal can
-        //    originate inside `produce`: this park only exists once jspi +
-        //    `suspending()` were both granted. The backstop's unwind here is
-        //    belt-and-braces bookkeeping on a poisoned instance, not an
-        //    obligation.
-        //  * abandon           -> produce never runs, and an abandoned park
-        //    does NOT poison the caller (pinned by
-        //    resource_lender_park_settle_test.ts) — without the hook the
-        //    subtask's lenders stayed elevated forever and later
-        //    `resource.drop`s trapped "handle still lent out". The hook is
-        //    the fix.
+        // Success delivers lenders in produce. onSettled is the idempotent
+        // backstop for produce failure or abandonment, which skips produce.
         return blockCurrentActivation({
           store,
           task: currentTask(),
@@ -2824,14 +1832,8 @@ export function createLoweredImport(input: {
           produce: () => {
             const done = outcome as { value: unknown } | { error: unknown };
             if ("error" in done) {
-              // A rejection of a sync-typed import is a host failure: it
-              // reaches the guest as a rejection of the import's Promise,
-              // which the engine turns back into a wasm trap (empirical
-              // fact (e); `SuspensionPoint` routes a produce-throw through
-              // exactly that path). Branded `ComponentException`s never reach the raw
-              // boundary — the conventions layer resolves them into
-              // err-shaped values one layer up (see the settle-path
-              // enumeration above).
+              // Reject the import Promise to unwind the guest. The conventions
+              // layer has already converted fallible ComponentExceptions to values.
               throw done.error;
             }
             onResolve(toResults(done.value));
@@ -2845,19 +1847,13 @@ export function createLoweredImport(input: {
           onSettled: () => subtask.unwindLenders(),
         });
       }
+      // Async lowering runs on host settlement, not in a suspended caller's
+      // produce step. Result-lowering failures use the host-failure channel.
       const promise = Promise.resolve(raw).then(
         (v) => {
           store.pendingHostCalls.delete(promise);
-          // cancellation discard: the subtask may already be resolved when the host promise
-          // settles — the discard `onCancel` below resolved it
-          // CANCELLED_BEFORE_RETURNED (the only pre-settle resolver on this
-          // arm). The value has no addressee, and `onResolve` would run
-          // straight into its `state === STARTED` assert ("on_resolve on a
-          // subtask that never started") and park that AssertionError on
-          // `store.hostFailure`, poisoning whatever unrelated embedder call
-          // came next.
-          // POISONED is the same discard (arch §6 #173): no addressee, and
-          // lowering would write into the corpse's memory via its `realloc`.
+          // Discard cancelled or poisoned recipients before lowering can
+          // write guest memory or re-enter through realloc.
           if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
           try {
             onResolve(toResults(v));
@@ -2867,61 +1863,25 @@ export function createLoweredImport(input: {
         },
         (e) => {
           store.pendingHostCalls.delete(promise);
-          // Same guard, different reason: a rejection of a RENOUNCED call is
-          // not a host failure. The guest cancelled and was told so; surfacing
-          // the rejection would fail an unrelated later call with the error of
-          // an operation nobody is waiting for. POISONED is the same discard
-          // (arch §6 #173): it would fail a HEALTHY sibling's export call.
+          // Late rejection of discarded work must not fail an unrelated call.
           if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
           store.hostFailure = e;
         },
       );
       registerHostCall(store, promise);
       if (!deferCancel) {
-        // cancellation discard DISCARD (contracts/embedder-api.md §"Functions and async";
-        // polyengine#241) — the reference's prompt-cancel host,
-        // `on_cancel = () => on_resolve(None)` (definitions.py canon_lower's
-        // null branch, line ~2267).
-        //
-        // This runs synchronously inside `canon_subtask_cancel`, which already
-        // set `cancellationRequested` before calling us (the assert in
-        // `onResolve`'s null branch relies on that ordering). `onResolve(null)`
-        // arms the SUBTASK event — a delivery-time thunk — and resolves
-        // CANCELLED_BEFORE_RETURNED, so the built-in's `finish()` tail consumes
-        // the event, `deliverResolve` releases the lenders (the #106 class,
-        // discharged exactly as a RETURNED delivery would), and BOTH cancel
-        // forms return the state without blocking. The null path lowers
-        // nothing, so there is no realloc re-entry from inside a built-in.
-        //
-        // The renounced call can no longer wake the guest, so it must stop
-        // counting as externally-wakeable for the driver's deadlock probe:
-        // deregister it NOW. (The settle continuation above also deletes;
-        // `Set.delete` is idempotent.)
+        // Prompt-cancel host policy (`canon_lower`'s on_resolve(None)).
+        // canon_subtask_cancel sets cancellationRequested before calling us.
+        // Deregister external work, resolve cancellation, then let event delivery
+        // discharge lenders. The null result path performs no realloc.
         subtask.onCancel = () => {
           store.pendingHostCalls.delete(promise);
           onResolve(null);
           if (controller !== null) {
-            // abortable(): tell the host its result was discarded, so it can stop the
-            // underlying operation — clear a timer, abort a fetch, close a
-            // dial. Reachable only from this arm by construction: a
-            // `deferCancel()` import never discards, so its signal never
-            // fires.
-            //
-            // Deferred one microtask. This closure runs SYNCHRONOUSLY inside
-            // `canon_subtask_cancel`, i.e. inside a live guest activation, and
-            // host abort listeners must not execute there — that is the
-            // issue-#24 attribution class, plus arbitrary re-entrancy into a
-            // guest mid-built-in. `Promise.resolve().then`, not
-            // `queueMicrotask`: the latter does not exist in bare engine
-            // shells (see jspi/bridge.ts's SENTINEL_TICK note).
-            //
-            // The resulting order is: the guest observes
-            // CANCELLED_BEFORE_RETURNED first, the host observes the abort a
-            // tick later. Any settlement the abort provokes (typically an
-            // `AbortError` rejection) arrives at the settle continuation above
-            // with the subtask already resolved, so it lands on the cancellation discard
-            // resolved-subtask guards and is discarded like any other late
-            // settlement — never a `store.hostFailure`.
+            // Defer host abort listeners until after the guest built-in returns.
+            // Cancellation is already resolved, so abort-induced settlements
+            // hit the discard guards. Promise reactions also work in bare shells
+            // without queueMicrotask. deferCancel imports never reach this arm.
             Promise.resolve().then(() => controller.abort());
           }
         };
@@ -2930,7 +1890,7 @@ export function createLoweredImport(input: {
       onResolve(toResults(raw));
     }
 
-    // definitions.py line 2284: a sync-*typed* callee must have resolved.
+    // `canon_lower`: a sync-typed callee must have resolved.
     assert_(
       ft.async || subtask.resolved(),
       `${name}: a non-async-typed import must resolve before returning`,
@@ -2950,7 +1910,7 @@ export function createLoweredImport(input: {
       return flatResults;
     }
 
-    // --- async lower (definitions.py lines 2289-2309) ----------------------
+    // Async lower: eager resolution needs no handle or event.
     if (subtask.resolved()) {
       // Eager-resolve fast path: no handle, no event, no waitable — the guest
       // learns the call is done from the return value alone.
@@ -2968,15 +1928,8 @@ export function createLoweredImport(input: {
 }
 
 /**
- * The callback-ABI dispatch loop of `canon_lift` (definitions.py lines
- * 2183-2214), factored out so both entry points share one implementation:
- *
- *   * a host-boundary lift (`liftBody` above), and
- *   * a FACT cross-component call, where the host invokes an async-lifted
- *     callee on the caller's behalf (`intrinsics/fact_calls.ts`).
- *
- * `packed` is the code the *initial* activation returned; the loop runs until
- * it sees EXIT, invoking the callback export with each delivered event.
+ * `canon_lift` callback loop shared by host lifts and FACT calls.
+ * Start with the initial activation's packed code, dispatching events until EXIT.
  */
 export function* runCallbackLoop(input: {
   name: string;
@@ -2991,27 +1944,15 @@ export function* runCallbackLoop(input: {
   let [code, si] = unpackCallbackResult(input.packed);
 
   while (code !== CallbackCode.EXIT) {
-    // definitions.py line 2187, verbatim shape: the implicit thread of a
-    // needs-exclusive callback task holds the slot on every loop iteration.
-    // (The former per-iteration `holding` check tolerated a resolved task
-    // that had released the slot at a mid-frame block — the release-at-BLOCK
-    // divergence removed by issue #43. Under the hold rule, which is both the
-    // reference's and wasmtime's — `do_not_enter` is set for each callback
-    // invocation, concurrent.rs :942/:960 — the invariant is unconditional.)
+    // Each invocation holds exclusivity through mid-frame suspension, even
+    // after task.return. Only the between-invocation wait releases it.
     assert_(
       task.needsExclusive() &&
         inst.exclusiveThread === task.implicitThread,
       "callback loop without holding the exclusive thread",
     );
-    // Releasing the exclusive thread across the wait is what lets *another*
-    // task of the same instance enter and run while this one waits — the
-    // whole point of the callback ABI (definitions.py line 2188). Equally,
-    // RETAKING it below is what defers event delivery to a parked-between-
-    // invocations task while any invocation of this instance is mid-frame:
-    // the `() => inst.exclusiveThread === null` guard on the wait is the
-    // reference's `wait_for_event_and(lambda: not inst.exclusive_thread)`
-    // (line 2199) and wasmtime's `GuestCall::is_ready` DeliverEvent arm,
-    // which requires `!do_not_enter` (concurrent.rs :765).
+    // Admit other needs-exclusive tasks between invocations. Event delivery
+    // and cancellation wait for the slot to be free before reclaiming it.
     inst.exclusiveThread = null;
     let event: EventTuple;
     switch (code) {

@@ -1,30 +1,12 @@
-// #18 — polymorph-tls: smoke the jco-leg surface under polyengine.
+// Translate/enumerate polymorph-tls artifacts; --exec also runs composed suites.
 //
-//   deno run --allow-read --allow-hrtime run.ts            # translate-only
-//   deno run --allow-read run.ts --exec                    # + execute suites
-//   deno run --allow-read run.ts --exec --only SUBSTRING
+//   just smoke-tls
+//   deno run --allow-read --allow-env=POLYMORPH_ROOT,WOSH_ROOT \
+//     tools/smoke-tls/run.ts [--exec] [--only SUBSTRING]
 //
-// Mirrors tools/smoke-c0 leg 4 (translate-only + import-surface enumeration)
-// and then goes one step further than the issue asks: the tls conformance
-// suite artifacts are fully composed (no network, no sockets — recon
-// 2026-08-09), so the same ct-runner + wasi-package path that ran the
-// websocket suite (the retired ports/websocket conformance runner; the
-// consumer's own deltic legs carry it now) can execute them
-// directly. All consumer artifacts are referenced by absolute path and are
-// READ-ONLY; nothing here writes to the polymorph trees.
-//
-// Named residues (conformance discipline: no unnamed absorption):
-//   TAG-GATING (#25) — FIXED (ct-runner reads the suites' own
-//     `component-test:tags@0.1` inventory, ct-runner/src/tags.ts; the
-//     sections survive wac composition, verified on these artifacts). Each
-//     target below declares its missing-features and the previously
-//     xfailed cases schedule out as `not-applicable`, exactly like their
-//     harness legs; the xfail entries were pruned.
-//   CALLBACK-NULL-CONTEXT (#24) — FIXED (continuation-chunk attribution
-//     sentinels, jspi/bridge.ts); the entry below was pruned. The
-//     webcrypto-composed target is the only corpus that reaches the
-//     interleave, so this suite remains its integration pin
-//     (runtime/tests/jspi/chunk_attribution_test.ts is the unit pin).
+// Consumer artifacts are prebuilt and read-only. Executable compositions must
+// need only the WASI imports supplied here; per-target missing features select
+// inapplicable cases through the suite's component-test tags.
 
 import {
   fmtSurface,
@@ -41,7 +23,7 @@ import { wasi } from "../../wasi/src/mod.ts";
 
 const CONF = `${POLYMORPH}/polymorph-tls/target/conformance`;
 
-/** Everything prebuilt in the consumer tree (recon 2026-08-09). */
+/** Expected prebuilt consumer artifacts; absent targets are reported as skipped. */
 const TRANSLATE_TARGETS: Array<[string, string]> = [
   ["suite: plain (tls world, ed25519 only)", `${CONF}/suite-plain.wasm`],
   ["suite: delegated (fixture signer plugged)", `${CONF}/suite-delegated.wasm`],
@@ -59,12 +41,8 @@ const TRANSLATE_TARGETS: Array<[string, string]> = [
   ],
 ];
 
-/** The executable smoke matrix: [target-key, artifact, missing-features,
- * xfails]. All compositions are self-contained (surfaces are pure WASI —
- * phase 1), so no extra host modules are wired. `missing` mirrors what
- * their harness legs pass per target (run-node.mjs); tag gating turns the
- * per-target inapplicable cases into `not-applicable` rows. Any future
- * xfail must name its class + issue. */
+/** [target-key, artifact, missing-features, xfails]. Only WASI is wired.
+ * Missing features select not-applicable cases; xfails must name a class/issue. */
 const EXEC_TARGETS: Array<[string, string, string[], Record<string, string>]> = [
   ["polyengine-delegated", `${CONF}/suite-delegated.wasm`, [], {}],
   ["polyengine-delegated-webcrypto", `${CONF}/suite-delegated-webcrypto.wasm`, [], {}],

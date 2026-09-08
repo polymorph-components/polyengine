@@ -1,20 +1,8 @@
 // Module-scoped types + accessor for the JS Promise Integration (JSPI) API.
 //
-// JSPI is phase 4 (docs/architecture.md §3) and not yet part of TypeScript's/Deno's
-// built-in `lib.dom`/`lib.deno` typings. These declarations match the shape
-// implemented by V8 (observed via Deno 2.9.5 / V8 15.0.245.2-rusty) and
-// described by the js-promise-integration proposal Overview
-// (https://github.com/WebAssembly/js-promise-integration).
-//
-// Deliberately NOT a `declare global` augmentation (it was one until JSR's
-// server-side validation refused the package: "modifying global types is
-// not allowed"). The registry policy and the truth agree here: JSPI is an
-// OPTIONAL engine capability this runtime probes at runtime, and a global
-// augmentation asserted it unconditionally for every downstream consumer.
-// The module-scoped view keeps the assertion where the evidence is —
-// `jspiApi()` returns the surface only when the engine actually has it.
-// (Tests keep their own ambient declarations in
-// runtime/tests/jspi/global_types.ts; test files are never published.)
+// Module-scoped declarations avoid global augmentation in published packages.
+// JSPI is optional: jspiApi returns this surface only after probing both APIs.
+// Proposal: https://github.com/WebAssembly/js-promise-integration.
 
 /**
  * The engine's JSPI surface, as probed.

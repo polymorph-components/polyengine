@@ -1,7 +1,7 @@
 // Version-canonical import resolution (contracts/embedder-api.md
 // §"Version canonicalization").
 //
-// Authorities, read before writing this:
+// Authorities:
 //   * Explainer.md §"canonical interface names" (`canonversion`) — the spec's
 //     compatibility-track split;
 //   * wasmtime-environ `component::names::{NameMap, alternate_lookup_key}`,
@@ -255,13 +255,8 @@ export class ImportResolver {
           return { key: claim.key, value: this.#exact.get(claim.key) };
         }
       }
-      // CONTRACT: contracts/embedder-api.md §"Version canonicalization" bans
-      // "unversioned folding": "unversioned keys -> error". Read
-      // conservatively: an unversioned key is still a legal
-      // *exact* match for an unversioned import (the ban is about folding
-      // distinct semver tracks together, and unversioned WIT interfaces
-      // exist), but it may never serve a *versioned* import. That attempt is
-      // refused loudly here rather than reported as a plain "not provided".
+      // Unversioned keys may match exactly, never serve a versioned import.
+      // Diagnose that registration mistake rather than a generic missing key.
       const un = this.#unversioned.get(p.base);
       if (un !== undefined) {
         throw new ImportResolutionError(
