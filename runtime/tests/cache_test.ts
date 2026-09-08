@@ -6,6 +6,8 @@
 //       cargo build -p translator-shim --release --target wasm32-unknown-unknown
 //   - examples/guests/build/{hello,test-suite}.component.wasm
 //       ./examples/build.sh
+//   - harness/generated/values/transcode.0.wasm
+//       just corpus
 
 import { assertEq } from "./support/asserts.ts";
 import { Translator } from "../src/shim/mod.ts";
@@ -117,6 +119,60 @@ async function roundTrip(cache: ArtifactCache, label: string) {
 Deno.test("dirCache: round-trip, cache hit skips the translator entirely", async () => {
   const cache = dirCache(await tmpDir());
   await roundTrip(cache, "dirCache");
+});
+
+Deno.test("dirCache: real adapters persist with full paths and execute on a warm hit", async () => {
+  const bytes = await readArtifact(
+    "harness/generated/values/transcode.0.wasm",
+    "just corpus",
+  );
+  const dir = await tmpDir();
+  try {
+    const spy = new SpyTranslator(await Translator.create(shimWasm));
+    const errors: unknown[] = [];
+    const opts = {
+      onCacheError: (_op: "get" | "put", err: unknown) => errors.push(err),
+    };
+    const first = await translateCached(spy, bytes, dirCache(dir), opts);
+    assertEq(first.fromCache, false, "cold miss");
+    assertEq(spy.translateCalls, 1, "cold miss translates once");
+    assert(first.adapters.size > 0, "fixture must emit real adapters");
+
+    const spy2 = new SpyTranslator(await Translator.create(shimWasm));
+    const second = await translateCached(spy2, bytes, dirCache(dir), opts);
+    assertEq(second.fromCache, true, "fresh backend reads persisted artifacts");
+    assertEq(spy2.translateCalls, 0, "warm hit never translates");
+    assertEq(errors, [], "cache writes and reads succeed");
+    assertEq(second.plan, first.plan, "cached plan matches translation");
+    assertEq(second.adapters.size, first.adapters.size);
+
+    const hex = await keyHex(await keyFor(spy, bytes));
+    for (const [file, adapter] of first.adapters) {
+      assertEq(
+        second.adapters.get(file),
+        adapter,
+        "cached adapter bytes match",
+      );
+      assertEq(
+        await Deno.readFile(`${dir}/${hex}/adapters/${file}`),
+        adapter,
+        "persisted layout preserves the full adapter name",
+      );
+    }
+
+    for (const result of [first, second]) {
+      const component = await instantiateComponent({
+        plan: result.plan,
+        componentBytes: bytes,
+        adapters: result.adapters,
+      });
+      const run = component.exports.run as () => number;
+      // The corpus guest checks transcoded string bytes on both sides.
+      assertEq(run(), 42, "fresh and cached adapters execute correctly");
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });
 
 Deno.test("webCache: round-trip, cache hit skips the translator entirely", async () => {

@@ -464,6 +464,13 @@ Obligations:
   examples/guests/resource-stream,
   runtime/tests/embedder/resource_stream_test.ts.
 
+**Owned future payloads** (`future<own<R>>`) follow the same delivery rule: the
+producer pump releases a successfully lowered value if the reader drops or the
+write ends without consuming it. Once consumed, ownership belongs to the
+receiver; a later pump failure must not dispose it again. Cleanup preserves an
+existing producer/write error and reports a standalone disposal failure. This
+rule covers top-level `own` payloads, not owns nested in composite values.
+
 **Stream and future values survive round trips.** Lifting an end the host
 already handled — a host-created stream passed back, or a guest stream on its
 second hop — is idempotent, yielding a handle over the same end. Hence:

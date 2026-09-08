@@ -645,11 +645,13 @@ export class Future<T> implements ProtocolFuture<T> {
   }
 
   cancel(): void {
-    if (this.#host !== null) this.#host.cancel();
-    // A deferred future whose host end never materialized has nothing to
-    // cancel; swallow that rejection rather than let `cancel()` produce an
-    // unhandled one (issue #182 — mirrors `drop()` below).
-    else void this.#hostP.then((h) => h.cancel(), () => {});
+    if (this.#host !== null) {
+      try {
+        this.#host.cancel();
+      } catch {
+        // Pump failures remain recorded; public disposal is silent.
+      }
+    } else void this.#hostP.then((h) => h.cancel()).catch(() => {});
   }
 
   /**
@@ -668,11 +670,13 @@ export class Future<T> implements ProtocolFuture<T> {
   drop(): void {
     if (this.#dropped) return;
     this.#dropped = true;
-    if (this.#host !== null) this.#host.drop();
-    // A deferred future whose host end never materialized has nothing to
-    // release; swallow that rejection rather than let `drop()` produce an
-    // unhandled one.
-    else void this.#hostP.then((h) => h.drop(), () => {});
+    if (this.#host !== null) {
+      try {
+        this.#host.drop();
+      } catch {
+        // Pump failures remain recorded; public disposal is silent.
+      }
+    } else void this.#hostP.then((h) => h.drop()).catch(() => {});
   }
 
   /** @internal — see `Stream.dropForTeardown` (#66). */
@@ -964,7 +968,22 @@ export function lowerFutureSource<T>(
   void (async () => {
     try {
       const v = await (src as PromiseLike<T>);
-      await host.write(codec.fromHost(v) as unknown as T);
+      const lowered = codec.fromHost(v);
+      const info = codec.release === undefined ? undefined : { progress: 0 };
+      try {
+        await host.write(lowered as unknown as T, info);
+        if (info?.progress === 0) {
+          throwIfPeerTrapped(host.value, codec.where ?? "future producer", 0);
+        }
+      } catch (e) {
+        try {
+          if (info?.progress === 0) codec.release?.(lowered);
+        } catch {
+          // Preserve the write failure if cleanup also fails.
+        }
+        throw e;
+      }
+      if (info?.progress === 0) codec.release?.(lowered);
     } catch (e) {
       // Report the producer cause rather than replace it with a generic
       // abandonment trap. A bound store receives the failure; only an unbound
