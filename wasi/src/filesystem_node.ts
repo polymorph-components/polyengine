@@ -26,16 +26,14 @@
 // every path-taking op realpaths the parent directory (and, when
 // symlink-follow is set, chases the final component's link chain) and
 // refuses — `not-permitted` — anything that resolves outside the
-// preopen's realpath root. Symlinks the guest creates itself therefore
-// cannot be used to read or write outside the preopen, and neither can
-// symlinks that were already in the preopened tree (issue #177).
+// preopen's realpath root. This checks both guest-created and pre-existing
+// symlinks (issue #177), subject to the race below.
 //
 // Residual risk is cross-process TOCTOU: node has no openat2 /
 // RESOLVE_BENEATH analogue, so between the realpath check and the OS
-// call another PROCESS could swap a component for a symlink. The guest
-// itself cannot interleave — every backend op is synchronous on the
-// guest's own thread — so this is only reachable when something else
-// with write access to the preopened tree races us.
+// call another process or thread with write access to the tree could swap a
+// path component for a symlink. Synchronous operations prevent interleaving
+// on this JS thread, not concurrent filesystem mutation elsewhere.
 //
 // PLATFORM TRAPS the containment code deliberately works around — both
 // observed on Deno's node compat, both silent, both only when the

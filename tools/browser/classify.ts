@@ -3,11 +3,6 @@
 // overlay, classify against the Deno-lane xfail truth
 // (`harness/src/xfail.ts`) widened/narrowed by the overlay's deltas, and
 // report unexpected failures / stale overlay entries / totals drift.
-//
-// Extracted from `tools/browser/run-lane.ts` (byte-equivalent behavior;
-// proven by that driver's gate: `chromium`/`firefox`/`webkit` still print
-// "OK (matches expectation)"). `tools/shell/run-lane.ts` reuses this instead
-// of forking a second copy — see issue #22.
 
 import { Summary } from "../../harness/src/summary.ts";
 import { isXfail } from "../../harness/src/xfail.ts";

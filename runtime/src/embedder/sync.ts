@@ -1,5 +1,5 @@
 // `sync()` — the explicit synchronous view of a WIT-sync export (contracts/
-// embedder-api.md §"Functions and async", §"Functions and async", 2026-08-30).
+// embedder-api.md §"Functions and async").
 //
 // Placement: application machinery exported from
 // `@polyengine/runtime/embedder`, like `createStream` — only an instantiating
@@ -187,18 +187,8 @@ function classView(cls: object): unknown {
  * function or a nested resource class/instance/record maps recursively;
  * anything else (including an unbranded function) passes through unchanged.
  *
- * CONTRACT (contracts/embedder-api.md §"Functions and async" sync(), the
- * `sync(record)` bullet): the bullet says a record's members are "mapped by
- * these same rules, recursively" — read most literally, an async-typed
- * member nested in a record should behave exactly as `sync(asyncFn)` does at
- * top level, i.e. throw. But applying that EAGERLY while building the
- * parent's view would make one unrelated async export in a real component's
- * exports record (a normal mix — see contracts/embedder-api.md's own async +
- * sync export examples) poison `sync(exports)` entirely, defeating the
- * per-use adapter's whole purpose. The conservative reading kept here defers
- * that failure to the point the caller actually reaches for the async
- * member (`throwingMember`), never for members the caller never touches —
- * every failure the contract mandates still happens, just lazily.
+ * Record views invoke this lazily, so an async member fails on access without
+ * preventing use of unrelated sync members in the same record.
  */
 function mapMember(v: unknown): unknown {
   if (typeof v === "function") {
@@ -243,16 +233,9 @@ function recordView(rec: object): unknown {
  * async export is not attempted (the contract only requires the runtime
  * error) — `Sync<F>` stays structural.
  *
- * CONTRACT: the naive `F extends Record<string, unknown>` branch (checked
- * before this fix) only matches object-LITERAL type aliases — named
- * interfaces (generated `*Exports`) and class instance types (generated
- * resource classes, e.g. `Counter`) have no implicit index signature and
- * are not assignable to it, so they fell through to the `: F` passthrough
- * and stayed Promise-shaped. Ordering matters: a non-Promise function type
- * (e.g. a resource's `drop(): void`, or `[Symbol.dispose]`) must be checked
- * and passed through BEFORE the generic `object` branch, or `{ [K in keyof
- * F]: ... }` would try to map over a function's call signature (losing it)
- * instead of leaving the function itself alone. */
+ * Test non-Promise functions before objects to preserve call signatures.
+ * `object`, unlike Record<string, unknown>, also accepts named interfaces
+ * and class instance types without requiring an index signature. */
 export type Sync<F> = F extends (...a: infer A) => Promise<infer R>
   ? (...a: A) => R
   : F extends (...a: never[]) => unknown ? F // non-Promise functions (e.g. `drop(): void`) pass through unchanged
@@ -261,7 +244,7 @@ export type Sync<F> = F extends (...a: infer A) => Promise<infer R>
 
 /**
  * The synchronous form of a WIT-sync export (contracts/embedder-api.md
- * §"Functions and async", §"Functions and async").
+ * §"Functions and async").
  *
  * - `sync(fn)` — a lifted export function (plain export, interface member,
  *   or resource static): returns the synchronous form `(...args) => T`.
@@ -273,8 +256,9 @@ export type Sync<F> = F extends (...a: infer A) => Promise<infer R>
  *   with every member mapped by these same rules, recursively; non-branded
  *   members pass through unchanged.
  * - Views are stable: `sync(x) === sync(x)`.
- * - An async-typed export, a bare resource-method function, or anything
- *   unbranded throws `TypeError`.
+ * - An async-typed export, bare resource-method function, unbranded top-level
+ *   function, or primitive throws TypeError. In views, unsupported branded
+ *   members fail on access; unbranded functions pass through.
  */
 export function sync<F extends (...a: never[]) => Promise<unknown>>(
   target: F,

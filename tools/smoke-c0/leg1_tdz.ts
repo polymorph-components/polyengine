@@ -1,15 +1,14 @@
 // Leg 1 — the lann/jco#51 TDZ shape, executed.
 //
-//   deno run --allow-read leg1_tdz.ts
+//   deno task leg1
 //
-// Artifact: wosh/spikes/compose-async-tdz/composed.wasm (the consumer
-// formerly named experiment-mosh) — a wac
+// Artifact: wosh/spikes/compose-async-tdz/composed.wasm, a wac
 // composition of `tdz:plug` (async factory returning own<widget>) into
 // `tdz:socket` (async export awaiting it, plus an exported `handoff`
 // interface that names the same resource in a signature). That combination
-// is exactly jco's TDZ trigger: the emitted trampoline references a resource
-// class above its declaration. A runtime linker emits nothing, so the defect
-// *class* cannot exist here — this leg makes that claim executable.
+// reproduced lann/jco#51: an emitted trampoline referenced a resource class
+// above its declaration. This leg checks polyengine's runtime linking of that
+// shape; it makes no claim about current jco behavior.
 //
 // Expected values read from source, not guessed:
 //   plug/src/lib.rs:  make() -> Ok(Widget::new(WidgetRes(42)))

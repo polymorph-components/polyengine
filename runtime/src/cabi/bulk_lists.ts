@@ -1,53 +1,22 @@
-// Bulk (TypedArray-backed) list copies for flat element types (issue #67).
+// TypedArray-backed list copies for flat element types.
 //
-// The per-element interpreted `load()`/`store()` costs ~13-45 ns/element
-// (despecialize + asserts + DataView per element); these helpers replace the
-// loop body with one typed-array view per list and a tight per-element pass
-// that preserves the interpreted path's EXACT observable semantics:
-//
-//   * integers: the same `assert_` type-shape texts as `storeInt` (`"int
-//     store"`, `"64-bit store requires bigint"`) but, unlike the scalar path
-//     in memory.ts (`storeInt`'s range `assert_`s, issue #96), NOT the same
-//     range check: this bulk path wraps out-of-range values instead of
-//     raising the host-precondition error (`OverflowError` per
-//     definitions.py:1568-1569 `int.to_bytes`) that `storeInt` raises. That
-//     is a deliberate scalar/bulk posture split, not an oversight:
-//       - the whole point of this file (see the perf numbers above) is an
-//         allocation-free, branch-minimal per-element loop; an added range
-//         check is itself a per-element cost, defeating the purpose;
-//       - values reaching this path from a descriptor-driven lower already
-//         went through the descriptor layer's own type conversions for the
-//         cases that matter in practice (see contracts/descriptor-ir.md);
-//         the wrap here is a defense-in-depth gap only for a raw/buggy
-//         embedder value, which the scalar path (used for non-bulk-eligible
-//         kinds, and reachable directly from embedder code) still catches.
-//     A TypedArray element write coerces exactly like the matching DataView
-//     setter (wraps mod 2^width), so this is pinned as intentional behavior
-//     (see bulk_list_test.ts), not merely undocumented;
-//   * floats: the deterministic profile's NaN canonicalization on BOTH
-//     directions (float.ts `decodeI32AsFloat` / `encodeFloatAsI32`): every
-//     lifted NaN becomes the JS canonical NaN, every stored `number` NaN
-//     writes the canonical bit pattern. Non-NaN values round-trip bit-exactly
-//     (Float32Array narrowing is the same IEEE round-to-nearest-even as
-//     `DataView.setFloat32`);
-//   * bool: store normalizes any value by truthiness to 0/1 (`store()`'s
-//     `Number(Boolean(v))`), lift maps any nonzero byte to `true`
-//     (`convertIntToBool` semantics — it never traps for unsigned bytes).
+// Integers assert the same host type/shape preconditions as storeInt, but wrap
+// out-of-range values modulo the element width rather than asserting range.
+// This is a scalar/bulk host-precondition difference, not exact equivalence
+// for arbitrary raw inputs (contracts/descriptor-ir.md; bulk_list_test.ts).
+// Floats canonicalize NaNs in both directions and use the same narrowing as
+// DataView stores. Bool stores use truthiness; loads accept any nonzero byte.
 //
 // u8 is NOT here: it has its own, shape-changing fast path (`list<u8>` is
 // `Uint8Array` on the host — load.ts/store.ts). char is NOT here: its lift
 // validates USVs per element (`convertI32ToChar` traps), which is the cost.
 //
-// NAMED ASSUMPTION (issue #67): wasm linear memory is little-endian by spec;
-// JS TypedArrays follow the PLATFORM's endianness. Every engine polyengine
-// targets runs little-endian, but rather than bake that in silently, the
-// check below gates the fast paths — on a big-endian platform they decline
-// and the callers keep the (endianness-correct) DataView per-element loops.
+// Wasm memory is little-endian; JS TypedArrays use platform endianness.
+// On a big-endian platform numeric views decline and callers use DataView.
 //
 // Alignment: the canonical ABI guarantees list pointers are element-aligned,
-// and real guest memories sit at byteOffset 0, so the view construction
-// below virtually never declines; a misaligned combination (possible for a
-// test MemInst wrapping a subarray) falls back the same way.
+// but a MemInst subarray's backing byteOffset may be misaligned. Those views
+// decline too. The bool byte path needs neither endianness nor alignment.
 
 import { assert_ } from "./trap.ts";
 import { bytesOf, type MemInst } from "./memory.ts";
@@ -122,7 +91,6 @@ export function tryLoadNumericList(
   if (intCtor !== undefined) {
     const view = viewOf(intCtor, mem, ptr, length);
     if (view === null) return null;
-    // Manual preallocated loop: measurably faster than Array.from(view).
     const out = new Array<ComponentValue>(length);
     for (let i = 0; i < length; i++) out[i] = view[i];
     return out;

@@ -1,14 +1,13 @@
 // Fetches engine shells into `.shell-cache/` (gitignored), caching by build
 // identity so re-runs don't re-download.
 //
-// LANE IDS (issue #22 follow-up: promote pinned shells to per-push gates):
-//   sm-pinned   — SpiderMonkey release matching the browser lane (Firefox
-//                 153.0), sha256-verified against tools/shell/pins.json.
-//   sm-nightly  — SpiderMonkey mozilla-central nightly (unchanged canary).
-//   jsc-pinned  — JSC trunk rev pinned in pins.json (318852@main),
+// LANE IDS (versions and digests in tools/shell/pins.json):
+//   sm-pinned   — SpiderMonkey release, sha256-verified.
+//   sm-nightly  — SpiderMonkey mozilla-central nightly.
+//   jsc-pinned  — JSC trunk rev pinned in pins.json,
 //                 sha256-verified, mirrored to a repo-owned release (see
 //                 fetchJsc's header for why webkitgtk.org can't be pinned).
-//   jsc-trunk   — JSC trunk LAST-IS (unchanged canary; x86_64 CI only).
+//   jsc-trunk   — JSC trunk LAST-IS (x86_64 only).
 //   node-pinned — Node.js release pinned in pins.json (nodejs.org dist
 //                 tarball), sha256-verified; both linux arches.
 //   bun-pinned  — Bun release pinned in pins.json (oven-sh/bun GitHub
@@ -17,11 +16,7 @@
 // Usage: deno run -A tools/shell/fetch.ts
 //        <sm-pinned|sm-nightly|jsc-pinned|jsc-trunk|node-pinned|bun-pinned>
 //
-// Extraction: no system `unzip` on the dev box this was written on, and no
-// suitable pure-Deno zip reader was available in the JSR registry at the
-// time (checked: no `@zip/zip`). Falls back to `python3 -m zipfile` — every
-// CI runner and dev box in this repo's matrix ships python3. Swapping in a
-// pure-Deno unzip later is a drop-in replacement for `extractZip` below.
+// Zip extraction requires python3 and preserves executable modes and symlinks.
 
 import { dirname, fromFileUrl, join, normalize } from "jsr:@std/path@1";
 
@@ -87,14 +82,8 @@ export function defaultShellPaths(
 
 async function extractZip(zipPath: string, destDir: string): Promise<void> {
   await Deno.mkdir(destDir, { recursive: true });
-  // Two things extractall() gets wrong that this loop fixes (both
-  // load-bearing for the JSC bundle; SpiderMonkey's zip has neither):
-  //   * file modes are dropped — reapplied from each entry's external_attr
-  //     (the wrapper and bin/jsc must be executable);
-  //   * SYMLINK entries are written as tiny regular files containing the
-  //     target path — the bundle's lib/ *.so.N names are symlinks to the
-  //     real *.so.N.x.y files, and the dynamic linker fails on the fake
-  //     ones with "file too short" (this lane's second CI failure).
+  // extractall() loses executable modes and materializes symlinks as files.
+  // Restore both: JSC needs executable launchers and real shared-library links.
   const cmd = new Deno.Command("python3", {
     args: [
       "-c",
@@ -132,8 +121,7 @@ function smArch(): string {
  * Checks a lane's `BUILD_IDENTITY` file against an expected identity string.
  * A pinned lane's identity is the pin's version/sha — when `pins.json` bumps
  * the version, the on-disk cache's stamp no longer matches and this returns
- * `false`, triggering a refetch without any manual `.shell-cache` clearing
- * (dispatch requirement: pin bumps take effect automatically).
+ * `false`, triggering a refetch without manual cache clearing.
  */
 async function cacheMatches(dir: string, expectedIdentity: string): Promise<boolean> {
   try {

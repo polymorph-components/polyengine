@@ -1,14 +1,14 @@
 # Contract: CABI Descriptor IR
 
-The **descriptor IR** is the type/options information that drives host-boundary
-lift/lower — docs/architecture.md §8's "one IR, two executors." Producers: the
-translator shim (inside `plan.json` `types` / `canonicalOptions` tables) and
-tests. Consumers: the v1 interpreter (`runtime/src/cabi/`), the future
-generated-JS executor, and the world-digest computation.
+The **descriptor IR** supplies types and canonical options for host-boundary
+lift/lower. The translator emits it in the plan's `types` and `canonicalOptions`
+tables. The runtime interpreter (`runtime/src/cabi/`) and world-digest
+computation consume it. A generated-JS executor is planned, not implemented; see
+[architecture §8](../docs/architecture.md#8-performance-strategy).
 
 The normative in-memory model is `runtime/src/cabi/types.ts`; this document
-defines its meaning and its JSON wire form inside the plan. Known
-wire↔memory divergences are pinned below; any other divergence is a bug.
+defines its meaning and its JSON wire form inside the plan. Known wire↔memory
+divergences are pinned below; any other divergence is a bug.
 
 ## Value type model
 
@@ -19,102 +19,88 @@ structurally). Kinds:
   `f32`, `f64`, `char`, `string`
 - `list` (`element`, optional fixed `length`), `record` (`fields`:
   `{label, type}[]`), `tuple` (`elements`), `variant` (`cases`:
-  `{label, type|null}[]`), `enum` (`labels`), `option` (`type`),
-  `result` (`ok|null`, `err|null`), `flags` (`labels`), `map` (`key`,
-  `value` — despecializes to `list<record{0,1}>` per the reference)
-- Handles: `own` / `borrow` (`resource`: index into the plan's
-  `resourceTables`)
+  `{label, type|null}[]`), `enum` (`labels`), `option` (`type`), `result`
+  (`ok|null`, `err|null`), `flags` (`labels`), `map` (`key`, `value` —
+  despecializes to `list<record{0,1}>` per the reference)
+- Handles: `own` / `borrow` (`resource`: index into the plan's `resourceTables`)
 - Async: `stream` / `future` (`element|null`), `error-context`
 
 Specialized forms are preserved (tuple/enum/option/result/flags/map are not
 pre-despecialized in the IR); `despecialize` is defined once, in the runtime,
-mirroring `definitions.py`. Labels remain strings (interning is a
-measured-need optimization).
+mirroring `definitions.py`. Labels remain strings.
 
-`FuncType` is `{ params: {label, type}[], results: ValType[], async?: bool }`.
+Wire function declarations are
+`{ kind: "func", params: {label, type}[], results: ValType[], async: bool }`.
 
 Pinned wire↔memory divergences (the plan loader maps): wire `result.err` ↔
-types.ts `result.error`; wire `FuncType.params` are labeled
-`{label, type}[]` while types.ts drops names — names live on the wire and in
-bindgen, not in the interpreter's hot path.
+types.ts `result.error`; wire `FuncType.params` are labeled `{label, type}[]`
+while types.ts drops names — names live on the wire and in bindgen, not in the
+interpreter's hot path.
 
 ## Canonical options
 
 Per lifted/lowered function, referencing plan tables by index (see
-plan-format.md): `stringEncoding` (`utf8` | `utf16` | `latin1+utf16`),
-`memory?`, `realloc?`, `postReturn?`, `callback?`, `async`, `cancellable`,
-and the expected flat `coreType` (`{params, results}` of `i32|i64|f32|f64`).
-This mirrors `wasmtime_environ::component::CanonicalOptions` minus
-runtime-irrelevant fields; `data_model` is fixed to linear memory (the GC
-data model is rejected by the shim).
+plan-format.md): `stringEncoding` (`utf8` | `utf16` | `latin1+utf16`), nullable
+`memory`, `realloc`, `postReturn`, `callback`, plus `async`, `cancellable`, and
+the expected flat `coreType` (`{params, results}` of `i32|i64|f32|f64`). This
+mirrors `wasmtime_environ::component::CanonicalOptions` minus runtime-irrelevant
+fields; `data_model` is fixed to linear memory (the GC data model is rejected by
+the shim).
 
 ## Flattening
 
 The plan does **not** precompute flat lane lists. Executors compute flattening
 from `ValType` via the shared rules in `runtime/src/cabi/flatten.ts`, which is
 tested against fixtures generated from `definitions.py` (`flatten_functype`,
-MAX_FLAT_PARAMS=16, MAX_FLAT_RESULTS=1, async variants with their own
-limits, spill-to-memory rules). Rationale: one implementation of the trickiest
-rules, differentially anchored to the executable spec; smaller plans; less
-shim logic. The consistency check between computed flattening and the
-options' `coreType` is an instantiate-time assertion — validated across the
-whole fixture corpus. (Precomputed lanes can be added later as a pure
-optimization without changing this contract's semantics.)
+MAX_FLAT_PARAMS=16, MAX_FLAT_RESULTS=1, async variants with their own limits,
+spill-to-memory rules). Rationale: one implementation of the trickiest rules,
+differentially anchored to the executable spec; smaller plans; less shim logic.
+The consistency check between computed flattening and the options' `coreType` is
+an instantiate-time assertion — validated across the fixture corpus.
 
 ## Host value shapes
 
-Host-facing value conventions are `contracts/embedder-api.md`'s territory
-(implemented by the bindgen-generated layer). The raw executor boundary
-mirrors `definitions.py`'s value *semantics*; its *representation* is this
-implementation's to choose, and diverges deliberately where measurement
-justifies it (docs/architecture.md §1 sanctions exactly this — "parity
-means functional parity, not behavioral identity", and lists JS-native
-host value shapes among the divergences). The shapes are: variant as
-`{kind: label, value: payload}`, enum as `{kind: label, value: null}`,
-option as `{kind: "none", value: null} / {kind: "some", value: v}`, result
-error kind `"error"`, tuple as despecialized record. It is an internal
-surface with no stability promise.
+The runtime facade implements [embedder-api.md](embedder-api.md); bindgen emits
+types and typed wrappers for that facade. The raw executor preserves the
+reference's value semantics in these internal shapes: variant as
+`{kind: label, value: payload}`, enum as `{kind: label, value: null}`, option as
+`{kind: "none", value: null} / {kind: "some", value: v}`, result error kind
+`"error"`, tuple as despecialized record. It is an internal surface with no
+stability promise.
 
-Integer lanes wrap mod 2⁶⁴ at the raw boundary, matching
-definitions.py's `% 2**64`; host-side range *asserts* (host-precondition
-errors, not traps) exist only on the scalar `storeInt` path. NaN handling,
-lane widening/padding (i64 lanes as `bigint`, `0n` padding), and
-latin1(windows-1252) details follow the decisions recorded in
-`runtime/README.md` and docs/architecture.md §7.
+Core integer lanes are normalized to unsigned values of their width before
+lifting; narrower component integers wrap according to `definitions.py`. i64
+values use `bigint`, including `0n` padding. The public facade validates host
+values before lowering. At the raw internal boundary, scalar `storeInt` asserts
+range while bulk numeric stores wrap; neither is a substitute for facade
+validation. NaNs are canonicalized. Latin-1 decoding uses the ISO-8859-1 byte
+mapping, not WHATWG `TextDecoder`'s Windows-1252 alias. See
+[architecture §7](../docs/architecture.md#7-canonical-abi-decisions).
 
-The variant family carries its case in a `kind` property rather than as the
-object's sole key — the one place the representation departs from the
-reference's dicts. `definitions.py` uses a single-key mapping; that form
-cost a computed-key literal here (a distinct hidden class per case label,
-so every variant-reading site went megamorphic) plus an `Object.keys()`
-allocation at each end to read one key. `value` is always present, `null`
-for a payload-free case: omitting it to match the host layer exactly was
-measured slower, because the producer site then emits two shapes instead
-of one. Both findings are measured on `bench/boundary`'s compound-element
-lanes; see issue #261 and the PR that landed this for the numbers and
-method. The property names deliberately match `contracts/embedder-api.md`'s
-host variant shape, but **the two are not interchangeable** — that
-document's "Implementation strategy" enumerates every way they still
-differ.
+Fixed `kind`/`value` properties avoid per-case object shapes and key
+enumeration. `value` is always present, with `null` for a payloadless case.
+Despite shared property names, raw and facade values are not interchangeable;
+see [the adaptation table](embedder-api.md#implementation-strategy).
 
 ## Trap discipline
 
-Lift/lower failures raise the runtime's `ComponentTrap` (not arbitrary
-`Error`s), with the trap conditions of `definitions.py` (`trap_if`) as the
-authority. Executors must produce the same trap/no-trap verdict for the same
-inputs — this is part of the differential-testing contract.
+Guest lift/lower violations raise `Trap`, following the reference's `trap_if`
+conditions. Internal/precondition assertions use `AssertionError`; invalid
+public host values are rejected by facade validation. These failure classes must
+not be conflated with unsupported capabilities or translator errors.
 
 ## Executor contract
 
-Interpreter (v1) and generated-JS executors consume this IR unchanged;
-the differential test harness runs both over the same fixture corpus
-(`runtime/tests/fixtures/`, regenerable from the Python reference). Any IR
-extension must land with fixtures.
+The interpreter is checked against fixtures generated from the Python reference
+(`runtime/tests/fixtures/`). A future generated-JS executor must consume the
+same IR and agree on values and trap conditions. Any IR extension must land with
+fixtures.
 
 ## Resource-type identity
 
-The shim emits `resource` indices into the plan's `resourceTables`; the
-runtime builds identity tokens (`ResourceTypeInfo`) at plan-load time.
-**Tokens must be fresh per instantiation** (the executor re-runs plan
-loading per instantiate), so resource-type identity never leaks across
-instances.
+The shim emits `resource` indices into the plan's `resourceTables`; the runtime
+builds identity tokens (`ResourceTypeInfo`) at plan-load time. **Tokens must be
+fresh per instantiation** (the executor re-runs plan loading per instantiate),
+so resource-type identity never leaks across instances. Within one
+instantiation, concrete tables naming the same resource share a token; table
+indices are aliases, not distinct types.

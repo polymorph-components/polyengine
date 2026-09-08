@@ -2,14 +2,9 @@
 // `### Resource State`, `canon resource.{new,drop,rep}`, and the
 // own/borrow lift/lower functions).
 //
-// The Table and ResourceHandle mechanics are pure and ported fully. What is
-// simplified here (pending the task machinery):
-//   - canon_resource_* take the instance explicitly instead of reading
-//     current_instance() from the running thread;
-//   - canon_resource_drop routes the dtor through `callDtorGated` below,
-//     which uses the reference's fresh synchronous lift task/thread.
-//     Host-initiated drops do NOT come here: they run the dtor through the
-//     real lift harness (`hostDtorCall`, exec/boundary.ts) — see #160.
+// canon_resource_* take the declared instance explicitly. Guest drops use
+// `callDtorGated` and a fresh synchronous lift task/thread; host drops use
+// `hostDtorCall` (exec/boundary.ts) with host completion policy.
 
 import { assert_, trapIf } from "./trap.ts";
 import { removeHandleWithUnwind } from "../task/scheduler.ts";
@@ -170,18 +165,8 @@ interface RealComponentInstance {
 }
 
 /**
- * Is `x` a REAL component instance (`task/mod.ts` `ComponentInstanceState`),
- * as opposed to something that has no instance behind it at all?
- *
- * Two populations must answer false, and both are load-bearing for
- * `callDtorGated`: an imported/host-implemented resource, whose
- * `ResourceTypeInfo.impl` is `null` by construction (exec/executor.ts
- * `bindImportedResources`), and the bare `{handles, mayLeave}` doubles test
- * harnesses supply — neither has an instance to refuse entry into or to
- * poison. So this is deliberately NOT a structural match on
- * `ComponentInstanceLike`, which those doubles satisfy: it reads the
- * `COMPONENT_INSTANCE` brand, declared on `ComponentInstanceState` and
- * defined in ./context.ts so that cabi does not have to import task/.
+ * Only branded component instances have task state and poisoning semantics.
+ * Host resource impl=null and structural test doubles must not enter that path.
  */
 function isComponentInstance(x: unknown): RealComponentInstance | null {
   if (x === null || typeof x !== "object") return null;
@@ -196,36 +181,17 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
 }
 
 /**
- * Invoke a resource destructor, as definitions.py `canon_resource_drop`
- * (@ 2f13265) does — through `Store.lift`/`Store.lower`:
+ * Guest-initiated destructor call. `canon_resource_drop` lifts the dtor with
+ * a fresh synchronous task/thread, including a no-op dtor when absent.
+ * Reentrance into a live implementing instance is valid.
  *
- * ```python
- *   dtor = rt.dtor or (lambda rep: [])
- *   callee = inst.store.lift(dtor, ft, opts, rt.impl)
- *   caller = inst.store.lower(callee, ft, opts, inst)
- *   caller([h.rep])
- * ```
+ * The lift harness applies runtime poisoning to `rt.impl` on a trap and
+ * retires its stream/future ends; capability signals do not poison. The
+ * dropper's trap propagation is handled separately. `entryRefusal` preserves
+ * the same-instance exemption for self-drops.
  *
- * That lift carries NO gate (CM#705): dropping a handle whose implementing
- * instance is mid-execution is VALID, including the dtor-less case.
- *
- * What this adds is polyengine's per-instance poisoning divergence, and it
- * applies to `rt.impl`, not to the dropping instance: a trap out of the dtor
- * buries the implementing instance (refusal names the original trap,
- * polyengine#145; its live stream/future ends are retired, #66). The
- * dropper is poisoned, if at all, by the same trap propagating at its own
- * level. `entryRefusal`'s `caller !== callee` guard keeps a component
- * dropping a handle to its OWN resource admissible even against a marked
- * instance.
- *
- * Capability signals (`NeedsJspi`, `PendingCapability`) are not traps — see
- * `isCapabilitySignal` in exec/boundary.ts — so they do not poison.
- *
- * SCOPE (#160): this is the **guest-initiated** path only. A guest-initiated
- * drop must complete synchronously (the reference lifts the dtor with
- * `async_ = False`), so a thenable here is a trap. The host-initiated path
- * uses the same lift harness with host completion policy (`hostDtorCall` in
- * exec/boundary.ts). Guest entry uses only the reference synchronous drive.
+ * Guest entry uses the reference's synchronous drive, not host-wide async
+ * completion; a returned thenable traps. Host drops use `hostDtorCall`.
  */
 export function callDtorGated(
   rt: ResourceTypeInfo,
@@ -234,11 +200,7 @@ export function callDtorGated(
 ): void {
   const impl = isComponentInstance(rt.impl);
   const dtorFn = rt.dtor;
-  // No component instance behind the resource: an imported (host-implemented)
-  // resource has `impl === null` by construction (executor.ts
-  // `bindImportedResources`), so there is no instance to refuse entry into and
-  // none to poison. Test doubles that supply a bare `{handles, mayLeave}`
-  // instance land here too — see `isComponentInstance`.
+  // Host resources and structural test doubles have no task/poisoning state.
   if (impl === null) {
     const r = dtorFn?.(rep) as unknown;
     trapIf(
@@ -247,9 +209,7 @@ export function callDtorGated(
     );
     return;
   }
-  // The caller is only meaningful when it is a real component instance; a
-  // host-initiated drop passes null, which is the reference's `caller = None`
-  // (Store.invoke). It feeds `entryRefusal`'s `caller !== callee` guard below.
+  // Preserve a real guest caller's identity for the self-drop exemption.
   const callerInst = isComponentInstance(caller) === null ? null : caller;
 
   createDtorEntry({
@@ -272,13 +232,7 @@ export function canonResourceDrop(
     trapIf(rh.numLends !== 0, "handle still lent out");
     if (rh.own) {
       assert_(rh.borrowScope === null);
-      // definitions.py line 2326-2333: the dtor runs through the store's
-      // lift/lower bracket. SCOPE NOTE (#85): the call below is a JS frame
-      // inside the drop trampoline, so a *guest*-initiated drop whose dtor
-      // suspends traps under the JSPI frame rule. That is deterministic and
-      // loud, and routing guest-initiated dtor calls through generated wasm is
-      // explicitly out of scope for #85 (docs/architecture.md §5/§7 carry the
-      // known-limitation note).
+      // Enter a fresh synchronous dtor task, not the dropping task's ambient.
       callDtorGated(rt, rh.rep, inst);
     } else {
       assert_(rh.borrowScope !== null);

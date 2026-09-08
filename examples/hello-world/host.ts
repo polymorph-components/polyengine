@@ -10,7 +10,7 @@
 //
 // Inside this repository `@polyengine/runtime` and `@polyengine/translator`
 // resolve through the Deno workspace; a published consumer uses the same
-// specifiers via JSR/npm (polyengine#16 tracks packaging).
+// specifiers via JSR/npm.
 
 import { instantiate } from "@polyengine/runtime/embedder";
 import { defaultTranslator } from "@polyengine/translator";

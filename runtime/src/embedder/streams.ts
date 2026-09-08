@@ -48,10 +48,6 @@ import {
 import { describeCrossCopy } from "./copy.ts";
 import { DroppedError, PeerTrappedError } from "./errors.ts";
 
-// `Chunk<T>` moved to `@polyengine/protocol` (§"The host-ABI surface and its version", §"The host-ABI
-// surface and its version"); re-exported here so this module's existing
-// export surface (and therefore embedder/mod.ts's, unchanged in this track)
-// keeps working.
 export type { Chunk } from "@polyengine/protocol";
 
 /**
@@ -74,38 +70,19 @@ export interface ElemCodec<T> {
   readonly where?: string;
 }
 
-// `StreamProducerError`'s canonical definition moved to `@polyengine/protocol`
-// with §"Module identity and @polyengine/protocol" (it is an embedder-contract value: recognition must
-// survive multiple runtime copies, issue #83). Re-exported here so every
-// existing import path is unchanged.
 export { StreamProducerError } from "@polyengine/protocol";
 
 /**
- * Failures recorded against a shared stream object whose driving store could
- * not be reached (the stream was never lowered, or the store already carries a
- * failure). Surfaced on the next interaction with the handle.
+ * Producer failures retained per shared object for subsequent handle checks,
+ * independently of whether a store also received the failure.
  */
 const producerFailures = new WeakMap<object, StreamProducerError>();
 
 /**
- * Report a producer failure on the channel that can actually attribute it.
- *
- * PRIMARY channel: `store.hostFailure`. This is the runtime's existing
- * host-side failure slot — `driveAsync` checks it after every tick and throws
- * it out of the driving loop (exec/boundary.ts:468/647/679/692), which is the
- * driving loop of *the export call that is consuming this stream*. So the call
- * that would otherwise have resolved with truncated data rejects with this
- * error instead. It is the same channel `HostActivity.#pumpAsync` already uses
- * for a trap raised while pumping between export calls
- * (exec/host_streams.ts:284), so the two host-side stream failure paths agree.
- *
- * The report happens BEFORE the write end is dropped: the drop is what lets
- * the guest observe end-of-stream and resolve, and `driveAsync` checks
- * `hostFailure` before it checks `done()`.
- *
- * FALLBACK: no store bound (the stream was never lowered), or the store
- * already carries an earlier failure. Then the cause is recorded against the
- * shared object and raised on the next interaction with the handle.
+ * Record on the handle and, if bound, the store's first-failure slot. Return
+ * whether a store exists. Report before dropping the writer: driveAsync
+ * checks hostFailure before completion, so truncation cannot hide the cause.
+ * The slot is store-wide, not an attribution to a particular consuming call.
  */
 function reportProducerFailure(
   host: HostStream<unknown>,
@@ -159,12 +136,7 @@ export function isU8Element(element: ValType | null): boolean {
   return element !== null && despecialize(element).kind === "u8";
 }
 
-// Re-exported so embedders reach the direct-access byte edge callback shapes from this layer too
-// (contracts/embedder-api.md §"Streams and futures").
-// Canonical definitions moved to `@polyengine/protocol` with §"The host-ABI surface and its version"
-// (§"The host-ABI surface and its version"); `exec/host_streams.ts` keeps its
-// own structurally-identical copies for the low-level seam, so both layers
-// agree without either importing the other.
+// Protocol callback shapes also match the low-level exec seam structurally.
 export type {
   DirectDestination,
   DirectSource,
@@ -202,10 +174,7 @@ export class Stream<T> implements ProtocolStream<T> {
   private constructor(host: HostStream<T> | null, codec: ElemCodec<T> | null) {
     this.#host = host;
     this.#codec = codec;
-    // realm boundary (contracts/embedder-api.md §"Realm boundaries and
-    // structured-clone-safe forms"; issue #131): the realm-local pill —
-    // stateful handles must fail loud (DataCloneError) at a raw
-    // structuredClone/postMessage instead of husking silently.
+    // Raw structured cloning must fail rather than lose private handle state.
     defineRealmLocal(this);
   }
 
@@ -223,15 +192,9 @@ export class Stream<T> implements ProtocolStream<T> {
   }
 
   /**
-   * `Stream.create<T>(): { stream, writer }` — the writer-side host end the
-   * contract names.
-   *
-   * The element type is deliberately NOT a parameter: the embedder does not
-   * have one (a `ValType` is a runtime-internal shape) and the *lowering site*
-   * always does. So the shared object is created lazily, at the moment the
-   * stream is passed to a guest, and writer operations issued before that park
-   * until then. A stream created and written but never passed anywhere simply
-   * never completes — the same honest hang the low-level layer documents.
+   * Create a stream/writer pair. The lowering site supplies its runtime
+   * element type when the stream is passed to a guest. Writer operations
+   * issued earlier wait for that binding, indefinitely if it never happens.
    */
   static create<T>(): { stream: Stream<T>; writer: StreamWriter<T> } {
     const stream = new Stream<T>(null, null);
@@ -286,15 +249,8 @@ export class Stream<T> implements ProtocolStream<T> {
           "or use the writer, which parks until then",
       );
     }
-    // Post-transfer refusal (#162, contracts/embedder-api.md §"Streams and futures"). Lifting
-    // removes the handle from the source table and lowering installs it in
-    // the destination's (definitions.py `lift_async_value` line 1530,
-    // `lower_stream` line 1828): once this handle's shared object has been
-    // passed to a guest, the guest owns the readable end and a host read here
-    // would operate a phantom duplicate of it. Refuse loudly instead.
-    // `StreamWriter` is deliberately unaffected — the host retains the
-    // writable end, and writing after the pass is the normal stream/future round-trip pattern —
-    // and `drop()`/`cancelRead()` stay permissive.
+    // Transfer relinquishes this handle's readable end, not StreamWriter's
+    // writable end. drop/cancelRead remain available for cleanup.
     if (this.#consumed) {
       throw new TypeError(
         "this Stream handle has already been passed to a guest; the guest " +
@@ -340,7 +296,7 @@ export class Stream<T> implements ProtocolStream<T> {
    * writer's parked operation survives and the stream stays alive.
    *
    * Refusals mirror `read`: an unbound `Stream.create()` handle and a handle
-   * already passed to a guest (the deadlock-verdict suppression transfer guard) both throw, as does a
+   * already passed to a guest both throw, as does a
    * non-`u8` element type.
    */
   async readDirect(
@@ -352,12 +308,8 @@ export class Stream<T> implements ProtocolStream<T> {
     requireU8Direct(this.#codec, "readDirect");
     const info: DirectSessionInfo = { endedByVerdict: false };
     const n = await host.readable.readDirect(consume, info);
-    // loud component fault precision, `read`'s rule adapted: a session the CONSUMER itself
-    // ended with `"done"` genuinely completed and keeps its resolution. Any
-    // other way out (the writer dropped, the session was cancelled, the
-    // retirement walk settled us) is a settle-path this consumer did not
-    // cause — so if the peer's instance trapped, reject with the delivered
-    // count rather than fake a clean end.
+    // Preserve a callback-completed result. Otherwise report peer poisoning
+    // with the acknowledged byte count, not a clean session end.
     if (!info.endedByVerdict) throwIfPeerTrapped(host.value, where, n);
     return n;
   }
@@ -378,17 +330,9 @@ export class Stream<T> implements ProtocolStream<T> {
   }
 
   /**
-   * Cancel an in-flight `read` (R-fix review advisory 1).
-   *
-   * #97, DELIBERATE AND PINNED: the cancelled `read` resolves with whatever
-   * had already arrived — typically the empty chunk, which this layer also
-   * uses as end-of-stream (`read`'s contract, and hence `readable()` and the
-   * async iterator, which close on it). **A cancelled read is therefore
-   * indistinguishable from EOS at this layer.** Kept as-is rather than given
-   * a distinct signal: the caller of `cancelRead()` is the same code that
-   * observes the read's result, so it already knows which happened, and only
-   * that caller can reach the state. See exec/host_streams.ts
-   * `HostReadableEnd.cancelRead` for the mechanism.
+   * Cancel an in-flight read, resolving with progress so far. An empty
+   * cancelled chunk is indistinguishable from EOS, so readable() and the
+   * async iterator close on it. A direct session resolves its byte count.
    */
   cancelRead(): void {
     this.#host?.readable.cancelRead();
@@ -403,19 +347,9 @@ export class Stream<T> implements ProtocolStream<T> {
   }
 
   /**
-   * @internal — teardown after a trapping import abandoned this handle
-   * (#66, instantiate.ts `releaseAsyncArgs`). Unlike `drop()`, this goes
-   * through `dropSharedForTeardown`, whose parked-side discipline never
-   * wakes the about-to-be-poisoned caller (review B2: a plain drop queued a
-   * DROPPED event into the trapping instance's waitables, and a later
-   * driving loop asserted on the corpse).
-   *
-   * The arm is released on this path too (#162, §"Streams and futures"): the wrapper's
-   * `HostActivity` now closes through the shared object's drop observers,
-   * which `dropSharedForTeardown` fires unconditionally — so a teardown with
-   * nothing parked no longer leaves the arm outliving the stream. (This
-   * paragraph previously recorded that asymmetry as a known, non-blocking
-   * review advisory.)
+   * @internal — teardown of an abandoned import argument. Silently retract
+   * parked ends already marked poisoned/retired; notify healthy peers.
+   * Shared drop observers close host activity even with nothing parked.
    */
   dropForTeardown(): void {
     if (this.#dropped) return;
@@ -476,7 +410,7 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
    * (taken as already-lowered bytes), and a plain array of any element type
    * is lowered per element. u8 chunks travel as `Uint8Array` all the way to
    * the CABI store's bulk path (issue #54) — which makes a `Uint8Array`
-   * chunk a BORROW until the returned promise settles; mutating it in that
+   * chunk a borrow until the returned promise settles; mutating it in that
    * window is misuse. Plain-array chunks are lowered (copied) up front.
    */
   write(values: Chunk<T>): Promise<number> {
@@ -526,8 +460,9 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
    * Resolves with the session's total byte count.
    *
    * `"done"` with zero bytes marked *retracts* (the session ends, the
-   * reader's operation stays parked, no event — the speculative-park
-   * correction); `"more"` with zero marked, and a throwing callback, reject.
+   * reader's operation stays parked, no event); `"more"` with zero marked,
+   * and a throwing callback, reject. Marks commit only on clean return;
+   * writes already made through the view are not rolled back on failure.
    *
    * Parks until the element type is known, exactly as `write` does — a
    * `Stream.create()` writer has no element type until the lowering site
@@ -543,10 +478,8 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
     requireU8Direct(this.#stream.codec, "writeDirect");
     const info: DirectSessionInfo = { endedByVerdict: false };
     const n = await host.writable.writeDirect(produce, info);
-    // loud component fault precision, `write`'s short-take rule adapted: a session the PRODUCER
-    // itself ended with `"done"` keeps its resolution; every other way out is
-    // a settle-path the producer did not cause, so a trapped peer rejects
-    // here carrying the delivered count.
+    // Callback completion survives a later peer trap; other endings report
+    // poisoning with the acknowledged byte count.
     if (!info.endedByVerdict) throwIfPeerTrapped(host.value, where, n);
     return n;
   }
@@ -627,19 +560,10 @@ export class Future<T> implements ProtocolFuture<T> {
   }
 
   /**
-   * A future that is still in flight: the guest call that produces it has not
-   * resolved yet.
-   *
-   * CONTRACT (contracts/embedder-api.md): §"Functions and async" makes every
-   * export Promise-shaped, and §"Streams and futures" makes `Future<T>` a
-   * `PromiseLike<T>`. For an export whose *result* is a `future<T>` those two
-   * collide irreducibly: JS promise resolution unconditionally adopts a
-   * thenable, so `await someExport()` can never hand back a thenable handle —
-   * it hands back the value the handle would have yielded. Conservative
-   * reading, implemented here: the export returns the handle **eagerly** (it
-   * is itself PromiseLike, so `await` still works and still yields `T`), which
-   * keeps `drop()`/`cancel()` reachable for a caller that does not await. The
-   * alternative — resolving a Promise *to* the handle — is not expressible.
+   * Return a handle before its producing guest call resolves. A Promise
+   * cannot resolve to Future without adopting its thenable value, so exports
+   * return this handle eagerly. Callers can drop/cancel it without awaiting;
+   * awaiting yields T, not the handle.
    */
   static deferred<T>(
     pending: Promise<ComponentValue>,
@@ -655,14 +579,8 @@ export class Future<T> implements ProtocolFuture<T> {
       finish?.(false, e);
       throw e;
     });
-    // Backstop (issue #182): a deferred handle that is never awaited,
-    // dropped, or cancelled still has `#hostP` sitting there uninspected — if
-    // the producing export call rejects, that is an unhandled rejection at
-    // the process level with no handle-level operation to blame. Attach a
-    // no-op rejection handler to a SEPARATE derived promise; `#read()` above
-    // still awaits the original `hostP`, so a real failure still surfaces to
-    // an awaiter (or through `cancel()`/`drop()`'s own swallows) exactly as
-    // before.
+    // Observe an unused handle's producing-call rejection without replacing
+    // hostP: a later await must still receive the original failure.
     hostP.catch(() => {});
     const f: Future<T> = new Future<T>(null, hostP, codec);
     return f;
@@ -690,12 +608,8 @@ export class Future<T> implements ProtocolFuture<T> {
   }
 
   #read(): Promise<T> {
-    // Post-transfer refusal (#162, §"Streams and futures"), the `Stream.read` mirror:
-    // once this handle was passed to a guest, the guest owns the readable end
-    // and a host read would operate a phantom duplicate. A read MEMOIZED
-    // before the transfer keeps resolving — it genuinely happened while the
-    // host still owned the end. Rejected rather than thrown: this runs under
-    // `then()`, where a synchronous throw escapes the promise chain.
+    // No new reads after transfer; a read memoized before transfer keeps its
+    // result. Return a rejection to preserve then()'s Promise-shaped failure.
     if (this.#consumed && this.#settled === null) {
       return Promise.reject(
         new TypeError(
@@ -739,8 +653,8 @@ export class Future<T> implements ProtocolFuture<T> {
   }
 
   /**
-   * Release this future handle. Total and idempotent (#90): it never throws,
-   * and calling it twice — or after `Symbol.dispose` — is a no-op.
+   * Release this future handle. The embedder contract requires nonthrowing,
+   * idempotent disposal; repeated calls are no-ops.
    *
    * Dropping a future the host never wrote to, once the guest already holds
    * its readable end, is **abandonment**: the guest's reader can never be
@@ -748,7 +662,7 @@ export class Future<T> implements ProtocolFuture<T> {
    * being handed a value-less completion (exec/host_streams.ts
    * `HostFuture.drop`, task/streams.ts `abandonSharedFuture`; the spec keeps
    * that state unreachable by trapping the early writable drop,
-   * definitions.py:1183-1184). Write-then-drop is the normal path and is
+   * definitions.py `WritableFutureEnd.drop`). Write-then-drop is the normal path and is
    * unaffected; a future no guest ever saw is plain cleanup.
    */
   drop(): void {
@@ -801,13 +715,8 @@ export class ErrorContext implements ProtocolErrorContext {
   }
 }
 
-// module identity brands (contracts/embedder-api.md §"Module identity"): the STATEFUL
-// embedder-facing handle classes. Their machinery lives in the copy that
-// minted them, so the brand never makes a foreign handle usable — it makes
-// it DIAGNOSABLE, at the lowering sites below. `StreamWriter` gains its
-// brand with §"The host-ABI surface and its version" (§"The host-ABI surface and its version"):
-// writers carried none before because nothing needed to recognize one, and
-// `isStreamWriter` now does.
+// Brands recognize handles across copies, not share their machinery.
+// ErrorContext is the exception: its public message can be copied by value.
 defineBrand(Stream.prototype, STREAM);
 defineBrand(StreamWriter.prototype, STREAM_WRITER);
 defineBrand(Future.prototype, FUTURE);
@@ -826,23 +735,18 @@ export type FutureSource<T> = Future<T> | PromiseLike<T> | T;
 /**
  * Adapt a producer to a lowered `stream<T>` value, and own the pumping.
  *
- * The driving arm auto-closes on end (the pump drops the write end when the
- * producer is exhausted) and on `DROPPED` (host_streams settles the activity
- * arm) — R-fix review advisory 2, the deadlock-masking activity-lifetime
- * footgun.
+ * End or drop closes the activity arm; a finished producer cannot keep
+ * suppressing the store's deadlock verdicts.
  */
 export function lowerStreamSource<T>(
   src: StreamSource<T>,
   codec: ElemCodec<T>,
 ): ComponentValue {
-  // Order matters (§"Module identity and @polyengine/protocol"). Same-copy handle: the fast path, unchanged.
+  // Preserve handle identity before considering producer adaptation.
   if (src instanceof Stream) {
     return src.takeValue(codec);
   }
-  // Branded but not ours: a `Stream` minted by ANOTHER runtime copy. Without
-  // this check it would fall through to producer adaptation below and be
-  // pumped by its async iterator — a silent downgrade that quietly voids stream/future round-trip's
-  // identity guarantees. Refused, loudly, naming both copies (issue #83).
+  // A foreign handle must not silently become an async-iterator copy.
   if (hasBrand(src, STREAM)) {
     throw new TypeError(describeCrossCopy(
       "this stream handle",
@@ -859,11 +763,9 @@ export function lowerStreamSource<T>(
 /**
  * Lower one chunk of stream elements.
  *
- * u8 chunks come out as `Uint8Array` — either the caller's own (bytes are
- * already canonical component values; issue #54's bulk-store path picks the
- * typed array up unchanged at the rendezvous) or packed from a validated
- * plain array. A `Uint8Array` offered to a NON-u8 stream keeps the legacy
- * behavior: elements are fed through the per-element codec like any array.
+ * Borrow u8 typed chunks unchanged; validate and pack plain u8 arrays.
+ * Other element types pass through the per-element codec, including when
+ * supplied as a Uint8Array. A failed lowering releases the lowered prefix.
  */
 function packChunk<T>(
   values: readonly T[] | Uint8Array,
@@ -899,12 +801,8 @@ async function pump<T>(
   let failure: unknown;
   let failed = false;
   let produced = 0;
-  // resource stream cancellation companion: the pump learns of the reader dropping
-  // through short writes, but a producer PARKED on an external event (an
-  // accept-shaped source holding a live platform resource) offers no write
-  // to shorten — this notification is its only stop signal. It also fires
-  // on the loud component fault teardown walk and on our own end-of-pump drop (harmless: the
-  // loop has exited by then).
+  // A producer awaiting an external event has no write to shorten. Drop
+  // notification lets batches cancel its pending pull and release resources.
   const gone = new Promise<typeof READER_GONE>((resolve) =>
     host.writable.onDropped(() => resolve(READER_GONE))
   );
@@ -953,10 +851,7 @@ async function pump<T>(
       failure,
     );
   }
-  // End of production == end of stream. Dropping unconditionally is what keeps
-  // the activity arm from outliving the data (R-fix advisory 2) and what stops
-  // a failed producer from hanging the guest forever; the failure has already
-  // been recorded on the store, so the call fails rather than resolving.
+  // Always end the stream and release activity after recording any failure.
   host.writable.drop();
 }
 
@@ -982,16 +877,11 @@ function releaseUntaken<T>(
 }
 
 /**
- * Normalize every accepted producer shape to an async iterator of batches,
- * racing each pull against `gone` (resource stream cancellation): when the stream dies
- * with the producer parked, a `ReadableStream` source is `cancel()`ed
- * through its reader, and an (async-)iterable source gets its optional
- * `cancel()` method invoked — the documented producer-cancellation hook —
- * then its pending pull is drained so a straggler element the producer
- * already minted still reaches the caller's release path. A source with no
- * cancel hook keeps the pre-resource stream behavior: the pump stays parked until the
- * producer's next element (or forever — the documented embedder-negligence
- * hang class).
+ * Normalize producers to batches. On reader loss, cancel a ReadableStream
+ * through its reader, or invoke an async iterable's optional cancel hook.
+ * Drain an iterable's pending pull so a late element reaches the release
+ * path before iterator.return(). If cancellation cannot settle that pull,
+ * this cleanup can remain pending indefinitely.
  */
 async function* batches<T>(
   src: Exclude<StreamSource<T>, Stream<T>>,
@@ -1063,11 +953,7 @@ export function lowerFutureSource<T>(
   codec: ElemCodec<T>,
 ): ComponentValue {
   if (src instanceof Future) return src.takeValue();
-  // Branded but not ours (§"Module identity and @polyengine/protocol"). This one is the sharpest edge in the
-  // family: `Future` is a `PromiseLike`, so a foreign future would otherwise
-  // be adopted as a plain thenable and appear to work — exactly the silent
-  // path module identity bans, since the awaited value would ride the OTHER copy's
-  // machinery with no handle transfer at all.
+  // Reject foreign handles before thenable adoption can hide a by-value copy.
   if (hasBrand(src, FUTURE)) {
     throw new TypeError(describeCrossCopy(
       "this future handle",
@@ -1080,23 +966,9 @@ export function lowerFutureSource<T>(
       const v = await (src as PromiseLike<T>);
       await host.write(codec.fromHost(v) as unknown as T);
     } catch (e) {
-      // The producer failed. `future<T>` has no error channel of its own, so
-      // the guest could only ever see a bare drop — the cause goes on the
-      // store's host-failure channel instead, exactly as for streams, so the
-      // in-flight call fails with a site-named error.
-      //
-      // And then we do NOT drop -- for ATTRIBUTION, not for safety. Dropping
-      // here is now well-defined (#90: an unwritten, lowered future's drop
-      // abandons it and the guest reader traps at its rendezvous point,
-      // exec/host_streams.ts `HostFuture.drop`); the stale version of this
-      // comment claimed it would trip an internal invariant, which was true
-      // before the abandonment mechanism existed and is not true now.
-      // Reporting instead of dropping is still the better outcome: the
-      // store-level failure names the producer and the site, so the in-flight
-      // call fails with the real cause rather than with a generic
-      // "the writable end went away" trap. Only when there is NO store to
-      // report to (the future was never lowered) do we fall back to dropping,
-      // so nothing can hang forever.
+      // Report the producer cause rather than replace it with a generic
+      // abandonment trap. A bound store receives the failure; only an unbound
+      // future is dropped here. Reporting does not itself retire the future.
       const reported = reportProducerFailure(
         { value: host.value } as unknown as HostStream<unknown>,
         codec.where ?? "future producer",

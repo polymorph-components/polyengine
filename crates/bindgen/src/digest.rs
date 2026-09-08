@@ -2,13 +2,10 @@
 //!
 //! See `runtime/src/digest/digest.ts` for the TypeScript counterpart, which
 //! must compute byte-identical canonical JSON (and therefore identical
-//! sha256) from a *loaded plan* for the same WIT world. The full
-//! normalization spec is documented in both files' module comments and is
-//! the primary deliverable of this track (resolves the legacy shim
-//! `worldDigest`, contracts/plan-format.md schema; the normative digest is
-//! contracts/digest.md).
+//! sha256) from a loaded plan for the same WIT world, within the supported
+//! subset described below. contracts/digest.md is the normative digest spec.
 //!
-//! ## Normalization spec (authoritative copy; keep in sync with digest.ts)
+//! ## Normalization (keep in sync with digest.ts)
 //!
 //! Goal: two structurally-equivalent worlds — one parsed from WIT source,
 //! one recovered from a translated component's plan — must hash identically,

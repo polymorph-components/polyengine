@@ -14,15 +14,9 @@ import { asIndex } from "./memory.ts";
 import type { ComponentValue, CoreValue, TupleType, ValType } from "./types.ts";
 
 /**
- * The spill tuple for a parameter/result list, memoized on the array's
- * identity.
- *
- * Both spill paths used to synthesize `{ kind: "tuple", elements: ts }` on
- * every call, which under the identity-keyed layout/despecialization caches
- * (issue #261) is a guaranteed miss plus a wasted insert — it would make this
- * path slower, not faster. `ts` is always a plan-owned `ft.params`/
- * `ft.results` array (exec/boundary.ts, intrinsics/async_builtins.ts), so its
- * identity is as stable as a `ValType`'s.
+ * Shared spill tuple keyed on parameter/result array identity, allowing both
+ * paths to reuse type/layout caches. The array and its types must remain
+ * immutable after first use, as for plan-owned ft.params/ft.results.
  */
 const spillTuples = new WeakMap<ValType[], TupleType>();
 

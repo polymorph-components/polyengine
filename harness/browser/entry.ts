@@ -2,18 +2,14 @@
 // In-page conformance runner (browser lane).
 //
 // This module is bundled to `harness/browser/dist/entry.js` and loaded by
-// `index.html`. It is deliberately *dumb*: it executes the same command loop
-// the Deno conformance test runs (`harness/src/runner.ts` +
+// `index.html`. It executes the same command loop as the Deno conformance test
+// (`harness/src/runner.ts` +
 // `RuntimeExecutor`) and streams raw per-command verdicts back to the driver.
 // ALL classification (xfail, lane overlays, the per-directory table) stays in
 // Deno, in `tools/browser/run-lane.ts`, so the browser lane and the Deno lane
 // share one source of truth for expectations.
 //
 // See `tools/browser/run-lane.ts` for run instructions.
-//
-// Platform note: the bundle substitutes `harness/browser/shims/async_hooks.ts`
-// for the runtime's `node:async_hooks` import (FINDING M3A-1). Read that
-// file's header before interpreting any `async/` result on a browser lane.
 
 import type { WastJson } from "../src/schema.ts";
 import { RuntimeExecutor } from "../src/runtime-executor.ts";

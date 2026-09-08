@@ -20,14 +20,14 @@ export function ptrSize(ptrType: PtrType): 4 | 8 {
 /**
  * `MemInst` caches its `Uint8Array`/`DataView` at construction time and never
  * re-derives them. That is only sound for a memory that cannot grow within
- * this instance's lifetime: `memory.grow` (guest-triggered or host-triggered)
- * detaches the backing `ArrayBuffer`, and a cached view over a detached
- * buffer reads/writes garbage rather than trapping.
+ * this instance's lifetime: `memory.grow` can detach the backing ArrayBuffer.
+ * Cached TypedArray accesses then cease to address memory, while DataView
+ * accesses throw rather than perform canonical trap checks.
  *
  * Production call/lift/lower paths do NOT construct `MemInst` directly against
  * a live, growable `WebAssembly.Memory` for this reason: the executor
  * re-derives a fresh view per access via `LiveMemory`
- * (`exec/boundary.ts:97-160`), which is grow-safe. `MemInst` is for contexts
+ * (`exec/boundary.ts`). `MemInst` is for contexts
  * where the buffer is known fixed for the duration (tests, or a snapshot
  * already taken).
  */
@@ -128,7 +128,6 @@ export function loadPtr(mem: MemInst, ptr: number): number | bigint {
 // never came from validated guest bytes; it is a JS number/bigint an
 // embedder handed the lowering path). Ported as `assert_`/`AssertionError`
 // (see cabi/trap.ts's Trap-vs-AssertionError taxonomy), not `Trap`.
-// definitions.py:1568-1569 (`store_int`).
 //
 // This scalar path is where the check lives; the bulk (TypedArray) path in
 // bulk_lists.ts intentionally wraps instead — see that file's header for why.
@@ -209,13 +208,9 @@ export function writeBytes(mem: MemInst, ptr: number, src: Uint8Array): void {
  * Exact bounds check usable with i64-lane values: traps when
  * `ptr + byteLength > len(memory)`, computed without precision loss.
  *
- * `what` selects the trap wording only. Callers that are checking a pointer
- * *returned by realloc* pass wasmtime's phrasing for that case
- * ("realloc return: beyond end of memory",
- * `wasmtime/src/runtime/component/func/options.rs:185`) and the string-lift
- * path passes its own ("string pointer/length out of bounds of memory",
- * `.../func/typed.rs:1528`), because the official suite matches those texts.
- * The default is unchanged.
+ * Inputs must already be nonnegative canonical addresses/sizes. `what`
+ * selects diagnostic wording only; realloc and string callers use the
+ * messages expected by the official suite.
  */
 export function trapIfRangeExceedsMemory(
   mem: MemInst,

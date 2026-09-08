@@ -16,9 +16,8 @@
 //       `Stream`/`Future`/`ErrorContext` handles.
 //
 // The adapter is driven entirely by the plan's `ValType`s — no generated code
-// participates, which is what lets the same facade serve an untyped embedder
-// and a bindgen-typed one (the design ruling: runtime-driven facade,
-// compile-time-only bindgen).
+// participates in value conversion. Generated wrappers can verify types and
+// delegate instantiation; this adapter also serves untyped callers.
 
 import type {
   CaseType,
@@ -137,12 +136,8 @@ export function checkNoCollisions(
 // Per-type adapter tables
 // ---------------------------------------------------------------------------
 //
-// Everything below is a pure function of the type, so paying for it per
-// element is paying for it once per element too many (issue #261). Same
-// argument as `checkedLabels` above: `ValType` objects are stable for the
-// lifetime of a loaded plan, so a `WeakMap` keyed on the type's identity turns
-// a per-call cost into a one-time cost per type, and the table dies with the
-// plan. Both directions read the same tables.
+// Both directions share immutable type-derived tables, cached by ValType
+// identity. Weak keys let the tables die with the loaded plan.
 
 interface RecordField {
   /** The WIT label — the key of the internal record object. */
@@ -181,14 +176,8 @@ function recordTable(t: RecordType): RecordTable {
 }
 
 /**
- * Label -> case, memoized on the `cases` array. Replaces the linear
- * `t.cases.find(...)` both directions ran per element.
- *
- * **First wins on a duplicated label** — deliberately NOT `caseIndexOf` from
- * cabi/types.ts, which maps a duplicate to -1. The two sites replace scans
- * with different pre-existing behavior (`find` takes the first match; the cabi
- * scan asserted on exactly one), so each keeps its own; merging them would be
- * a behavior change, not a deduplication.
+ * Label -> first matching case, memoized on the cases array. Unlike the CABI
+ * caseIndexOf helper, duplicate labels select the first rather than fail.
  */
 const variantTables = new WeakMap<CaseType[], Map<string, CaseType>>();
 
@@ -201,7 +190,7 @@ function variantTable(cases: CaseType[]): Map<string, CaseType> {
   return m;
 }
 
-/** The enum's labels as a set, replacing `t.labels.includes(v)`. */
+/** Membership set for enum labels. */
 const enumTables = new WeakMap<EnumType, Set<string>>();
 
 function enumTable(t: EnumType): Set<string> {
@@ -470,11 +459,8 @@ export function fromHost(
           (v as { message: string }).message,
         ) as unknown as ComponentValue;
       }
-      // Branded but no string `message` (§"Module identity and @polyengine/protocol", superseded above only
-      // for the message-valued case): a genuinely foreign stateful handle —
-      // it lives in another copy's handle table, so it can never be lowered
-      // here — but "recognized and named" beats the generic "expected an
-      // ErrorContext" that sent issue #83 hunting in the wrong direction.
+      // A foreign brand without a public string message cannot be
+      // reconstructed by value; report the copy boundary explicitly.
       if (hasBrand(v, ERROR_CONTEXT)) {
         throw new TypeError(
           `${o.where}: ${describeCrossCopy("this error-context")}`,
@@ -653,9 +639,7 @@ function int(
   if (v < lo || v > hi) {
     throw new TypeError(`${o.where}: ${kind} out of range: ${v}`);
   }
-  // The raw boundary takes unsigned lane values for the signed types too?
-  // No: cabi `lowerFlatSigned32` does the two's-complement fold, so the
-  // interpreter wants the *signed* number here. Pass it through.
+  // Keep signed values signed; lowerFlatSigned32 performs lane conversion.
   return v;
 }
 
@@ -685,12 +669,8 @@ function elemCodec(
     where: o.where,
     toHost: (v) => element === null ? undefined : toHost(v, element, o),
     fromHost: (v) => element === null ? null : fromHost(v, element, o),
-    // resource stream: `own` elements a producer lowered but the reader never took
-    // must be destroyed, not leaked — an un-taken element may hold a live
-    // platform resource (the tcp `listen` shape: an accepted connection).
-    // Top-level `own` is the supported element shape; nested owns inside
-    // composite stream elements remain out of scope until a consumer
-    // links one.
+    // Release untaken top-level own elements. This codec does not recursively
+    // clean up owned resources nested in composite elements.
     release: element !== null && element.kind === "own"
       ? (v) => o.bridge.dropOwn(v as number, element)
       : undefined,

@@ -22,7 +22,7 @@
  * @module
  */
 
-// Plan format + loader (contracts/plan-format.md v0).
+// Plan format + loader (contracts/plan-format.md).
 
 export * from "./format.ts";
 export * from "./loader.ts";

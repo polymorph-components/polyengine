@@ -72,8 +72,7 @@ fn cabi_roundtrip_all_testdata() {
 }
 
 /// Errors come back as an `{"error": ...}` envelope, not a panic/trap, and
-/// carry the structured verdict in `errorDetail` (contracts v0.2 proposal;
-/// `src/error.rs`). The `error` string keeps its v0.1 meaning.
+/// carry the structured verdict in `errorDetail` (src/error.rs).
 #[test]
 fn cabi_error_envelope() {
     let json = roundtrip_bytes(b"not a component");

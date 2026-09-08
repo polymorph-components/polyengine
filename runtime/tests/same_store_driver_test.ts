@@ -229,17 +229,10 @@ Deno.test("the speculative entry is dropped while a second driver is live on the
 // The release path removes ONLY the driver's own entry (issue #158's lesson,
 // re-asserted under #239's new wake path).
 //
-// `Store.pendingResumptions` is a SET, not the single global slot it started
-// as, precisely so the race site can "name exactly what we added": the
-// `finally` used to blanket-clear, so an entry minted DURING the await by a
-// guest-synchronous delivery (`SuspensionPoint.resume`, jspi/bridge.ts) was
-// clobbered early, re-opening the mis-attribution window that entry exists to
-// close. #239 gave the driver a brand-new reason to run that `finally` — it
-// now stands down mid-await whenever another driver arrives — so the
-// identity-scoped removal is worth pinning on that path specifically. Nothing
-// else in this file distinguishes the two: with one entry in play,
-// `removePendingResumption(chosen)` and `pendingResumptions.clear()` are the
-// same function.
+// When another driver arrives, the awaiting driver stands down and removes
+// only its own speculative pending entry. An entry added mid-await by
+// `SuspensionPoint.resume` must survive (#158). Two entries are needed to
+// distinguish identity-scoped removal from clearing the whole set.
 //
 // The foreign entry is a bare sentinel object rather than a second
 // `awaitingThread`. `pendingResumptions` is `Set<unknown>` and the property
@@ -249,13 +242,8 @@ Deno.test("the speculative entry is dropped while a second driver is live on the
 // scheduling. A second parked thread would add awaiting-set membership the
 // property does not involve.
 //
-// Teardown avoids the hop bound rather than catching it: while the foreign
-// entry sits in the set the store-wide gate stays held, so BOTH drivers yield
-// at their loop tops under the 10,000-hop `claimHops` assert (~311ms). The
-// observation takes a few milliseconds, and teardown deletes the sentinel
-// FIRST — restoring the state a real `SuspensionPoint.resume` would restore
-// when its activation parks or finishes — so both drivers reach their `done()`
-// and exit normally, with no AssertionError to swallow.
+// Delete the sentinel first during teardown: it holds the store-wide gate,
+// so neither driver can reach `done()` until it is removed.
 Deno.test("a driver releases only its own speculative entry, not the whole gate (#158 under #239's stand-down)", async () => {
   const store = new Store();
   let settleThread!: (v: unknown) => void;

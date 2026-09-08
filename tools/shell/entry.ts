@@ -38,11 +38,8 @@ const g = globalThis as any;
 type EngineName = "spidermonkey" | "jsc" | "node" | "bun" | "unknown";
 
 function detectEngine(): EngineName {
-  // Order matters twice: bun defines process.versions.node too (check bun
-  // first), and Deno 2's node-compat layer defines globalThis.process as
-  // well — but this entry never runs under Deno (the Deno lane is
-  // harness/tests/conformance_test.ts), so process.versions.node here means
-  // a real node (or bun) driven via tools/shell/host-node.mjs.
+  // Bun also defines process.versions.node, so check Bun first. This entry runs
+  // Node/Bun through host-node.mjs; Deno has a separate conformance runner.
   if (typeof g.process?.versions?.bun === "string") return "bun";
   if (typeof g.process?.versions?.node === "string") return "node";
   if (typeof g.os?.file?.readFile === "function") return "spidermonkey";
@@ -69,7 +66,7 @@ function readBinary(path: string): Uint8Array {
     case "bun":
       // Installed by tools/shell/host-node.mjs (which keeps node: builtin
       // imports out of this browser-platform bundle). It copies out of
-      // node's pooled Buffer — see the preamble for why that is load-bearing.
+      // node's pooled Buffer so the returned bytes do not expose its whole slab.
       if (typeof g.__polyengineHostRead !== "function") {
         throw new Error(
           `readBinary: ${engine} detected but no __polyengineHostRead — run this ` +

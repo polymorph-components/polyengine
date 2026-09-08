@@ -1,17 +1,13 @@
-// @polyengine/translator — the packaged translator wasm plus its per-platform
-// loader (issue #16 delivery design note, item 3).
+// @polyengine/translator: the packaged translator wasm and per-platform loader.
 //
 // Why a separate package: the translator is a versioned peer of the
-// runtime (plan-format coupling), so it ships inside the same release —
-// but embedders that translate at BUILD time (tools/translate,
-// contracts/embedder-api.md §"Module wiring and instantiation") deploy no
-// translator at all, and keeping the ~1.85 MB
-// asset out of @polyengine/runtime keeps their production graphs clean.
+// runtime (plan-format coupling), so it ships in the same release. Embedders
+// that translate at build time need not include the translator asset in
+// their production module graphs.
 //
 // The asset (`translator_shim.wasm`, sibling to this module) is copied
 // from the cargo build by `just shim` and is gitignored — run `just shim`
-// once in a fresh checkout. Publish tooling will pin the exact asset (and
-// its digest) into the released package when #16's packaging lands.
+// once in a fresh checkout.
 
 import { Translator } from "@polyengine/runtime/shim";
 

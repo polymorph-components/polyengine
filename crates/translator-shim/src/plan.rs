@@ -1,13 +1,10 @@
 //! Mapping from `wasmtime_environ::component` translation output to the
-//! plan v0 schema of `contracts/plan-format.md`.
+//! schema of `contracts/plan-format.md`.
 //!
-//! This module is the only code that sees both shapes (wasmtime's unstable
-//! internals and our stable plan format); everything wasmtime-specific is
-//! confined here per docs/architecture.md §4.1.
+//! This module maps wasmtime's internal index spaces and types to the plan
+//! consumed by the JavaScript runtime.
 //!
-//! wasmtime-environ API reality this maps from (pinned rev, see root
-//! Cargo.toml; recorded for the
-//! contract-v0.1 review; see crate README):
+//! Relevant wasmtime-environ shapes (revision pinned in root Cargo.toml):
 //!
 //! - `Component::exports: NameMap<TryString, (ExportIndex, ComponentExternData)>`
 //!   + `export_items: PrimaryMap<ExportIndex, Export>`; `Export` variants are
@@ -41,48 +38,6 @@ use wasmtime_environ::component::{
 use wasmtime_environ::{EntityIndex, ModuleInternedTypeIndex, PrimaryMap, WasmValType};
 
 /// `formatVersion` this producer emits (contracts/plan-format.md).
-///
-/// v1 (contracts/plan-format.md v0.3): additive — `CoreDef` gained the
-/// `"unsafe-intrinsic"` variant (previously a hard `unsupported` rejection).
-///
-/// v2: additive — `streamTables` / `futureTables`, mapping the
-/// `streamTable` / `futureTable` indices the stream and future trampolines
-/// already carried to their *element types*. Without them a consumer knows a
-/// `stream.read` targets table 3 but not what a table-3 element is, so it
-/// cannot size or lift the copy buffer at all. The same gap in the other
-/// direction (`task_return_type`, a `TypeTupleIndex` with no mapping into
-/// `plan.types`) was still open at v2 — see below.
-///
-/// v3 (contracts/plan-format.md schema: the errorContextTables section and
-/// the task-return raw `results` + interned `resultType` keys): closes both
-/// v2 gaps.
-///   * `errorContextTables` — the `error-context-transfer` trampoline's table
-///     arguments live in the `TypeComponentLocalErrorContextTableIndex` space
-///     and had no section, so the runtime resolved them through the
-///     *resource*-table mapping (a different index space: silent mis-route in
-///     a composition with an ErrorContext at a colliding slot).
-///   * `task-return`'s `resultType` / raw `results` — see
-///     `TrampolineDecl::TaskReturn`.
-///
-/// Per the contract's compat rule ("changes require updating both producer
-/// and consumer in the same commit and bumping `formatVersion`") the bump is
-/// unconditional even though the change is additive.
-///
-/// v4 (2026-08-17, polyengine#13): additive — `exports[]` gained the `"module"`
-/// kind (`Export::ModuleStatic`, a component exporting one of its own
-/// embedded core modules; previously a hard `unsupported` rejection).
-/// `Export::ModuleImport` remains rejected, now with a precise message.
-///
-/// v5: tracks the wasmtime-environ rev bump (see root Cargo.toml). Breaking,
-/// not additive: `CoreDef::TaskMayBlock` was removed upstream (the
-/// `"task-may-block"` core-def kind is gone); `Trampoline::Trap` gained a
-/// `Trap` payload (`"trap"` trampolines now carry a `code` byte); the thread
-/// trampoline set was renamed/expanded (`thread-suspend-to-suspended`,
-/// `thread-suspend-to`, `thread-unsuspend`, `thread-yield-to-suspended` are
-/// gone; `thread-resume-later`, `thread-suspend-then-resume`,
-/// `thread-yield-then-resume`, `thread-suspend-then-promote`,
-/// `thread-yield-then-promote` are new; `thread-index` gained an `instance`
-/// field).
 pub const FORMAT_VERSION: u32 = 5;
 
 // ---------------------------------------------------------------------------
@@ -102,38 +57,29 @@ pub struct Plan {
     pub types: Vec<TypeDecl>,
     /// Resource-table metadata referenced by `own`/`borrow` `resource` fields
     /// and by resource trampolines. Index space == wasmtime's
-    /// `TypeResourceTableIndex`. (Extension over the letter of plan-format.md,
-    /// which references "the plan's resource table" without defining it.)
+    /// `TypeResourceTableIndex`.
     pub resource_tables: Vec<ResourceTableDecl>,
     /// Stream-table metadata, index space == wasmtime's
     /// `TypeStreamTableIndex`; referenced by the `streamTable` field of every
     /// `stream.*` trampoline. `element` is the `T` of `stream<T>`, absent for
-    /// the zero-width payload (`stream`). Plan v2.
+    /// the zero-width payload (`stream`).
     pub stream_tables: Vec<AsyncTableDecl>,
     /// Future-table metadata, index space == wasmtime's
     /// `TypeFutureTableIndex`; referenced by the `futureTable` field of every
-    /// `future.*` trampoline. Plan v2.
+    /// `future.*` trampoline.
     pub future_tables: Vec<AsyncTableDecl>,
     /// Error-context-table metadata, index space == wasmtime's
     /// `TypeComponentLocalErrorContextTableIndex`; the space the
     /// `error-context-transfer` trampoline's `srcTable`/`dstTable` runtime
-    /// arguments live in (fact/trampoline.rs:3526-3539). Emitted from
-    /// `ComponentTypes::error_context_tables` (`TypeErrorContextTable`,
-    /// types.rs:1144-1151), which carries nothing but the owning instance —
-    /// hence no `element` here. Plan v3 — the errorContextTables section
-    /// (contracts/plan-format.md schema).
+    /// arguments live in. Emitted from `ComponentTypes::error_context_tables`
+    /// (`TypeErrorContextTable`), which carries only the owning instance,
+    /// hence no `element` here.
     pub error_context_tables: Vec<ErrorContextTableDecl>,
     /// Resource types this component *imports*, in `ResourceIndex` order
     /// (entry `i` is `ResourceIndex(i)`). Defined resources follow:
     /// `ResourceIndex = importedResources.len() + DefinedResourceIndex`,
     /// exactly wasmtime's `Component::resource_index`
     /// (the pinned wasmtime-environ rev, see root Cargo.toml; `component/info.rs`).
-    ///
-    /// The `importedResources` field (contracts/plan-format.md schema)
-    /// closes this gap; the field
-    /// is a **v0.2 proposal**. Emitting it is
-    /// purely additive — v0.1 consumers ignore it, and it is empty for every
-    /// component that imports no resource type, which is every current fixture.
     pub imported_resources: Vec<ImportedResourceDecl>,
     pub imports: Vec<ImportDecl>,
     pub exports: Vec<ExportDecl>,
@@ -236,9 +182,8 @@ pub struct AsyncTableDecl {
     pub instance: u32,
 }
 
-/// One entry of the `errorContextTables` section (plan v3). An error-context
-/// table has no element type — wasmtime's `TypeErrorContextTable`
-/// (types.rs:1144-1151) is exactly `{ instance }`.
+/// One entry of `errorContextTables`. An error-context table has no element
+/// type: wasmtime's `TypeErrorContextTable` is exactly `{ instance }`.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ErrorContextTableDecl {
@@ -266,9 +211,9 @@ pub enum CoreDefJson {
     /// are an unstable internal detail, while `name()` yields the stable
     /// spec-facing symbol (`"context-get-i32-0"`, `"u32-native-load"`, …).
     ///
-    /// All 21 variants are representable on the wire; the executor implements
+    /// All variants are representable on the wire; the executor implements
     /// only the four `context-{get,set}-i32-{0,1}` intrinsics (the canonical
-    /// `context.{get,set}` built-ins — definitions.py:2348/2358) and fails at
+    /// `context.{get,set}` built-ins) and fails at
     /// instantiate time on the rest. Emitting them all keeps the shim's job
     /// "faithful transcription" and moves the capability boundary into the
     /// runtime, where contracts/intrinsics.md already puts it.
@@ -294,10 +239,10 @@ pub struct ExportItemJson {
 
 /// One `wasmtime_environ::component::Trampoline`, tag-for-tag. `index` is the
 /// trampoline's own index (redundant with array position, kept for
-/// greppability). Type-table references: `type`/`results` point into the plan
-/// `types` table; `resource` into `resourceTables`; `streamTable`/
-/// `futureTable`/`errorContextTable` are raw wasmtime table indices (task-
-/// scheduler machinery, no plan-level table yet); `options` into `canonicalOptions`;
+/// greppability). Type-table references: `type`/`resultType` point into the plan
+/// `types` table; task-return `results` is a raw wasmtime `TypeTupleIndex`.
+/// `resource`, `streamTable`, `futureTable`, and `errorContextTable` index
+/// their respective plan table sections; `options` indexes `canonicalOptions`;
 /// `memory`/`callback`/`postReturn` are runtime extraction indices.
 #[derive(Debug, Serialize)]
 #[serde(tag = "kind", rename_all = "kebab-case", rename_all_fields = "camelCase")]
@@ -309,23 +254,12 @@ pub enum TrampolineDecl {
     ResourceDrop { index: u32, instance: u32, resource: u32 },
     BackpressureInc { index: u32, instance: u32 },
     BackpressureDec { index: u32, instance: u32 },
-    /// `task.return`. Plan v3 splits what v2 conflated into one `results`
-    /// field:
-    ///
-    ///   * `results` is now the **raw** wasmtime `TypeTupleIndex` (u32), i.e.
-    ///     verbatim the value FACT's `prepare-call` passes as its
-    ///     `task_return_type` argument at runtime (fact.rs:47,584). Without
-    ///     it a consumer cannot relate the callee's declared result type to
-    ///     anything in the plan, which is exactly why
-    ///     `canon_task_return`'s result-type check was skipped for FACT
-    ///     tasks.
-    ///   * `result_type` is that tuple interned into `plan.types` — the
-    ///     task-return raw `results` + interned `resultType` keys
-    ///     (contracts/plan-format.md schema). `Option` for wire
-    ///     symmetry with the other nullable decl fields only: wasmtime's
-    ///     `Trampoline::TaskReturn.results` is a plain `TypeTupleIndex`
-    ///     (info.rs:789-796, no `Option`), so this producer always emits a
-    ///     number — a no-result task carries the *empty tuple*, not `null`.
+    /// `task.return`: `results` is the raw wasmtime `TypeTupleIndex` passed
+    /// by FACT's `prepare-call` as `task_return_type`; `result_type` is the
+    /// same tuple interned into `plan.types`. Together they let the runtime
+    /// check the FACT callee's declared result type in `canon_task_return`.
+    /// `Option` is for wire symmetry with other nullable fields: this producer
+    /// always emits a number, including the empty tuple for no-result tasks.
     TaskReturn { index: u32, instance: u32, results: u32, result_type: Option<u32>, options: u32 },
 
     TaskCancel { index: u32, instance: u32 },
@@ -810,8 +744,8 @@ impl<'a> PlanBuilder<'a> {
             });
         }
 
-        // 6b. Imported resources, in ResourceIndex order (v0.2 proposal; see
-        //     the `Plan::imported_resources` docs). Emitted *after* imports so
+        // 6b. Imported resources, in ResourceIndex order (see
+        //     `Plan::imported_resources`). Emitted after imports so
         //     the `import` back-references can be range-checked here.
         let mut imported_resources = Vec::new();
         for (_, runtime_import) in component.imported_resources.iter() {

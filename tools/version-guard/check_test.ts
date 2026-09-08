@@ -3,9 +3,7 @@
 // exercise the real decision logic (the fixtures below are shaped from real
 // jsr.io and GitHub API responses).
 
-// Assertions are local, matching the rest of tools/ (bundle_test.ts): no
-// test-only dependency enters the workspace lockfile for a guard whose
-// whole point is that it cannot be knocked over by a registry.
+// Local assertions avoid adding a registry dependency to the guard tests.
 import type { Effects, HttpResponse } from "./effects.ts";
 import { sha256Hex } from "./effects.ts";
 import {

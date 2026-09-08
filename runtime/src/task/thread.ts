@@ -1,4 +1,4 @@
-// definitions.py `class Thread` (line 317), reimplemented over JS generators.
+// definitions.py `Thread`, implemented over JS generators.
 //
 // Mapping to the reference, state for state:
 //
@@ -10,11 +10,8 @@
 //   thread.storage[2]            storage: [0, 0]   (context.{get,set})
 //   thread.index                 index (inst.threads table slot)
 //
-// The reference's `resume()` drives a chain of `switch_to` handoffs
-// (`suspend_then_resume` and friends, lines 408-437). Those are the 🧵
-// shared-everything-threads built-ins, which https://github.com/polymorph-components/polyengine/issues/12 defers along with
-// memory64; `resume()` here therefore handles a single thread, and the
-// switch-to variants are absent rather than approximated.
+// Shared-everything thread switching is not implemented (#12); resume drives
+// one generator, while JSPI suspension is represented by the bridge.
 
 import { assert_ } from "../cabi/trap.ts";
 import {
@@ -37,25 +34,15 @@ type ThreadState = "running" | "suspended" | "waiting" | "done";
 
 export class Thread implements SchedulableThread {
   /**
-   * Per-thread context slots (definitions.py `Thread.storage`, line 323 —
-   * initialised `[0,0]`). `canon_context_{get,set}` (lines 2348/2358) read and
-   * write *this*, not per-task state: two threads of the same task have
-   * independent context. wit-bindgen 0.60 keeps its async task pointer in
-   * slot 0.
-   *
-   * Slots are plain JS numbers: a `context.set` of an i64 value above
-   * 2^53-1 would lose precision. Moot while memory64/threads support is
-   * deferred (issue #12) — revisit this when that issue's closure lands.
+   * Per-thread slots for `canon_context_get` / `canon_context_set`, not
+   * task-shared state. Number storage is for the supported i32 context;
+   * full-width i64 context would need a different representation.
    */
   readonly storage: number[] = [0, 0];
 
   /**
-   * The FACT sync-call bracket stack for THIS activation.
-   *
-   * `enter-sync-call` pushes and `exit-sync-call` pops; FACT emits both from
-   * the same activation, so the activation is the continuity that makes this a
-   * stack. See the note on `Task.syncCallStack` for why per-task was not
-   * enough.
+   * FACT brackets belong to the activation that emitted enter-sync-call and
+   * exit-sync-call. A task can own several threads, so this is not task-shared.
    */
   // deno-lint-ignore no-explicit-any
   readonly syncCallStack: any[] = [];
@@ -64,12 +51,8 @@ export class Thread implements SchedulableThread {
   index: number | null = null;
 
   /**
-   * definitions.py `Thread.cancellable` — set at each block point, cleared
-   * while the thread runs. The reference evaluates it as a live predicate
-   * (`cancellable = lock_available` in the callback loop, line 2167), so a
-   * thread that is not parked is never a `request_cancellation` candidate;
-   * clearing on resume gives the same answer for the only shape that differs
-   * (a running implicit thread that still holds the exclusive slot).
+   * Cancellability of the current park, cleared on resume. Callback lock
+   * availability is checked separately by `Task.implicitThreadCancellable`.
    */
   cancellable = false;
 
@@ -100,12 +83,12 @@ export class Thread implements SchedulableThread {
     return this.#state === "done";
   }
 
-  /** definitions.py `Thread.ready` (line 334). */
+  /** definitions.py `Thread.ready`. */
   ready(): boolean {
     return this.waiting() && this.#readyFunc !== null && this.#readyFunc();
   }
 
-  /** definitions.py `Thread.start_waiting_internal` (line 350). */
+  /** definitions.py `Thread.start_waiting_internal`. */
   #startWaiting(readyFunc: () => boolean): void {
     assert_(!this.waiting() && this.#readyFunc === null);
     this.#readyFunc = readyFunc;
@@ -113,7 +96,7 @@ export class Thread implements SchedulableThread {
     this.#store.startWaiting(this);
   }
 
-  /** definitions.py `Thread.stop_waiting_internal` (line 355). */
+  /** definitions.py `Thread.stop_waiting_internal`. */
   #stopWaiting(cancelled: Cancelled): void {
     assert_(this.waiting() && this.#readyFunc !== null);
     assert_(
@@ -125,20 +108,12 @@ export class Thread implements SchedulableThread {
     this.#store.stopWaiting(this);
   }
 
-  /** definitions.py `Thread.resume_later` (line 361). */
+  /** definitions.py `Thread.resume_later`. */
   resumeLater(): void {
     assert_(this.suspended(), "resume_later on a non-suspended thread");
     this.#startWaiting(() => true);
   }
 
-  /**
-   * definitions.py `Thread.resume` (line 366): run the body until it blocks
-   * again or finishes.
-   *
-   * The reference's loop over `switch_to` targets is omitted (see the module
-   * header). What remains is: leave the waiting list if we were on it, become
-   * the current thread, and step the generator with the cancelled flag.
-   */
   /** Pending `awaitValue` promise, if this thread is parked on one. */
   awaiting: Promise<unknown> | null = null;
 
@@ -151,37 +126,16 @@ export class Thread implements SchedulableThread {
     this.awaiting = null;
     this.#store.awaiting.delete(this);
     this.#state = "suspended";
-    // Not a bracketed resumption: post-CM#705 (definitions.py @ 2f13265)
-    // `Store.tick` resumes a ready thread with no enter/leave bracket at all,
-    // and this path — the same thread body, woken by a Promise instead of a
-    // ready-condition — matches it.
-    //
-    // What the catch preserves is polyengine's per-instance poisoning, which
-    // must be MARKER-recorded here specifically: a trap delivered as an
-    // `awaitValue` rejection is how EVERY guest trap in a suspended
-    // activation arrives under jspi (pin (e)), and if it unwound silently the
-    // second call of `builtin-trap-poisons-instance.wast` would re-run the
-    // guest and report "cannot drop busy stream" where the suite demands the
-    // poisoned-instance "cannot enter component instance".
-    //
-    // Capability signals do not poison, for the same reason as in `tick`:
-    // they mark the RUNTIME incomplete, not the component faulted.
+    // Remove awaiting membership before running code that can re-park, so
+    // overlapping drivers cannot consume this settlement twice.
     const inst = this.task.inst;
-    // A poisoned instance's parked segments never run again: this settle
-    // belongs to an activation that was in flight when a SIBLING activation
-    // trapped (#66 retired the handle tables). Resuming would re-enter the
-    // corpse, and asserting turned one legible trap into an assert cascade
-    // (the classic double-fault shape: `list too long`, then this assert as second
-    // victim). Retire quietly: the abandoned call's own driver reports, via
-    // its deadlock trap naming the export.
+    // Retire late tails of poisoned instances without executing their bodies.
     if (isInstancePoisoned(inst)) return;
     try {
       this.#resumeInternal(value, failure);
     } catch (e) {
       if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
-        // Retire the poisoned table's stream/future ends so parked host peers
-        // settle instead of hanging (#66), and record the marker — the whole
-        // entry-refusal mechanism since #251's re-key.
+        // Rejected JSPI activations poison just like synchronous failures.
         notifyInstancePoisoned(
           inst as unknown as { handles: Iterable<unknown> },
           e,
@@ -191,6 +145,7 @@ export class Thread implements SchedulableThread {
     }
   }
 
+  /** `Thread.resume`: run until the next block or completion. */
   resume(cancelled: Cancelled = CANCELLED_FALSE): void {
     assert_(
       !this.running() && !this.done(),
@@ -231,10 +186,8 @@ export class Thread implements SchedulableThread {
     const req = step.value;
     this.cancellable = req.cancellable;
     if (req.awaitValue !== undefined) {
-      // Parked on a Promise, not on a scheduler condition. The driving loop
-      // owns it from here (exec/boundary.ts `drive`); parking through
-      // `noteAwaiting` arms the eager settle tracking the scheduler's
-      // phantom-state gate depends on (see `Store.settled`).
+      // Promise parks are driver-owned, with eager settlement tracking to
+      // order their bookkeeping before later scheduler ticks.
       this.#state = "suspended";
       this.awaiting = req.awaitValue;
       this.#store.noteAwaiting(this, req.awaitValue);
@@ -250,18 +203,8 @@ export class Thread implements SchedulableThread {
   }
 
   /**
-   * definitions.py `Thread.wait_until` (line 396), as a generator-side helper.
-   *
-   * Call it from a thread body with `yield*`:
-   *   `const cancelled = yield* thread.waitUntil(() => cond, true);`
-   *
-   * Deviation from the reference, deliberate: the reference may return
-   * immediately when `ready_func()` already holds
-   * (`if ready_func() and not DETERMINISTIC_PROFILE and random.randint(0,1)`).
-   * We always take the blocking path, i.e. we behave as the reference's
-   * `DETERMINISTIC_PROFILE`. Blocking-then-immediately-ready is observably
-   * equivalent (the scheduler will find this thread ready on the next
-   * candidate scan) and it removes a coin flip from every wait.
+   * Generator form of `Thread.wait_until`; call with `yield*`. Uses the
+   * reference's deterministic-profile blocking path even if already ready.
    */
   *waitUntil(
     readyFunc: () => boolean,
@@ -269,27 +212,21 @@ export class Thread implements SchedulableThread {
   ): Generator<BlockRequest, Cancelled, Cancelled> {
     assert_(this.running(), "waitUntil on a non-running thread");
     if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
-    // definitions.py `ready_or_cancelled` (line 369): a cancel that arrived
-    // while this task was not cancellable (parked as `pending-cancel`) makes
-    // the thread ready on its own — otherwise the wakeup is lost until some
-    // unrelated event happens to satisfy `readyFunc`. The reference's
-    // `cancellable()` is a live predicate; ours is the static flag AND
-    // `Task.implicitThreadCancellable` (the "lock is free" conjunct the
-    // callback loop's `lock_available` supplies there).
+    // Pending cancellation is itself a wakeup, but the implicit callback
+    // thread cannot receive it while another thread holds exclusivity.
     const readyOrCancelled = () =>
       readyFunc() ||
       (cancellable && this.task.hasPendingCancel() &&
         (this !== this.task.implicitThread ||
           this.task.implicitThreadCancellable()));
     const cancelled = yield { readyFunc: readyOrCancelled, cancellable };
-    // AFTER the block (line 372): converts a plain wakeup taken through the
-    // pending-cancel disjunct into Cancelled.TRUE, and wins over any event
-    // that became pending in the meantime.
+    // As in Thread.wait_until, pending cancellation wins over a ready event
+    // after the block as well as before it.
     if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
     return cancelled;
   }
 
-  /** definitions.py `Thread.suspend` (line 390). */
+  /** definitions.py `Thread.suspend`. */
   *suspend(
     cancellable: boolean,
   ): Generator<BlockRequest, Cancelled, Cancelled> {
@@ -299,7 +236,7 @@ export class Thread implements SchedulableThread {
     return cancelled;
   }
 
-  /** definitions.py `Thread.yield_` (line 405): `wait_until(lambda: True)`. */
+  /** definitions.py `Thread.yield_`: wait with an always-ready predicate. */
   *yield_(cancellable: boolean): Generator<BlockRequest, Cancelled, Cancelled> {
     return yield* this.waitUntil(() => true, cancellable);
   }

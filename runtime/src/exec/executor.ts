@@ -6,7 +6,7 @@
 //   - formatVersion validation (via plan loader), fail fast
 //   - strict initializer order; semantics per wasmtime GlobalInitializer
 //   - instantiate-time (not call-time) failure for unsupported trampolines /
-//     ops (milestone-aware, contracts/intrinsics.md)
+//     ops (contracts/intrinsics.md)
 //   - component hash verification against plan.component
 
 import type { ComponentValue, FuncType, ValType } from "../cabi/types.ts";
@@ -81,8 +81,8 @@ const SUSPENDABLE_TRACE = (() => {
  * `{ "ns:pkg/iface": { f: (…) => … } }`.
  *
  * Leaf values by import kind:
- *   - `func`     — a JS function; arguments/results are host-shaped
- *                  component values (contracts/descriptor-ir.md).
+ *   - `func`     — a JS function using raw component values, not facade
+ *                  conventions (contracts/descriptor-ir.md).
  *   - `resource` — a `HostResourceType` (see `hostResourceType`).
  *   - `instance` — a plain object; only its leaves are ever read.
  *   - `module`   — not supported (see `InstantiateModule::Import` below).
@@ -127,30 +127,20 @@ export interface InstantiateInput {
   /** Verify plan.component.sha256 against componentBytes (default true). */
   verifyHash?: boolean;
   /**
-   * Opt in to JSPI-backed suspension (docs/architecture.md §6 role 1-3).
-   *
-   * Off by default, and deliberately so: in this mode every lifted export
-   * returns a Promise (empirical fact (e) — `WebAssembly.promising` always
-   * does), which is an API-shape change. Ignored on an engine without JSPI,
-   * where every blocking site keeps raising the precise `NeedsJspi` it raises
-   * today (the browser-matrix degradation path; see `just browsers`).
+   * Override automatic JSPI selection. By default, the plan's blocking sites
+   * or a suspending-marked host import enable JSPI when the engine supports
+   * it. `false` forces plain mode; `true` requests JSPI even without that
+   * evidence. Unsupported engines stay plain and blocking sites raise
+   * NeedsJspi. Promising-wrapped raw exports return Promises.
    */
   jspi?: boolean;
   /**
    * A plan already converted by `loadPlan`, used instead of re-loading.
    *
-   * Why this exists: the conventions layer (`src/embedder/`) must have the
-   * per-instantiation `ResourceTypeInfo` identity tokens and the converted
-   * types table *before* instantiation begins, because host imports genuinely
-   * fire DURING it — a core module's `start` function runs inside
-   * `runInitializers`, and real guests do call imports from it (Go's runtime
-   * calls `monotonic-clock.now()` from `schedinit`). Reading them off the
-   * returned `ComponentHandle.loadedPlan` is therefore too late. Handing the
-   * same `LoadedPlan` in keeps the tokens identical on both sides.
-   *
-   * Contract: one `LoadedPlan` per instantiation (tokens must be fresh per
-   * component instance), and `loadedPlan.wire` must be `plan`. Both are
-   * checked.
+   * The facade needs resource tokens before core start functions can invoke
+   * its imports. Sharing this object keeps both sides' type identities equal.
+   * Use a fresh LoadedPlan per instantiation; only `loadedPlan.wire === plan`
+   * is checked here, not whether the LoadedPlan was previously used.
    */
   loadedPlan?: LoadedPlan;
   /**
@@ -159,7 +149,7 @@ export interface InstantiateInput {
    * An async-typed export whose task parks on something only a *later* call
    * can ready — a `future.read` on an intra-component future — is not a
    * deadlock: definitions.py `canon_lift` runs its trapping driving loop only
-   * `if not ft.async_` (line 2189), leaving the driving to the embedder. So
+   * `if not ft.async_`, leaving the driving to the embedder. So
    * by default such an export's Promise simply stays pending. Setting this
    * restores the trap, which is what a *blocking* call wants — wasmtime's
    * `run_concurrent_trap_on_idle` behind `[Typed]Func::call_async`.
@@ -192,18 +182,10 @@ export interface ComponentHandle {
    */
   omittedExports: Map<string, string>;
   /**
-   * The plan as loaded for THIS instantiation.
-   *
-   * Exposed for the conventions layer (`src/embedder/`), which needs the two
-   * things only the executor's own `loadPlan` call can supply: the per-instance
-   * `ResourceTypeInfo` identity tokens (`resourceTokens`) — the same objects
-   * the `own`/`borrow` types in every signature point at, and the only route to
-   * a resource's destructor for a *host-initiated* drop of a guest handle
-   * (definitions.py `canon_resource_drop` runs `rt.dtor(rep)`; the host holds
-   * reps, never table indices, so there is no handle to drop through) — and the
-   * converted `types` table it reads function signatures from.
-   *
-   * Introspection only: mutating it is undefined behaviour.
+   * This instantiation's converted types and resource identity tokens,
+   * including destructor wiring for host-held reps. May be supplied by the
+   * facade through InstantiateInput.loadedPlan. Introspection only: do not
+   * mutate it after instantiation.
    */
   loadedPlan: LoadedPlan;
 }
@@ -226,9 +208,8 @@ const moduleCache = new WeakMap<WirePlan, ModuleCacheEntry>();
 export async function instantiateComponent(
   input: InstantiateInput,
 ): Promise<ComponentHandle> {
-  // Re-load per instantiation: resource identity tokens must be fresh per
-  // component instance (descriptor-ir.md open item on ResourceTypeInfo).
-  // Re-load unless the caller already did (see `InstantiateInput.loadedPlan`).
+  // Fresh resource identities per instantiation, unless the caller supplied
+  // its own fresh conversion (InstantiateInput.loadedPlan).
   const loaded = input.loadedPlan ?? loadPlan(input.plan);
   if (loaded.wire !== input.plan) {
     throw new PlanError(
@@ -300,16 +281,8 @@ class Executor {
   /** The single in-flight FACT `prepare-call` state (intrinsics/fact_calls.ts). */
   readonly preparedCall: { current: PreparedCall | null } = { current: null };
   /**
-   * One `LiveMemory` per `RuntimeMemoryIndex`, memoized.
-   *
-   * definitions.py's `LiftOptions.equal` (line 643) compares memories by
-   * *identity* (`lhs.memory is rhs.memory`), and `canon_task_return` requires
-   * the options at the `task.return` site to equal the lifted export's. A
-   * fresh wrapper per `resolveOptions` call would make that comparison fail
-   * for every component that actually uses a memory — it only ever passed
-   * before because the async fixtures in play had `memory: null` on both
-   * sides. Memoizing restores wasmtime's semantics, where the comparison is
-   * on `RuntimeMemoryIndex`.
+   * One LiveMemory per RuntimeMemoryIndex. LiftOptions.equal compares memory
+   * identity, so task.return and its lifted export must share this wrapper.
    */
   readonly liveMemories = new Map<number, LiveMemory>();
   /** Set by the entry/import wrapping sites; checked in `finish`. */
@@ -347,30 +320,13 @@ class Executor {
   readonly factStartScopes: FactStartScope[] = [];
 
   /**
-   * Core functions exported by a core instance that imports at least one
-   * `Suspending`-wrapped trampoline (`trampolineCanBlock`, per DECLARATION —
-   * the async form of a copy built-in never blocks, is not wrapped and does
-   * not mark) or a function from an already-marked instance. FACT consults
-   * this to decide whether a callee needs its own `promising` entry.
-   *
-   * WRAPPED IMPLIES MARKED, and must: jspi pin (c) traps a Suspending import
-   * called from a non-promising activation unconditionally, plain-value path
-   * included (see `importValue`).
-   *
-   * Instance granularity is still an over-approximation — a module exporting
-   * both a blocking and a non-blocking function marks both — and so is the
-   * marking of `async-start-call`/`subtask-cancel` importers, whose wrap
-   * exists for a park that often does not happen. Neither produces wrong
-   * answers on the official corpus, because a needlessly-wrapped callee no
-   * longer changes observable state: `async-start-call` parks the caller
-   * until the callee is determinate (fact_calls.ts), reconstructing the
-   * reference's synchronous run-to-first-block across the engine's microtask
-   * hops (jspi pin (j)) — so an eagerly-completing callee still reports
-   * RETURNED rather than STARTED.
-   *
-   * Per-FUNCTION reachability (a call-graph pass in the translator, where
-   * wasmparser already is) would still shrink the set — as a wrapping-cost
-   * optimization now, not a correctness need.
+   * Core exports needing a promising entry when called through FACT.
+   * Classification is transitive and module-wide, not per-function
+   * reachability. Blocking imports mark guest and adapter exports; wrap-only
+   * imports mark guest exports but only propagate wrapFuncs through adapters.
+   * A Suspending import needs a promising activation even on a plain-value
+   * return. FACT's determinacy park preserves run-to-first-block results
+   * across that entry's mandatory microtask hop.
    */
   readonly suspendableFuncs = new WeakSet<object>();
 
@@ -410,32 +366,9 @@ class Executor {
     this.hostImports = input.imports ?? {};
     this.verifyHash = input.verifyHash ?? true;
     this.trapOnIdle = input.trapOnIdle ?? false;
-    // AUTO-DETECTION IS ON by default. `chooseMode` picks jspi when the
-    // embedder opts in OR when the plan needs suspension: a stackful async
-    // lift, or a genuinely blocking built-in — classified per DECLARATION
-    // (`trampolineNeedsSuspension`; the async form of a copy/cancel built-in
-    // never blocks and is not evidence). An explicit `jspi: false` still
-    // forces plain, and a sync-only component never detects as needing
-    // suspension, so the synchronous API is untouched (pinned by
-    // bridge_test "plain mode: lifted exports still return values" and the
-    // planNeedsSuspension(hello) === false pin beside it).
-    //
-    // The detection-on failure inventory that kept this off is CLOSED — all
-    // suspension sites lit, zero failures over the full corpus. What
-    // protects each closed class:
-    //   * STARTED-vs-RETURNED / eager-callee wrapping (big-interleaving's
-    //     expect-codes, cross-abi's six): per-declaration classification +
-    //     `async-start-call`'s determinacy park — pinned by
-    //     tests/jspi/cross_abi_differential_test.ts (KNOWN_DIVERGENT is
-    //     EMPTY and asserted empty) and fastpath_hop_test.ts (pin (j): the
-    //     Suspending fast path still defers the continuation);
-    //   * park/resume of a sync-lowered caller: handshake_test.ts pins;
-    //   * stall-vs-trap verdicts (incl. the YIELD-spin starvation and the
-    //     stale-race guard in exec/boundary.ts): deadlock_test.ts pins;
-    //   * trap poisoning through rejections (`Thread.resumeWith` bracket)
-    //     and start-function suspension mapping: the conformance suite's
-    //     builtin-trap-poisons-instance / dont-block-start files, green
-    //     under detection.
+    // Explicit false wins over plan/import evidence; unsupported engines
+    // remain plain (chooseMode). Declaration-level classification distinguishes
+    // a blocking operation from its nonblocking async form.
     this.suspensionMode = chooseMode(
       input.jspi,
       // Auto-detection evidence, two independent sources: the PLAN (a
@@ -472,19 +405,9 @@ class Executor {
   }
 
   async compileModules(): Promise<void> {
-    // Reuse compiled modules across instantiations of the same plan.
-    // Fresh-instance-per-case suite runs re-instantiate one component
-    // thousands of times, and recompiling costs real time per instantiation
-    // even when V8's byte-keyed module dedup hits (it still re-hashes every
-    // byte — ~7 ms for a 14 MB component). `WebAssembly.Module` is immutable
-    // and freely instantiable many times, so reuse cannot change semantics
-    // PROVIDED the compile inputs are the same objects: a hit requires the
-    // plan (WeakMap key), the component bytes, and every adapter buffer to
-    // be identical by reference. In-place *content* mutation of a reused
-    // buffer is caught before this runs by `verifyComponent`'s sha256 check
-    // whenever `verifyHash` is on (the default); a caller who disables that
-    // and mutates reused buffers gets stale modules — the same caller error
-    // as mutating them mid-compile today.
+    // Reuse immutable modules when plan, component bytes and adapter buffers
+    // match by identity. Callers must not mutate reused inputs. verifyHash
+    // checks component content, not adapter content or plan mutations.
     const cached = moduleCache.get(this.wire);
     if (
       cached !== undefined &&
@@ -499,14 +422,8 @@ class Executor {
     }
     const compiled = Promise.all(this.wire.modules.map((m, i) => {
       if (m.kind === "embedded") {
-        // Defense-in-depth (polyengine#187): the loader now refuses
-        // negative/non-integer `offset`/`len` at load time (loader.ts
-        // `validateModule`), but a negative offset silently slices the
-        // *wrong* bytes from the tail of `componentBytes`
-        // (`Uint8Array.slice` treats negative indices as relative to the
-        // end) rather than tripping the old upper-bound-only check —
-        // belt-and-braces here in case a `LoadedPlan` ever reaches this
-        // path without going through `loadPlan`.
+        // Recheck supplied LoadedPlans before slicing: negative indices would
+        // select bytes from the tail instead of failing bounds validation.
         if (
           !Number.isInteger(m.offset) || m.offset < 0 ||
           !Number.isInteger(m.len) || m.len < 0
@@ -606,18 +523,8 @@ class Executor {
             );
           }
           const importObject: WebAssembly.Imports = {};
-          // Per-CORE-INSTANCE suspendability. `planNeedsSuspension` answers
-          // the question for a whole component; FACT needs it for the specific
-          // callee it is about to invoke, because that is what decides whether
-          // the callee must be `promising`-wrapped (see `mkCalleeTask`).
-          //
-          // The trampoline declarations cannot answer it: `sync-start-call`
-          // and `async-start-call` carry no `instance` field (verified against
-          // real plans). What CAN answer it is right here -- the import list
-          // of the module being instantiated. A core instance whose imports
-          // include a blocking trampoline is one whose code can reach a
-          // suspension point; every function it exports is therefore
-          // potentially-blocking, and everything else is not.
+          // Collect suspendability from this core module's imports. FACT
+          // needs callee-specific evidence, not the whole plan's mode choice.
           this.sawBlockingImport = false;
           this.sawWrapImport = false;
           // Which component instance this core module belongs to — the plan
@@ -627,24 +534,13 @@ class Executor {
           this.#declaringInstance = init.instance === null
             ? null
             : this.componentInstance(init.instance);
-          // ISSUE #88: core wasm permits two imports with the same
-          // (module, field) pair (trusted wasmtime-environ 47.0.3 info.rs
-          // :438-445 gives one flat positional CoreDef per import slot, but
-          // WebAssembly.Module.imports(module) and the JS import object are
-          // both keyed by (module, field) name, not by slot). If two slots
-          // share a name and resolve to different values, the second object
-          // write silently wins and BOTH slots receive the last value — the
-          // JS API cannot express per-slot values for duplicate names. Detect
-          // this here and fail loudly rather than wire the wrong function in
-          // silently; identical values are safe (the API cannot distinguish
-          // the slots in that case, so nothing is actually lost).
+          // Wasm imports are positional; the JS import object is name-keyed.
+          // Duplicate names can only be represented when their resolved values
+          // are identical. Reject conflicts instead of overwriting a slot.
           const seenAt = new Map<string, { index: number; value: unknown }>();
           declared.forEach((imp, i) => {
             const before = this.sawBlockingImport;
             const value = this.importValue(init.args[i]);
-            // Standing probe (CE_COPY_TRACE): which import made this core
-            // instance suspendable — the first question to ask whenever a
-            // FACT callee is promising-wrapped that should not be.
             if (!before && this.sawBlockingImport && SUSPENDABLE_TRACE) {
               console.error(
                 `[suspendable] module ${init.module}: import ` +
@@ -701,16 +597,9 @@ class Executor {
             throw e;
           }
           if (this.sawBlockingImport || this.sawWrapImport) {
-            // Wrap-only evidence gives a GUEST module its own `promising`
-            // entry (jspi pin (c)) but leaves a FACT adapter
-            // (`instance: null`) out of `suspendableFuncs`: the adapter's
-            // pass-through export is what `*-start-call` receives as a LIFT
-            // CALLEE, and promising-wrapping an eagerly-completing callee is
-            // the STARTED-vs-RETURNED divergence `trampolineCanBlock`
-            // (jspi/bridge.ts) warns about — measured as
-            // test/async/drop-subtask.wast:140 under POLYENGINE_SCHED_SEED=1.
-            // Either way the evidence PROPAGATES, in its own tier, so the
-            // guest importing that adapter export still gets marked.
+            // Wrap-only evidence requires promising guest entries, but must
+            // not promote adapter pass-through lift callees. Propagate the
+            // tier so guests importing those adapters still get marked.
             const promising = this.sawBlockingImport || init.instance !== null;
             for (const exported of Object.values(instance.exports)) {
               if (typeof exported !== "function") continue;
@@ -773,8 +662,7 @@ class Executor {
         }
         case "resource": {
           // Wire the dtor + implementing instance into every concrete
-          // resource-table token for this defined resource
-          // (tolerate-if-unreferenced; plan-format.md open item).
+          // resource-table alias for this defined resource.
           const dtor = init.dtor === null
             ? null
             : this.resolveFunction(init.dtor, `resource ${init.index} dtor`);
@@ -789,32 +677,11 @@ class Executor {
               const token = this.loaded.resourceTokens[tableIndex];
               token.impl = inst;
               token.dtor = dtor;
-              // #85/#160: the host-initiated-drop entry. A host-initiated
-              // drop is a full canonical LIFT of the dtor (definitions.py
-              // `canon_resource_drop`, line 2319), so it is built here with
-              // the same harness every lifted export uses — that is what
-              // gives the dtor's activation a real Task/Thread, and what
-              // releases the impl instance's entry bracket at the first park
-              // instead of holding it across the whole activation (#160).
-              //
-              // The `promising` entry wrapping (docs §7: in jspi mode a dtor
-              // may legally reach a `Suspending` import) is applied INSIDE
-              // `createLiftedFunction` per `suspensionMode`, and only when
-              // the dtor is suspension-capable (`suspendableFuncs`: its core
-              // instance imports a blocking trampoline). A non-suspendable
-              // dtor cannot legally suspend, so the plain entry is exact for
-              // it and avoids `promising`'s unconditional microtask hop
-              // (jspi pin (j)). The hop no longer risks a drop-then-call
-              // trap either way — the bracket is released before the drive,
-              // and the hop-quiescence entry gate covers the sequence — but
-              // the plain path stays the cheaper and more deterministic one.
-              //
-              // `WebAssembly.promising` rejects non-wasm callables (a dtor
-              // CoreDef can resolve to a JS trampoline) with a TypeError;
-              // fall back to the plain entry, where `awaitCore` still parks
-              // on a returned Promise. Deliberately does NOT set
-              // `wrappedEntries`: `finish()`'s invariant inventories the two
-              // primary wrapping sites; this is an auxiliary entry.
+              // Canonical lifted destructor: createDtorEntry supplies its
+              // Task/Thread so the store can service suspended completion.
+              // Use JSPI only for suspendable dtors, avoiding an unnecessary hop.
+              // A JS-trampoline dtor cannot be promising-wrapped; retry plain.
+              // This auxiliary entry is outside wrappedEntries' inventory.
               const suspendable = dtor !== null &&
                 this.suspensionMode === "jspi" &&
                 this.suspendableFuncs.has(dtor as unknown as object);
@@ -884,13 +751,8 @@ class Executor {
   /**
    * Materialize one plan export.
    *
-   * The result is an explicit discriminated union rather than
-   * `unknown | undefined`: an earlier `if (built !== undefined)` filter meant
-   * *any* path that happened to yield `undefined` removed the export from the
-   * component's surface with no diagnostic anywhere. Only `type` exports are
-   * legitimately absent from the runtime surface, and they say so with a
-   * reason that is recorded on the handle (`omittedExports`); everything else
-   * either produces a value or throws.
+   * Only type exports may be omitted, with a recorded reason. An undefined
+   * value is not an omission; every other export must materialize or throw.
    */
   buildExport(
     exp: WireExport,
@@ -914,20 +776,10 @@ class Executor {
           // Async-typed exports only; see `InstantiateInput.trapOnIdle`.
           trapOnIdle: this.trapOnIdle,
         });
-        // Every SYNC-TYPED export additionally carries a plain-entered
-        // variant (see SYNC_ENTRY, contracts/embedder-api.md §"Functions and async"):
-        // in jspi mode the promising-wrapped entry above necessarily returns
-        // a Promise, which some host contexts cannot use however promptly it
-        // resolves — a JS class constructor cannot await it at all, and the
-        // embedder's `sync()` adapter exists to ask for the synchronous form
-        // of any sync-typed export. Async-typed exports have no synchronous
-        // form by definition and get none.
-        //
-        // Deliberately NOT noteEntry()-recorded — this is the documented
-        // exception to the bridge invariant (entries wrapped iff imports
-        // wrapped), safe because a synchronously-completing activation never
-        // reaches the Suspending seam. sync() extends the exception from
-        // constructors to all sync entries.
+        // SYNC_ENTRY bypasses promising for sync() and resource constructors.
+        // It must not reach a Suspending import, even one returning a plain
+        // value. Async-typed exports have no sync form. This auxiliary entry
+        // is outside noteEntry's primary wrapping inventory.
         if (this.suspensionMode === "jspi" && !ft.async) {
           (value as unknown as Record<PropertyKey, unknown>)[
             SYNC_ENTRY
@@ -941,11 +793,8 @@ class Executor {
             trapState: this.trapState,
             syncCallStack: this.syncCallStack,
             allInstances: () => this.componentInstances.values(),
-            // sync() arm 2: a synchronous caller cannot be deferred by the
-            // hop-quiescence gate, so it refuses (SyncEntryBusy) instead.
-            // This deliberately changes constructor behaviour: the
-            // constructor sync entry previously bypassed the gate
-            // entirely, a latent lift-corruption window.
+            // A synchronous caller cannot await entry-hop quiescence;
+            // refuse with SyncEntryBusy instead of bypassing the gate.
             refuseOnEntryHops: true,
           });
         }
@@ -1037,13 +886,8 @@ class Executor {
    */
   importValue(def: WireCoreDef): Importable {
     const value = this.resolveCoreDef(def);
-    // Suspendability is TRANSITIVE. FACT does not put blocking trampolines in
-    // the guest's own module: it generates an adapter module that imports
-    // them, and the guest imports the adapter's exported function. So a core
-    // instance is suspendable if it imports a blocking trampoline OR imports a
-    // function from an already-suspendable instance. Missing this closure is
-    // what made `async-calls-sync`'s sync-lifted middle look non-blocking and
-    // broke the handshake pins.
+    // Propagate both evidence tiers through imported exports, including FACT
+    // adapters between a guest and the actual blocking trampoline.
     if (
       typeof value === "function" &&
       this.wrapFuncs.has(value as unknown as object)
@@ -1063,13 +907,8 @@ class Executor {
       return value;
     }
     const decl = this.wire.trampolines[def.index];
-    // Per-DECLARATION blocking classification (jspi/bridge.ts): the async
-    // form of a copy/cancel built-in never blocks, so importing one neither
-    // needs a `Suspending` wrap nor marks the importer suspendable. The
-    // kind-only version of this test pulled every async-form consumer into
-    // `suspendableFuncs`, promising-wrapping FACT callees that complete
-    // eagerly — the STARTED-vs-RETURNED and missed-synchronous-cancellation
-    // divergences big-interleaving-test.wast asserts against.
+    // Classify the declaration, not just its kind. Blocking and async forms
+    // differ; trampolineCanBlock also includes JSPI determinacy parks.
     if (decl === undefined) return value;
     const optionsAsync = (i: number) =>
       this.wire.canonicalOptions[i]?.async === true;
@@ -1094,25 +933,9 @@ class Executor {
       ) as unknown as Importable;
     }
     if (!trampolineCanBlock(d, optionsAsync)) return value;
-    // WRAPPED IMPLIES MARKED. Anything handed to wasm as a
-    // `WebAssembly.Suspending` makes its importer's frames suspendable, so
-    // that importer's entries must be `promising`-wrapped — jspi pin (c) is
-    // unconditional: a Suspending import called from a non-promising
-    // activation traps EVEN WHEN it produces its value synchronously
-    // (measured: "trying to suspend without WebAssembly.promising"; with an
-    // outer promising entry and JS frames in between, "trying to suspend JS
-    // frames"). `async-start-call` and `subtask-cancel` used to be wrapped
-    // WITHOUT marking, on the grounds that a needlessly-promising callee
-    // reported STARTED where the reference reports RETURNED. That reason has
-    // expired: `async-start-call`'s determinacy park (intrinsics/fact_calls.ts)
-    // reconstructs the reference's run-to-first-block across the hop, which is
-    // what the note above `suspendableFuncs` already records as the mitigation.
-    // What the omission cost was a hard trap in the one shape where the
-    // importer had no other blocking import: test/async/reentrance.wast:429,
-    // whose `$MC` imports only `b`'s async-start-call, `waitable-set.new` and
-    // `waitable.join` — it trapped with SuspendError instead of reaching the
-    // deadlock verdict. The two tiers (`blockingFuncs`/`wrapFuncs`) keep the
-    // marking from over-reaching — see the post-instantiate marking.
+    // Every Suspending wrapper contributes evidence, even if it returns a
+    // plain value. Preserve the blocking/wrap-only distinction when marking
+    // the importer (see suspendableFuncs and post-instantiate propagation).
     if (trampolineNeedsSuspension(d, optionsAsync)) {
       this.sawBlockingImport = true;
     } else {
@@ -1138,7 +961,7 @@ class Executor {
       case "trampoline":
         return this.trampoline(def.index);
       case "unsafe-intrinsic":
-        // plan v1: wasmtime compile-time builtins imported directly by a core
+        // Wasmtime compile-time builtins imported directly by a core
         // module. `context.{get,set}` become host functions over the *current
         // thread's* context slots (definitions.py `Thread.storage`); every
         // other symbol fails here, at instantiate time.
@@ -1249,10 +1072,7 @@ class Executor {
         return this.componentInstance(instance);
       },
       errorContextTableInstance: (i) => {
-        // plan v3: the error-context tables' own index space
-        // (`TypeComponentLocalErrorContextTableIndex`). Loud on absence — the
-        // predecessor of this accessor borrowed the *resource*-table mapping
-        // and could answer with a different instance's table (polyengine#89).
+        // TypeComponentLocalErrorContextTableIndex, not a resource-table index.
         const instance = this.loaded.errorContextTableInstances[i];
         if (instance === undefined) {
           throw new PlanError(
@@ -1315,26 +1135,12 @@ class Executor {
     const ft = this.funcType(decl.type, `import '${label}'`);
     const opts = this.resolveOptions(decl.options);
     const suspendable = isSuspending(value);
-    // cancellation discard (contracts/embedder-api.md §"Functions and async"): does this import
-    // opt out of cancel-discard? Unlike `suspendable` above, this needs no
-    // executor-state detour — the brand is consumed by `createLoweredImport`
-    // itself (it only decides which `onCancel` the lowered import installs, not
-    // whether the CoreFn gets wrapped), so nothing downstream has to read a
-    // brand off a replaced function identity.
+    // Cancellation marks are consumed inside createLoweredImport, before
+    // trampoline wrappers replace the function identity.
     const deferCancel = isDeferCancel(value);
-    // abortable() (same section): does this import want a per-call `AbortSignal`?
-    // Read exactly like `deferCancel` above and for the same reason — the
-    // brand is consumed inside `createLoweredImport`, which mints the
-    // controller and appends the signal itself, so no function identity is
-    // replaced downstream of the read.
     const abortable_ = isAbortable(value);
-    // The Suspending-wrap decision is taken in `importValue`, which sees the
-    // trampoline only AFTER `createTrampoline`'s trap-recording wrapper has
-    // replaced this function's identity — a brand on the CoreFn would die
-    // there (measured: the returned Promise coerced to 0 through the
-    // unwrapped import). Record the decision as executor state instead,
-    // keyed by LoweredIndex; `importValue` runs later on the same call
-    // stack, so the set is populated by construction when it reads.
+    // importValue reads this after createTrampoline wraps the function.
+    // Preserve suspension evidence by LoweredIndex, not function identity.
     if (suspendable) this.suspendableLowerings.add(decl.lowered);
     return createLoweredImport({
       name: label,
@@ -1378,7 +1184,7 @@ class Executor {
   }
 
   /**
-   * Element types of an interned *results tuple* — the `results` field of a
+   * Element types of an interned results tuple — the `resultType` field of a
    * `task-return` trampoline (the shim interns a lifted function's result
    * list as a single tuple type, `intern_results_tuple`).
    */

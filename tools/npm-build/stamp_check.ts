@@ -1,5 +1,4 @@
-// The stamp-path leg of `just test-npm`: proves the `--version` override
-// works as release.yml's prerelease path relies on it — stamping the
+// The stamp-path leg of `just test-npm`: checks the `--version` override stamps the
 // lockstep four while leaving @polyengine/protocol on its own manifest
 // version (contracts/embedder-api.md §"Version canonicalization").
 //

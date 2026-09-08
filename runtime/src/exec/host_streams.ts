@@ -1,72 +1,17 @@
-// Host-side stream and future ends: the minimal embedder surface for the
-// async value types.
+// Host-side stream/future ends over task/streams.ts's shared rendezvous.
+// HostBuffer supplies JS chunks; direct sessions instead use a scoped view
+// of the peer's bytes. The shared object retains identity across lift/lower.
 //
-// ===========================================================================
-// WHY THIS IS SMALL
-// ===========================================================================
+// Host operations return Promises and pump the store when needed. HostActivity
+// registers a wakeup promise while the host retains an end, so waiting for
+// the embedder is not mistaken for component deadlock. Created wrappers keep
+// their writable end across lowers; lifted wrappers give up their readable
+// end on lower and regain it on re-lift (bindOnLower).
 //
-// The rendezvous in `task/streams.ts` never touches linear memory. It only
-// ever calls four methods on whatever buffer it is handed — `read`, `write`,
-// `remain`, `isZeroLength` — and it passes the *shared* stream object around
-// by identity. So a host end needs exactly two new things:
-//
-//   * `HostBuffer`, a sibling of `GuestBuffer` implementing that same
-//     four-method surface over a plain JS array instead of guest memory; and
-//   * a way to park a host read/write until the guest shows up.
-//
-// Everything else is existing machinery. In particular the *value* that
-// crosses the component boundary is the `SharedStreamImpl` itself, so passing
-// a host stream to a guest goes through the ordinary `lowerStream` path
-// (definitions.py `lower_stream`, line 1828 — wrap the shared object in a
-// fresh `ReadableStreamEnd` in the callee's table) and a guest-returned stream
-// arrives as the same kind of object from `liftStream`. No lift/lower code was
-// added for this file.
-//
-// ===========================================================================
-// SCHEDULING
-// ===========================================================================
-//
-// A host read/write that cannot rendezvous immediately parks, exactly as a
-// guest one does, and hands back a Promise. Two cases:
-//
-//   * The guest is still running (it is what will complete the rendezvous).
-//     The host's `onCopyDone` fires synchronously inside the guest's
-//     `stream.read`/`stream.write` trampoline and the Promise resolves.
-//   * The *guest* is the parked side and only the embedder can make progress.
-//     Then `drive()` would otherwise see no ready thread and no outstanding
-//     host call and declare deadlock — correctly, for a component that really
-//     is stuck, but wrongly here. `HostActivity` below registers a
-//     re-arming promise in `store.pendingHostCalls` for as long as the host
-//     RETAINS a way to act, which is precisely the signal `driveAsync`
-//     already understands: "progress is possible, but only after a turn of
-//     the event loop".
-//
-// Retention, stated as the rule the arm implements (#162, embedder-api
-// §"Streams and futures"): the arm is live iff the host holds a retained end, a parked
-// host operation, or an unfinished producer pump. Which ends the host holds
-// follows from where the wrapper came from — a host-CREATED stream keeps its
-// writable end across every lower (only readable ends transfer,
-// definitions.py `lower_stream` line 1828), while a LIFTED one holds just the
-// readable end the guest passed out, so lowering that same object back into a
-// guest (the `identity: async func(s: stream<u8>) -> stream<u8>` round trip)
-// hands the host's last end away and the arm disarms. A later re-lift
-// re-arms. See `bindOnLower` and `HostActivity` for the mechanism.
-//
-// The consequence, stated plainly: an embedder that lowers a host stream into
-// a guest and then never writes to it or drops it will *hang* rather than
-// trap. That is the honest outcome — the component is not deadlocked, the
-// embedder simply has not done its half — and it matches how any other
-// unresolved Promise behaves in JS. That policy is unchanged by deadlock-verdict suppression; what
-// changed is that the claim now EXPIRES with retention, so a store that once
-// round-tripped a stream through the host no longer misreports every later
-// genuine deadlock as this hang.
-//
-// The inverse case is NOT a hang (#66, contracts/embedder-api.md §"Streams and futures"): when the
-// GUEST side dies — a trap poisons the instance holding the peer end — the
-// poisoned table's ends are retired (task/streams.ts
-// `retireInstanceAsyncEnds`), so a parked host operation settles DROPPED-
-// shaped here and the conventions layer rejects it with `PeerTrappedError`.
-// Only embedder negligence hangs; a component fault is always loud.
+// A retained producer that never acts can leave the guest waiting indefinitely.
+// Poisoning instead retires ends still in the failed instance's handle table;
+// the conventions layer distinguishes that retirement from clean stream end.
+// See contracts/embedder-api.md, "Streams and futures".
 
 import { assert_ } from "../cabi/trap.ts";
 import { despecialize } from "../cabi/types.ts";
@@ -94,17 +39,9 @@ import {
 } from "../task/mod.ts";
 
 /**
- * The `inst` a host end presents to the rendezvous. definitions.py compares it
- * against `pending_inst` for the "same instance" restriction — a guard against
- * interleaving two *lifts in one component instance's linear memory*, which is
- * why it exempts number types (definitions.py `none_or_number_type`). A host
- * end has no linear memory, so that restriction can never apply to it: each
- * end gets its OWN sentinel (never equal to a real `ComponentInstanceState`,
- * and never equal to the peer end's), so a host writer and a host reader may
- * rendezvous directly for every element type. One shared sentinel used to
- * stand for "the host" here, which made a post-pass-through host↔host copy of
- * a non-number element type trap as "intra-component" (found by the #54
- * pass-through investigation).
+ * Distinct identity per host end. The reference's same-instance restriction
+ * concerns copies within one guest's memory, not host-to-host copies of
+ * nonnumeric values. Neither sentinel equals a guest or the opposite end.
  */
 function hostEndInstance(role: "read" | "write"): unknown {
   return Object.freeze({ hostEnd: role });
@@ -133,12 +70,8 @@ export class HostBuffer {
     private readonly values: PayloadChunk | null,
     readonly length: number,
   ) {
-    // definitions.py `Buffer.MAX_LENGTH` (:919) is asserted on every buffer
-    // the spec builds (`BufferGuestImpl.__init__`, :938); `GuestBuffer` traps
-    // on it. A host buffer is not guest-visible, so a violation is embedder
-    // misuse rather than a component fault — hence a loud typed JS error and
-    // not a `Trap`. Caught at construction: an over-long host offer would
-    // otherwise silently exceed the spec bound (#97).
+    // Apply Buffer.MAX_LENGTH at the host boundary too. Invalid host capacity
+    // is embedder misuse (RangeError), not a guest Trap.
     if (!Number.isInteger(length) || length < 0) {
       throw new RangeError(
         `host buffer length must be a non-negative integer, got ${length}`,
@@ -192,9 +125,7 @@ export class HostBuffer {
       if (this.#chunks.length === 1 && this.#chunks[0] instanceof Uint8Array) {
         return this.#chunks[0];
       }
-      // Multiple chunks, or a raw-layer plain-array writer: pack. Element
-      // coercion matches Uint8Array.from, which is what the conventions
-      // layer applied to these values before chunks stayed whole.
+      // Pack multiple chunks or a raw-layer plain-array offer into bytes.
       const out = new Uint8Array(this.progress);
       let o = 0;
       for (const c of this.#chunks) {
@@ -214,19 +145,9 @@ export class HostBuffer {
     return out;
   }
 
-  // --- `ByteWindow` (embedder-api.md §"Streams and futures" ("Direct-access byte edges"), polyengine#128) ---
-  //
-  // A host buffer can be the PEER of a direct session on the other end of a
-  // host↔host rendezvous. Which of the two shapes it takes follows from the
-  // direction it was built for, exactly as `read`/`write` above do:
-  //
-  //   * SOURCE (`values !== null`, a parked `write`): the window is a view of
-  //     the offered chunk itself — the stream/future round-trip borrow, scoped to the callback. No
-  //     extra copy at all.
-  //   * DESTINATION (`values === null`, a parked/arriving `read(max)`): there
-  //     is no landing zone to view, so the window is a fresh scratch; the
-  //     marked prefix becomes the delivered chunk (ownership passes with it,
-  //     and `taken()` hands a sole chunk through unsliced).
+  // ByteWindow for a host peer: sources expose the borrowed offered chunk;
+  // destinations allocate scratch whose marked prefix becomes the owned
+  // result. Keep that scratch stable until this callback invocation ends.
 
   /** The synthesized destination window, live for one direct invocation. */
   #scratch: Uint8Array | null = null;
@@ -257,12 +178,8 @@ export class HostBuffer {
       "host direct advance beyond remaining",
     );
     if (this.values === null) {
-      // A callback may mark bytes it never actually looked at the window to
-      // write (nonsense, but the runtime must stay total rather than trip an
-      // internal assertion). The acknowledged prefix is then whatever the
-      // synthesized landing zone held — zeroes — which is the faithful
-      // analogue of the guest-peer case, where it would be whatever the
-      // reader's memory already contained.
+      // Marks without a preceding byteView acknowledge zero-filled scratch,
+      // just as a guest destination acknowledges its existing memory contents.
       const scratch = this.#scratch ?? new Uint8Array(k);
       // Delivered as an owned chunk; `write` is the same call the reference
       // copy would have made, so `remain()`/`taken()` stay consistent.
@@ -278,49 +195,18 @@ export class HostBuffer {
 }
 
 /**
- * Every live `HostActivity` arm, by identity. These are the promises this
- * module parks in `store.pendingHostCalls` purely to say "the embedder may
- * still act"; they are NOT outstanding work, so the host pump must not treat
- * their presence as a reason to keep looping (that is the "activity keeps
- * pendingHostCalls non-empty forever" hazard: a pump whose exit condition is
- * `pendingHostCalls.size === 0` would never exit).
- *
- * The registry and the two predicates over it (`hasRealHostCall`,
- * `storeQuiescent`, imported above as `quiescent`) moved to
- * task/scheduler.ts so that boundary.ts's settlement pump — the OTHER
- * between-calls driver — shares the same classification without an import
- * cycle. Arms are minted here and marked via `markHostActivityArm`.
- */
-
-/**
- * Keeps `store.pendingHostCalls` non-empty while a host end is live, so the
- * driving loop treats "waiting for the embedder" as progress-is-possible
- * rather than deadlock. Re-arms after every notification.
- *
- * RETENTION IS THE LIVENESS RULE (#162, contracts/embedder-api.md §"Streams and futures"). The arm
- * is live iff the host retains a way to act on this shared object: a retained
- * end, a parked host operation, or an unfinished producer pump. The claim it
- * makes to the deadlock verdicts — "the embedder may still act" — therefore
- * *expires*. Three state transitions implement it:
- *
- *   * `close()` — terminal: DROPPED, an explicit drop, or the shared object's
- *     drop observers (either end, the loud component fault teardown walk). Nothing can revive
- *     the wrapper.
- *   * `disarm()` — NON-terminal: the host handed its last end back to a guest
- *     (a lifted stream/future lowered back in — the identity round trip). The
- *     object is still alive; the host merely holds nothing.
- *   * `rearm()` — the inverse: a re-lift handed the readable end back.
- *
- * The embedder-negligence policy of the module header is unchanged — an
- * embedder that lowers a host-CREATED stream and never writes still hangs
- * rather than traps, because it genuinely retains the writable end.
+ * A rearming wakeup in pendingHostCalls while a host end is retained.
+ * Arms signal possible external progress, not outstanding work; scheduler
+ * quiescence excludes them so a pump can stop without declaring deadlock.
+ * `disarm` relinquishes a lifted end, `rearm` restores it, and `close` is
+ * terminal on drop. Removing an arm also resolves it to wake existing races.
  */
 class HostActivity {
   #store: Store | null = null;
   #promise: Promise<void> | null = null;
   #resolve: (() => void) | null = null;
   #closed = false;
-  /** Retention is momentarily zero; revivable via `rearm()` (#162). */
+  /** No retained end; revivable via `rearm()`. */
   #disarmed = false;
   #pumping = false;
 
@@ -351,30 +237,14 @@ class HostActivity {
   }
 
   /**
-   * Drive the guest until it can make no more progress.
+   * Drain settled activations and ready threads synchronously, then drive
+   * asynchronous work if the store is not quiescent. This gives host
+   * operations progress between export calls, including guest dependencies
+   * on Promise-returning host imports.
    *
-   * A host operation that lands *between* export calls has no driving loop
-   * running — `drive()` returned when the last export call resolved. So after
-   * initiating a host read/write (or a drop) we pump the store ourselves.
-   * Synchronously first (the common case: the guest is merely waiting on a
-   * scheduler condition our rendezvous just satisfied, and the host op's
-   * promise resolves before we return), then — if anything is still
-   * outstanding — by handing the store to the *same* loop an export call
-   * would have used, `driveStoreAsync`. Without the asynchronous half a guest
-   * parked in a background forwarding task would never be resumed to consume
-   * what we just offered, and the host read would await forever (host-pump
-   * starvation: the previous local drain only serviced `store.awaiting` and
-   * never awaited `store.pendingHostCalls`, so a writer parked on a
-   * Promise-returning host import stalled the reader).
-   *
-   * Traps from the synchronous half propagate to the caller of the host
-   * operation AND are recorded on `store.hostFailure`, the same channel
-   * `#pumpAsync` uses: propagation alone is not enough, because the caller is
-   * a host op's promise executor whose promise may already have been settled
-   * by the poisoning retirement walk (the trapping instance held an end of
-   * this very stream), in which case the throw is discarded and the fault
-   * would be mute. A component fault is always loud
-   * (contracts/embedder-api.md §"Streams and futures").
+   * Record synchronous failures as well as throwing them: retirement may
+   * already have settled the host operation's Promise, whose executor would
+   * then discard the throw. The next driver can still report hostFailure.
    */
   pump(): void {
     const store = this.#store;
@@ -393,12 +263,7 @@ class HostActivity {
       throw e;
     }
     if (this.#pumping) return;
-    // Nothing is outstanding that only an event-loop turn could advance ⇒ no
-    // asynchronous pump needed. In particular an embedder that lowered a host
-    // end into a guest and then never did its half lands here: we return, no
-    // spin and no deadlock trap, and the operation's promise simply stays
-    // pending — the documented "hangs rather than traps" behaviour (see the
-    // module header).
+    // Retention alone is not work to drive; leave the host Promise pending.
     if (quiescent(store)) return;
     this.#pumping = true;
     void this.#pumpAsync(store);
@@ -406,24 +271,10 @@ class HostActivity {
 
   async #pumpAsync(store: Store): Promise<void> {
     try {
-      // This pump is the FALLBACK driver — the one for host operations that
-      // land BETWEEN export calls — so it stands down whenever an export
-      // call's loop is live: that loop already races `pendingHostCalls` and
-      // `store.awaiting` and so pumps host activity on our behalf. When it
-      // exits, we take over. `whenStoreDriverIdle` is edge-triggered, not
-      // polled, so waiting costs no turns.
-      //
-      // The stand-down is COOPERATIVE, not exclusion: an export call can
-      // start while we are parked mid-`await`, and we only notice at the next
-      // `done()` evaluation, so a bounded overlap window remains by
-      // construction (concurrent export calls have always overlapped too).
-      // That is safe for the resume-once invariant — `resumeWith` deletes
-      // from `store.awaiting` synchronously and every resumption site
-      // re-checks membership *and* promise identity first; see the invariant
-      // write-up on `storeDriverDepth` in boundary.ts. Standing down is about
-      // not interleaving two loops' `serviceSettled`/`tick` phases, which is
-      // what tripped `Trap: table entry empty` out of `runCallbackLoop` when
-      // this pump first drove unconditionally alongside an export call.
+      // Yield to an existing driver. This is cooperative: another may enter
+      // while we await, so done() checks depth again. Resume sites recheck
+      // awaiting membership and Promise identity before consuming a result
+      // (boundary.ts storeDriverDepth), preventing double resumption.
       while (!quiescent(store)) {
         if (storeDriverDepth(store) > 0) {
           await whenStoreDriverIdle(store);
@@ -431,23 +282,9 @@ class HostActivity {
         }
         await driveStoreAsync(
           store,
-          // Quiescence, not completion: this pump exists to keep the guest
-          // moving; the host operation's own promise is what the caller
-          // awaits. Three exit clauses:
-          //
-          //   * nothing left that a turn of the event loop could advance
-          //     (`quiescent`);
-          //   * `pendingHostCalls` empty, which is the precondition of BOTH
-          //     of `driveAsync`'s deadlock traps. Returning true there keeps
-          //     this between-calls pump from converting the documented
-          //     embedder-never-acts hang (module header) into a trap that
-          //     would surface, misattributed, on some later export call.
-          //     Deadlock detection for genuine component deadlock stays where
-          //     it belongs: in the driving loop of the export call the guest
-          //     is blocked in;
-          //   * another driver appeared (an export call started while we were
-          //     parked) — hand the store back to it, per the single-driver
-          //     rule. Our depth is 1 while we are inside, hence `> 1`.
+          // Stop on quiescence, before an idle deadlock verdict, or when
+          // another driver enters. Our own depth is 1 inside this loop.
+          // The caller awaits its operation, not this fallback pump.
           () =>
             store.pendingHostCalls.size === 0 ||
             quiescent(store) ||
@@ -463,16 +300,8 @@ class HostActivity {
     } finally {
       this.#pumping = false;
     }
-    // The pump advanced the guest OUTSIDE any export call's driving loop. A
-    // `driveAsync` parked on `Promise.race([...pendingHostCalls])` re-evaluates
-    // its `done` predicate only when something it raced settles — and
-    // everything the pump just did (resume the callback task, deliver the
-    // event, watch the guest `task.return`) may have settled nothing that race
-    // can see. Re-arm through `notify()` so a parked driver wakes and
-    // re-checks; without this the lifted call's Promise never resolves even
-    // though the task resolved (observed: future-user's `double-future` under
-    // jspi auto-detection — the guest finished, the embedder's await hung
-    // forever).
+    // Guest progress may have settled a task without settling anything in
+    // another driver's pendingHostCalls race. Wake it to recheck done().
     this.notify();
   }
 
@@ -489,15 +318,8 @@ class HostActivity {
   }
 
   /**
-   * The host retains no way to act: its lifted end was lowered back into a
-   * guest, which now owns it (#162, §"Streams and futures"). NON-terminal — a re-lift
-   * of the same shared object restores retention via `rearm()`.
-   *
-   * Resolving the stale arm is required, not tidiness: a `driveAsync` parked
-   * on `Promise.race([...pendingHostCalls])` re-evaluates its `done` predicate
-   * and its deadlock preconditions only when something it raced settles. An
-   * arm merely deleted from the set would leave that driver asleep on a
-   * promise nobody will ever settle.
+   * Relinquish the host's lifted end and wake drivers racing its old arm.
+   * Nonterminal: a re-lift of the same shared object restores retention.
    */
   disarm(): void {
     const p = this.#promise, r = this.#resolve;
@@ -511,10 +333,7 @@ class HostActivity {
   }
 
   /**
-   * A lift handed the host the readable end again — the stream/future round-trip cache-hit wrapper
-   * for a shared object that round-tripped back out of the guest (#162).
-   * A no-op for a closed activity (the object is gone for good) and for one
-   * that was never disarmed.
+   * Restore retention on re-lift; a closed activity cannot be revived.
    */
   rearm(): void {
     if (this.#closed) return;
@@ -527,8 +346,7 @@ class HostActivity {
 // Direct-access byte edges (embedder-api.md §"Streams and futures" ("Direct-access byte edges") (polyengine#128))
 // ---------------------------------------------------------------------------
 //
-// wasmtime `DirectSource`/`DirectDestination`-shaped (`component::concurrent`,
-// 47.0.3). For `stream<u8>` only, a host end may park a *direct session*
+// For `stream<u8>` only, a host end may park a direct session
 // instead of a chunk: at every rendezvous with a peer operation of nonzero
 // capacity the session's callback runs exactly once, synchronously, inside the
 // rendezvous, against a scoped view of the peer's bytes — so an external
@@ -574,10 +392,9 @@ export type DirectVerdict = "more" | "done";
  * because the callback itself returned `"done"`, rather than because the peer
  * dropped / the operation was cancelled / the peer's instance trapped.
  *
- * The conventions layer needs the distinction for loud component fault precision — a session
- * the producer already completed keeps its resolution even if the peer then
- * trapped — and `Promise<number>` is the contract's return shape, so it rides
- * here rather than in the resolved value.
+ * The conventions layer preserves a callback-completed result across a later
+ * peer trap. Otherwise recorded peer poisoning rejects with the progress
+ * count; ordinary drop/cancel resolve the count.
  */
 export interface DirectSessionInfo {
   endedByVerdict: boolean;
@@ -669,7 +486,7 @@ class DirectSession implements DirectBuffer {
   total = 0;
   /** The callback said `"done"`, or the session failed / was settled. */
   ended = false;
-  /** `ended` because the callback said so (loud component fault precision; see `DirectSessionInfo`). */
+  /** `ended` because the callback said so; see `DirectSessionInfo`. */
   endedByVerdict = false;
   /** Installed in the shared object's pending slot right now. */
   pending = false;
@@ -728,8 +545,8 @@ class DirectSession implements DirectBuffer {
     try {
       verdict = this.invoke(scope);
     } catch (e) {
-      // "A callback that throws rejects the session with that error, and the
-      // invocation's marks are discarded" — so nothing touches `peer`.
+      // Discard marks on throw. Progress is unchanged; writes the callback
+      // already made through the byte view are not rolled back.
       scope.die();
       this.#fail(e);
       return "failed";
@@ -749,8 +566,7 @@ class DirectSession implements DirectBuffer {
     const k = scope.marked;
     if (k === 0) {
       if (verdict === "done") {
-        // Retraction: the speculative-park correction. The session ends with
-        // its running total and the peer's operation stays parked.
+        // Retract without completing the peer's parked operation.
         this.ended = true;
         this.endedByVerdict = true;
         return "retracted";
@@ -858,8 +674,8 @@ export interface HostWritableEnd<T> {
    * of the offer unsent. When the host arrives *first* it stays parked and is
    * drained across several guest reads. `writeAll` papers over the difference.
    *
-   * Resolves with the total accepted, which is less than `values.length` only
-   * if the reader dropped.
+   * Resolves with the total accepted; cancellation or reader drop can leave
+   * a short count. The writable end stays reserved between offers.
    */
   writeAll(values: T[], info?: { progress: number }): Promise<number>;
   /**
@@ -884,11 +700,9 @@ export interface HostWritableEnd<T> {
     info?: DirectSessionInfo,
   ): Promise<number>;
   /**
-   * Cancel an in-flight `write`/`writeAll` (definitions.py
-   * `SharedStreamImpl.cancel` -> `CopyResult.CANCELLED`). No-op when nothing
-   * of ours is parked. Surfaced per the R-fix review's stream advisory 1: the
-   * cancel channel existed on the shared object but had no embedder-facing
-   * spelling, so a host writer could only be abandoned, never retracted.
+   * Cancel a write or direct session, resolving with progress so far.
+   * Cancels the whole `writeAll` helper, including gaps between offers.
+   * Does not cancel a peer's operation or drop the stream.
    */
   cancelWrite(): void;
   /** definitions.py `SharedStreamImpl.drop`: notifies a parked reader. */
@@ -943,24 +757,10 @@ export interface HostStream<T> {
 /**
  * Attach host-activity bookkeeping to a shared object at the CABI seam.
  *
- * `kind` is the retention model (#162, §"Streams and futures") — WHICH ends the host
- * holds, which is decided entirely by where the wrapper came from:
- *
- *   * `"created"` — `hostStream()`/`hostFuture()`. Only READABLE ends
- *     transfer across the boundary (definitions.py `lower_stream`, line 1828,
- *     wraps the shared object in a fresh `ReadableStreamEnd` in the callee's
- *     table), so lowering hands the guest the readable end and the host keeps
- *     the WRITABLE one. Retention survives every lower; the arm ends only at
- *     drop/end-of-pump.
- *   * `"lifted"` — `hostStreamFor()`/`hostFutureFor()`. The host holds exactly
- *     the readable end the guest passed out (`lift_async_value`, line 1530).
- *     Lowering that same object back into a guest transfers it away, so
- *     retention hits zero and the activity disarms; a later re-lift restores
- *     it through the `onLifted` hook.
- *
- * The hooks live here rather than in the conventions layer's `takeValue` so
- * that BOTH the conventions layer and the raw boundary are covered, with no
- * window between "the embedder said transfer" and "the transfer happened".
+ * Created wrappers retain their writable end when the readable end lowers.
+ * Lifted wrappers hold only the readable end, so lower disarms and re-lift
+ * rearms them. Hooks at the CABI seam cover raw and conventions callers at
+ * the actual transfer, not merely when a facade value is prepared.
  */
 function bindOnLower(
   shared: SharedStreamImpl | SharedFutureImpl,
@@ -972,14 +772,8 @@ function bindOnLower(
     onLowered?: ((i: ComponentInstanceState) => void) | null;
     onLifted?: ((i: ComponentInstanceState) => void) | null;
   };
-  // INTERNAL INVARIANT (not the embedder-facing policy): two live wrappers
-  // on one shared object would mean two HostActivities pumping it, and the
-  // second `onLowered` hook would silently orphan the first wrapper's
-  // activity binding for future lowers (review advisory, host-streams
-  // round). The public entry points cannot get here with a wrapped object —
-  // `hostStreamFor`/`hostFutureFor` return the cached wrapper instead
-  // (§"Streams and futures") — so a trip here is a bug in this module. The class field
-  // initializes to null; == null covers both sentinels.
+  // One low-level wrapper per shared object: replacing hooks would orphan
+  // the original activity. hostStreamFor/hostFutureFor enforce this by cache.
   assert_(
     holder.onLowered == null,
     "internal: a second host wrapper was built for an already-wrapped " +
@@ -991,7 +785,7 @@ function bindOnLower(
       "already-wrapped stream/future (the wrapper cache should have " +
       "returned the first)",
   );
-  // `lowerStream`/`lowerFuture` (cabi/async_values.ts :177/:204) fire this on
+  // `lowerStream`/`lowerFuture` fire this on
   // EVERY lower, not just the first — the hook persists, and the asserts
   // above only forbid installing a SECOND one.
   holder.onLowered = (inst) => {
@@ -1005,23 +799,13 @@ function bindOnLower(
       activity.bind(inst.store);
     }
   };
-  // Fired by `liftAsyncValue` (cabi/async_values.ts :126) whenever this
+  // Fired by `liftAsyncValue` whenever this
   // object is lifted out of a guest table. For a "created"-kind wrapper
   // `rearm()` is a harmless no-op (it is never disarmed), so the hook is
   // installed uniformly.
   holder.onLifted = () => activity.rearm();
-  // Release the arm when the shared object dies, whatever kills it. This is
-  // the single point that covers three otherwise-separate leaks of one class:
-  // the `dropForTeardown` asymmetry (embedder/streams.ts — a teardown with
-  // nothing parked never reached `close()`), a guest dropping its end with no
-  // host operation parked (the `settle(DROPPED)` -> `close()` path only runs
-  // for a parked op), and `HostFuture.readResult`'s already-dropped fast path
-  // (which answers synchronously without touching the activity).
-  //
-  // Note on the guest-to-guest composed hop: a value lifted from the caller
-  // and immediately lowered into the callee, both synchronously inside one
-  // call's lower phase, fires rearm-then-disarm on any host wrapper that
-  // happens to exist for it. The pair nets out to the correct final state.
+  // Release even with no operation parked, including poisoned-end teardown.
+  // A composed guest-to-guest hop rearms then disarms synchronously.
   shared.whenDropped(() => activity.close());
   // A stream that came *out* of a guest was lifted, never lowered, so the
   // `onLowered` hook above will not fire first; `boundStore` was recorded at
@@ -1043,25 +827,15 @@ function mkStreamEnds<T>(
   const parked = { read: false, write: false };
   let writeAll: "active" | "cancelled" | null = null;
   /**
-   * Settle bookkeeping for a completed copy. `DROPPED` means the peer end is
-   * gone: no further host activity on this end is possible, so the activity
-   * arm is *closed* rather than re-armed (R-fix review advisory 2 — a live arm
-   * after end-of-stream keeps `pendingHostCalls` non-empty forever and masks
-   * a genuine deadlock as "the embedder might still act").
+   * Drop ends retention; other outcomes wake the driver and rearm activity.
    */
   const settle = (result: CopyResult): void => {
     if (result === CopyResult.DROPPED) activity.close();
     else activity.notify();
   };
   /**
-   * Withdraw an operation that never got to finish: a trap out of
-   * `activity.pump()`'s synchronous half unwinds through the op's promise
-   * executor with our bookkeeping half-done — the `parked` flag set and our
-   * buffer still in the shared object's pending slot, which wedges the end
-   * ("a write is already in flight") for good. Same withdrawal
-   * `cancelWrite`/`cancelRead` perform; `shared.cancel()` only while the
-   * pending side is still literally ours, since `SharedBase.cancel` asserts
-   * that something is pending and the poisoning walk may have retired it.
+   * Withdraw after a pump failure. Cancel only if the pending buffer is still
+   * ours: poisoning may already have retired it or notified a peer.
    */
   const withdraw = (side: "read" | "write", buf: unknown): void => {
     if (!parked[side]) return;
@@ -1075,21 +849,10 @@ function mkStreamEnds<T>(
     write: null,
   };
   /**
-   * Drive one direct session from park to end.
-   *
-   * Two shapes reach us, and the difference is *which side arrived second*:
-   *
-   *  * the session is the PENDING side — every rendezvous fires `onCopy`, and
-   *    the `"more"` verdict simply declines to `reclaim()`, so the session
-   *    stays in the pending slot for the next peer operation. This is
-   *    `write()`'s "stay parked until the offer is exhausted" mechanism, with
-   *    the callback's verdict in place of `buf.remain() > 0`.
-   *  * the session ARRIVED second — the rendezvous completes it with
-   *    `onCopyDone(COMPLETED)`, so a `"more"` verdict has to re-issue. The
-   *    re-issue rides the loop below (one `await` apart), which is exactly
-   *    `writeAll`'s re-offer shape and therefore inherits its ordering: the
-   *    peer's pending event is delivered and its buffer reclaimed before we
-   *    can rendezvous against it a second time.
+   * A pending session stays parked on "more" by declining to reclaim.
+   * An arriving session completes that issuance and must reissue after an
+   * await. The pump services the peer's event/reclamation before the next
+   * issuance. Reserve the end for the entire session, including these gaps.
    */
   const runDirectSession = async (
     side: "read" | "write",
@@ -1160,11 +923,8 @@ function mkStreamEnds<T>(
   };
   /** Shared tail of `cancelWrite`/`cancelRead` for a parked direct session. */
   const cancelDirect = (session: DirectSession): void => {
-    // direct-access byte edge: cancelling RETRACTS the session — it resolves with its running
-    // total (future abandonment's indistinguishability caveats unchanged). `shared.cancel()`
-    // only when the session actually holds the pending slot: a session caught
-    // between two issuances holds nothing, and `SharedBase.cancel` asserts
-    // that something is pending.
+    // Retraction resolves with the running total. Between issuances there is
+    // no pending buffer to cancel; retractDirect handles both states.
     retractDirect(session);
     activity.notify();
     activity.pump();
@@ -1208,14 +968,8 @@ function mkStreamEnds<T>(
   return {
     writable: {
       write(values: T[], info?: { progress: number }): Promise<number> {
-        // One in-flight operation per end — the host-side spelling of the
-        // `CopyEnd` busy trap guests get from the table. Without it a second
-        // write would find the FIRST write's buffer in the shared object's
-        // pending slot and "rendezvous" write-against-write, silently
-        // copying into the parked buffer's accumulation (observed as a
-        // write resolving `1` against a peer that no longer exists — the
-        // #66 repro). Reading while a write is parked stays legal: that is
-        // the pass-through data plane (two different ends).
+        // One operation per direction prevents write-against-write rendezvous.
+        // A simultaneous read is legal and serves host-to-host round trips.
         if (parked.write || writeAll !== null) {
           throw new TypeError(
             "a write is already in flight on this stream's writable end; " +
@@ -1240,10 +994,8 @@ function mkStreamEnds<T>(
           while (
             sent < values.length && !shared.dropped && writeAll === "active"
           ) {
-            // Re-offers keep `write`'s borrow semantics: the first round is the
-            // chunk itself and later rounds a `subarray` VIEW for typed chunks
-            // (review F1: a `slice` here cost a second full copy on the very
-            // path the one-copy contract names), a `slice` for plain arrays.
+            // Re-offer typed chunks by view, preserving the original borrow
+            // until the whole helper settles without an extra byte copy.
             const rest = sent === 0
               ? values
               : values instanceof Uint8Array
@@ -1357,16 +1109,8 @@ function mkStreamEnds<T>(
         });
       },
       cancelRead() {
-        // #97, DELIBERATE AND PINNED: cancelling resolves the in-flight
-        // `read` promise with whatever the buffer took so far — for a read
-        // that had not yet rendezvoused, the empty chunk. An empty chunk is
-        // also this layer's end-of-stream signal (see `HostReadableEnd.read`
-        // and embedder/streams.ts `Stream.read`), so **a host-cancelled read
-        // is indistinguishable from EOS at the conventions layer**. That is
-        // accepted rather than papered over: the code that calls
-        // `cancelRead()` is the same code that observes the result, so it
-        // already knows which of the two happened. Nothing else can reach
-        // this state — a guest cannot cancel the host's read.
+        // Resolve with progress so far. An empty cancelled chunk is
+        // indistinguishable from EOS; the caller knows it requested cancel.
         if (!parked.read) return;
         const session = direct.read;
         if (session !== null) return cancelDirect(session);
@@ -1385,12 +1129,9 @@ function mkStreamEnds<T>(
 }
 
 /**
- * One host wrapper per shared object, by identity (contracts/embedder-api.md
- * §"Streams and futures"). A stream/future value that round-trips host → guest → host lifts back
- * as the SAME wrapper the host already holds, so wrapping is idempotent —
- * there is never a second `HostActivity` competing to pump one shared object
- * (the hazard the old double-wrap assert guarded against), and the readable
- * end stays transferable across as many boundary hops as the spec allows.
+ * One low-level wrapper/activity per shared object across round trips.
+ * Facade Stream/Future handles may be fresh; shared rendezvous identity and
+ * these per-direction operation guards remain the same.
  */
 const streamWrappers = new WeakMap<object, HostStream<unknown>>();
 const futureWrappers = new WeakMap<object, HostFuture<unknown>>();
@@ -1437,21 +1178,19 @@ export interface HostFuture<T> {
    * value, so `read`'s `undefined` is ambiguous between "the value was
    * `undefined`" (a `future<void>`) and "the write end dropped without ever
    * writing" — the case the conventions layer must turn into a
-   * `DroppedError` (R-fix review advisory 4). `result` disambiguates:
+   * `DroppedError`. `result` disambiguates:
    * `COMPLETED` iff `value` is real.
    */
   readResult(): Promise<{ value: T | undefined; result: CopyResult }>;
   /** Cancel an in-flight `read`/`write`; see `HostWritableEnd.cancelWrite`. */
   cancel(): void;
   /**
-   * Release this future. Total and idempotent (#90): it never throws, and a
-   * second call is a no-op.
-   *
-   * Three cases, per the #90 ruling:
+   * Release this future. Shared-state drop is idempotent; pumping the store
+   * can still surface a guest failure.
    *
    *  * the value was already delivered (the normal write-then-drop path) —
    *    plain state cleanup, the spec's `WritableFutureEnd.drop` precondition
-   *    (definitions.py:1183-1184) is satisfied;
+   *    is satisfied;
    *  * never written, and the future was **lowered** into a guest (the guest
    *    holds the readable end, so this wrapper plays the spec's writable
    *    role) — *abandon*: the reader can never be satisfied, so it is armed
@@ -1515,7 +1254,7 @@ function mkFuture<T>(
   const writeInst = hostEndInstance("write");
   const readInst = hostEndInstance("read");
   const parked = { read: false, write: false };
-  /** Set once the future's one value has actually crossed (#90). */
+  /** Set once the future's one value has actually crossed. */
   let delivered = false;
   const settle = (side: "read" | "write", result: CopyResult): void => {
     parked[side] = false;
@@ -1523,7 +1262,7 @@ function mkFuture<T>(
     if (result === CopyResult.DROPPED) activity.close();
     else activity.notify();
   };
-  /** See `mkStreamEnds`' `withdraw`: the pump-trap unwind path (F1). */
+  /** See `mkStreamEnds`' `withdraw`: the pump-trap unwind path. */
   const withdraw = (side: "read" | "write", buf: unknown): void => {
     if (!parked[side]) return;
     parked[side] = false;
@@ -1532,7 +1271,8 @@ function mkFuture<T>(
   };
   const self: HostFuture<T> = {
     write(v: T): Promise<void> {
-      // Opposite ends may rendezvous after a guest round trip.
+      // One operation per direction; opposite ends may rendezvous after a
+      // guest round trip. This is a busy guard, not a delivered-value guard.
       if (parked.write) {
         throw new TypeError(
           "an operation is already in flight on this future; " +
@@ -1603,9 +1343,8 @@ function mkFuture<T>(
       activity.pump();
     },
     drop() {
-      // #90. Never throws, idempotent: `SharedFutureImpl.drop` and
-      // `abandonSharedFuture` both no-op on an already-dropped future, and
-      // neither can raise. See the `HostFuture.drop` doc for the three cases.
+      // A lowered future still owing a value is abandoned; other drops are
+      // plain cleanup. Pump failures propagate even if shared state is gone.
       if (!delivered && lowering.lowered && !shared.dropped) {
         abandonSharedFuture(
           shared,

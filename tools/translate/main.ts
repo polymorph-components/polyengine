@@ -1,7 +1,6 @@
-// Build-time translation CLI (issue #16, delivery design note item 2).
+// Repository build-time translation CLI.
 //
-// Translates a component ONCE, at build/deploy time, so production never
-// ships the ~0.5 MB (gzip) translator wasm — the deploy set becomes:
+// Translate before deployment to omit the translator wasm from the deploy set:
 //
 //   component.wasm            (unchanged)
 //   component.plan.json       (this tool's output: the translation envelope
@@ -17,8 +16,8 @@
 //     <component.wasm> [-o <out.plan.json>] [--shim <translator_shim.wasm>]
 //
 // Defaults: -o <component>.plan.json next to the input; --shim resolves to
-// the repo's built translator (consumers of the published package will get
-// a default translator from @polyengine/translator once #16 packaging lands).
+// the repo's built translator. Applications can instead use the packaged
+// defaultTranslator() from @polyengine/translator.
 
 import { Translator } from "@polyengine/runtime/shim";
 

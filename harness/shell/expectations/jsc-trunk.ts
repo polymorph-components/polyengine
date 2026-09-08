@@ -1,20 +1,12 @@
 // JSC trunk lane expectation — a findings lane (best-effort, non-gating;
-// issue #22). Seeded from the first successful CI run (2026-08-09, GH
-// Actions ubuntu-24.04 x64, bundle rev `318852@main` built 2026-08-08):
-// **EXACT Deno-lane parity** — 1254 passed / 0 failed / 95 xfail (the Deno
-// lane's own classes, identical classification), zero jsc-specific deltas,
-// and the full capability matrix true: JSPI (round trip verified),
-// multi-memory, wasm-GC, exception-handling, memory64, tail-calls,
-// relaxed-simd. This corroborates the webkit-2342 browser measurement on
-// issue #11 (multi-memory default-on in trunk) from an independent channel,
-// and is now re-measured weekly by `.github/workflows/canary.yml`.
+// issue #22). Expect the Deno baseline with no per-command deltas;
+// `.github/workflows/canary.yml` measures trunk on x86_64.
 //
 // Trunk moves: a future drift in totals/capabilities is a FINDING to
 // triage (engine change vs harness assumption), not a failure — the driver
 // exits 0 either way and reports the diff.
 //
-// EXECUTION MODEL (the two first-run artifacts, fixed in fetch.ts —
-// details there): the bundle must stay intact and run via its shipped
+// EXECUTION MODEL (see tools/shell/fetch.ts): keep the bundle intact and use its
 // compiled wrapper (`<bundle>/jsc`), because `bin/jsc` carries a RELATIVE
 // PT_INTERP resolved from the bundle root; and the zip's lib/*.so.N names
 // are symlink entries that must be materialized as real symlinks.
@@ -48,19 +40,6 @@
 //   - unreachable trap wording: `"Unreachable code should not be executed"`
 //     — already a `TRAP_MESSAGE_EQUIVALENTS` row in `harness/src/runner.ts`,
 //     no matcher work needed here.
-//
-// CM#705 pin advance to 2f13265 (polyengine#173): totals bumped to the
-// engine-independent Deno-lane baseline (1475/1428/1263 passed/165 xfail/42
-// pending-runtime/5 unsupported-directive — see harness/src/xfail.ts and
-// sm-pinned.ts's header for the new-class breakdown) WITHOUT a local
-// re-measurement: this lane is x86_64-only and self-skips on this
-// aarch64 dev host. Every OTHER shell lane re-measured on aarch64 this
-// round (sm-pinned, node-pinned, sm-nightly, bun-pinned) hit EXACT
-// Deno-lane parity with zero per-row deltas, and this lane tracks
-// jsc-pinned exactly (same rev, same hash) — so this bump is UNVERIFIED ON
-// AARCH64, MEASURED-BY-CI: canary.yml's weekly x64 run is what actually
-// re-confirms it (or reports trunk drift, per this file's own findings-only
-// discipline).
 
 import type { ShellLaneExpectation } from "./types.ts";
 

@@ -38,10 +38,7 @@ export const RUNTIME_VERSION = "0.6.8";
  * Compose a cross-copy diagnostic: what was foreign, which copy is speaking,
  * the census of every copy in the graph, and the by-value remediation.
  *
- * Kept to one line but complete — the whole point of module identity's stateful half is
- * that "recognized but foreign" is a NAMED failure, never a silent
- * adaptation (a foreign `Stream` pumped as an async iterable) and never a
- * misleading generic ("handle is not an error-context").
+ * Stateful foreign handles must be diagnosed, not silently adapted by value.
  */
 export function describeCrossCopy(what: string, remedy?: string): string {
   const census = copyCensus();

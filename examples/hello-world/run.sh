@@ -3,8 +3,7 @@
 # examples/build.sh, scoped to this directory: cargo core module ->
 # `wasm-tools component new` -> validate -> run host.ts under Deno.
 #
-# Prerequisites: the translator shim (`just shim` from the repo root; a
-# published consumer gets a prebuilt Translator instead — polyengine#16).
+# Prerequisite: `just shim` from the repo root. Published packages include the shim.
 set -euo pipefail
 cd "$(dirname "$0")"
 

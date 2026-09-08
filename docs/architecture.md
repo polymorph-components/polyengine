@@ -1,685 +1,563 @@
 # polyengine — architecture and design decisions
 
-A WebAssembly Component Model host built on the JS `WebAssembly` API, targeting
-JSPI-capable engines. Primary development against Deno; conformance runs
-against browsers. Aims for Component Model feature parity and compatibility
-with wasmtime and wit-bindgen. **0.3.0 concurrency is the core deliverable.**
+polyengine loads WebAssembly Component Model binaries on the JS
+`WebAssembly` API. A wasm32 translator produces a linking plan and fused
+adapters; a platform-neutral TypeScript runtime executes the plan, handles
+the host ABI, and schedules Component Model tasks.
 
-This document records the architecture and the decisions made, with rationale.
-Section numbers **§1–§11 are stable** — they are cited from code comments and
-contracts throughout the repo. Related documents:
-
-- [`consumers.md`](consumers.md) — the polymorph adoption track (jco replacement)
-- [`references.md`](references.md) — canonical upstream links
-- [`../contracts/`](../contracts/) — versioned interface contracts
-- [`../AGENTS.md`](../AGENTS.md) — the development protocol
-- open work: the [issue tracker](https://github.com/polymorph-components/polyengine/issues)
-
----
+Section numbers and headings are stable because code and contracts link
+to them. The [contracts](../contracts/) specify interfaces;
+[security.md](security.md) describes trust boundaries;
+[consumers.md](consumers.md) covers downstream integration; and
+[references.md](references.md) records upstream sources and dependency pins.
 
 ## 1. Goals
 
-- **Concurrency is the point.** Existing hosts already run non-async
-  components fine; this project exists to be a first-class host for Component
-  Model 0.3.0 concurrency — `async` lift/lower, tasks/subtasks,
-  `stream`/`future` — mapped natively onto the JS event loop and JSPI.
-  Sync-only operation is a supported subset, not a destination.
-- Load, link, and run Component Model binaries (`.wasm` components) at runtime
-  on stock JS engines, using only the JS `WebAssembly` API.
-- Component Model feature parity with wasmtime, tracked against the official
-  spec ([WebAssembly/component-model]).
-- Compatibility with wasmtime-built and wit-bindgen-built guest components,
-  sync and async alike, made executable via imported conformance/test
-  suites. componentize-go output is a named second guest toolchain
-  (consumer-driven, [consumers.md](consumers.md)): callback-ABI async lifts +
-  async-lowered imports from Go's patched runtime — a differently-shaped
-  exerciser of the same ABI.
-- **Adoption target: replace jco as the JS host for the polymorph
-  component family and experiment-mosh** ([consumers.md](consumers.md)).
-  Their JS-host legs were blocked on structural jco defects in exactly this
-  project's core territory (0.3 concurrency). They have no external
-  dependents, so embedder conventions co-evolve with them — designed against
-  real consumers, not in the abstract.
-- **"Parity" means functional parity, not behavioral identity.** The bar is:
-  the same feature set, spec-conforming behavior, and wasmtime/wit-bindgen
-  guests running correctly. Where the spec sanctions a range of behaviors,
-  this host may — and does — diverge from wasmtime's choices (deterministic
-  FIFO scheduling per §6; deterministic NaN profile; JS-native host value
-  shapes; per-instance poisoning, §6). Wasmtime-identical observable
-  behavior is adopted only where (a) something external forces it — the
-  official suite's `assert_trap` matches message text, which is de facto
-  wasmtime wording — or (b) it is free by construction (the translation
-  frontend *is* wasmtime-environ, §4). Behavior mandated by the
-  spec/reference (e.g. the borrow-lending traps, per definitions.py) is spec
-  conformance, not wasmtime-matching, even when wasmtime exhibits it too.
-  The tie-breaking authority for semantic questions is the spec +
-  `definitions.py`, with wasmtime as corroborating evidence — never the
-  other way around. **One bounded exception** (operator decision): where
-  `definitions.py` contradicts the spec repo's *own wast corpus* and
-  wasmtime implements the corpus side, the corpus semantics — as wasmtime
-  actually implements it, verified against wasmtime source or trace, not as
-  inferred from the test alone — is adopted as the working assumption. Each
-  such case must be a named finding in
-  `upstream-component-model-repo-findings.md` (currently CM-3 only) and
-  flips back if upstream adjudicates the other way. Bare wasmtime behavior
-  with no corpus backing never supersedes the reference. Guard before
-  invoking the exception: a corpus assertion counts as semantic authority
-  only if it is **schedule-independent** — a test that two conforming
-  scheduler policies answer differently pins a policy, not semantics, and
-  is an upstream test defect rather than a conflict.
-- TypeScript throughout the JS side: the runtime, the harness, and all
-  generated bindings.
-- A performance story that can get fast later without rearchitecting.
+- Load, link, and execute component binaries at runtime on JavaScript
+  engines, or consume artifacts translated at build time.
+- Support Component Model 0.3 concurrency: async lift/lower, tasks and
+  subtasks, streams, futures, backpressure, and cancellation. Sync calls
+  use the same task machinery.
+- Run guests from external toolchains, including Rust/wit-bindgen and
+  componentize-go, and composed workloads from the polymorph family.
+- Pursue functional parity with the Component Model feature set supported
+  by wasmtime, tested against the spec and guest workloads. This is a
+  compatibility target, not a claim that every feature is implemented or
+  that passing tests proves conformance. Coverage and gaps are in §11.
+
+**Semantic authority.** The Component Model spec and its executable
+reference, `third_party/component-model/design/mvp/canonical-abi/definitions.py`,
+break ties. Wasmtime is corroborating evidence, not an overriding
+authority. Reusing its frontend reduces duplicated implementation; it
+does not prove the shim, runtime, or their integration correct.
+
+**Parity is functional, not behavioral identity.** Where the spec permits
+choices, this runtime may differ from wasmtime: deterministic FIFO
+scheduling, deterministic NaNs, and JS-native host value shapes. It also
+has named divergences (§6). The conformance harness accommodates
+engine-specific trap wording; diagnostic text is not the public API.
+
+**One bounded exception (operator decision):** when `definitions.py` conflicts with the spec
+repository's own WAST corpus and wasmtime implements the corpus side, the
+corpus semantics may be adopted as a working assumption. This requires
+verification against wasmtime source or a trace, a named finding in
+[upstream-component-model-repo-findings.md](../upstream-component-model-repo-findings.md),
+and reversal if upstream adjudicates otherwise. Currently this applies
+only to CM-3. A schedule-dependent assertion cannot invoke the exception:
+if two conforming schedulers can answer differently, the assertion pins a
+policy rather than semantics. Wasmtime behavior alone is insufficient.
 
 ## 2. Non-goals
 
-- **WASI implementations in the core.** `wasi:*` host packages are out of
-  scope for the runtime itself; the finish line is Component Model support,
-  demonstrated with custom WIT worlds. Two sanctioned carve-outs, both
-  outside the core: WASI interface *shapes* are first-class design inputs
-  to the embedder conventions ([consumers.md](consumers.md)) — they are the
-  ecosystem's most important interfaces and the conventions must serve them
-  well — and a WASI provider *package* (`wasi/`, `@polyengine/wasi`; a
-  separate deliverable with consumer-driven scope: p2 cli/io/clocks/random
-  baseline + p3 clocks, plus à la carte network fragments the default
-  `wasi()` merge never carries — p3 `wasi:sockets`
-  (`@polyengine/wasi/sockets`: UDP, TCP client + listener; one
-  node-builtins backend serving Deno via its stable node compat and real
-  Node, [#4](https://github.com/polymorph-components/polyengine/issues/4))
-  and the fetch-backed `wasi:http@0.3` outbound client
-  (`@polyengine/wasi/http`, riding the `@0.3` track like the rest of the
-  package; a `version` override keys exact ids for guests pinned to
-  pre-consolidation rc snapshots)).
-- **Componentizing JS/TS.** Guests are components built by external toolchains
-  (Rust + wit-bindgen is the reference). No embedded-JS-engine work.
-- **jco compatibility or reuse.** Ignored entirely — including at the
-  embedder-API level: we do not emulate jco's host conventions (thrown
-  bare `{tag, val}` payloads, its `Stream` objects, transpile-time async
-  enumerations); consumers port to our conventions
-  ([consumers.md](consumers.md)). Where we need prior art we take it from
-  wasmtime; where jco's conventions have known footguns (documented
-  defensively by the polymorph host modules themselves), we fix rather than
-  inherit. Replacing jco for the named consumers is a goal (§1); *being* jco
-  is not.
-- **Pre-JSPI engines.** No JSPI fallback path for the stackful/blocking
-  forms. (The callback ABI — what wit-bindgen and componentize-go actually
-  emit — needs no JSPI at all, so the effective floor for consumer workloads
-  is "any modern engine"; JSPI is required only for sync-blocking forms.)
+- **WASI in the runtime core.** Providers live in the separate
+  `@polyengine/wasi` package. Its default `wasi()` merge supplies captured
+  CLI I/O, clocks, entropy, and empty filesystem preopens. Real filesystem,
+  host stdio, sockets, and outbound HTTP providers are explicit opt-ins.
+  WASI interface shapes still inform the embedder API.
+- **Componentizing JS/TS.** Guests are binaries from external toolchains;
+  this project does not embed a JS engine into components.
+- **jco API compatibility.** Consumers use the conventions in
+  [contracts/embedder-api.md](../contracts/embedder-api.md), not jco's
+  host value shapes or transpilation options.
+- **A JSPI fallback for stackful/blocking forms.** Callback-ABI async
+  execution does not itself need JSPI. A callback-ABI guest can still need
+  it when it calls a blocking sync import. Missing engine capabilities
+  are reported, not emulated.
 
 ## 3. Compatibility targets
 
-Floor for the JSPI-dependent forms: engines supporting JSPI (proposal is
-**phase 4**; minor API drift is still possible — it changed once already when
-the `Suspender` object was removed).
+Core-wasm features and JSPI are separate requirements. For example, FACT
+adapters may require multi-memory even when guest async calls use the
+callback ABI. JSPI is needed for stackful async lifts and suspending sync
+lowers (§5–§6).
 
-| Engine | JSPI status | Role |
-|---|---|---|
-| Deno ≥ 2.3.2 | on by default | primary dev target |
-| Chrome/Chromium ≥ 137 | on by default | browser lane (exact Deno parity) |
-| Firefox | flag: `javascript.options.wasm_js_promise_integration` | browser lane (pref flipped by the driver) |
-| Safari / WebKit | JSPI works unflagged on WPE 26.5; JSPI + multi-memory both present in Safari Technology Preview; stable-Safari status: [#11](https://github.com/polymorph-components/polyengine/issues/11) | browser lane; pinned build capped by JSC's missing multi-memory — implemented and default-on in WebKit trunk (webkit-2342+ rolls reach effective parity; #11) |
-| Node | on by default ≥ 26 | pinned runtime lane (`node-pinned`, v26.x: exact Deno parity, no flags; required gate). Node 24 LTS deliberately not laned: flag-gated JSPI (`--experimental-wasm-jspi`) whose older V8 13.6 vintage deviates on 2 corpus commands — see `harness/shell/expectations/node-pinned.ts` |
-| Bun | on by default (1.3.x, vendored JSC) | pinned runtime lane (`bun-pinned`, findings-only until a track record): exact Deno parity under `BUN_JSC_useWasmMultiMemory=1` (driver-set; stock bun ships multi-memory off) — see `harness/shell/expectations/bun-pinned.ts` |
+| Engine | JSPI / lane policy |
+|---|---|
+| Deno | Primary development runtime; JSPI enabled by default from 2.3.2 |
+| Chrome/Chromium | JSPI enabled by default from 137; browser lane |
+| Firefox / SpiderMonkey | Browser driver enables `javascript.options.wasm_js_promise_integration`; pinned shell lane is a required gate |
+| WebKit / JavaScriptCore | JSPI works in the pinned WPE browser build, but that build lacks multi-memory. Newer trunk builds support both; stable Safari support remains tracked in [#11](https://github.com/polymorph-components/polyengine/issues/11) |
+| Node | Pinned Node 26 lane requires no JSPI flag. The npm package's lower Node floor does not guarantee JSPI; Node 24's flag-gated implementation is not the conformance target |
+| Bun | Pinned findings-only lane; driver enables `BUN_JSC_useWasmMultiMemory=1` |
 
-Notes:
+Exact shell versions live in [tools/shell/pins.json](../tools/shell/pins.json).
+[Browser](../harness/browser/expectations/) and
+[shell](../harness/shell/expectations/) expectations record lane-specific
+differences. V8, SpiderMonkey, and JSC provide engine coverage; Node/Bun
+also test module loading, I/O, and event-loop integration. These lanes do
+not establish support for every release of an engine family.
 
-- Deno and Chrome share V8, so Firefox and WebKit provide the real engine
-  diversity. SpiderMonkey JSPI is clean over the full corpus; JSC's JSPI
-  works unflagged, but the pinned JSC build lacks multi-memory, the actual
-  WebKit-lane cap (the CABI routinely needs >1 memory per core module;
-  default-on in WebKit trunk, #11). Engine trap-message wording differences
-  are normalized in the harness matcher, never in the runtime
-  (`TRAP_MESSAGE_EQUIVALENTS`, harness/src/runner.ts) — with them
-  reconciled, Firefox and trunk WebKit run at exact Deno-lane parity.
-- The node/bun lanes add **embedding** coverage, not engine coverage (V8 and
-  JSC are already exercised above): module loading, event-loop integration,
-  and runtime I/O quirks — e.g. node's pooled `Buffer`, whose pool-backed
-  `.buffer` must never reach WebAssembly APIs (`tools/shell/host-node.mjs`).
-- **Type reflection (js-types) is phase 3 and flagged everywhere** — function
-  signatures are not available from `WebAssembly.Module.imports()`. The
-  architecture below sidesteps this (the translator emits all type
-  information), but no design may assume type reflection exists.
-- CSP: compiling from bytes requires `wasm-unsafe-eval`. The runtime
-  requires nothing beyond that — **a design invariant, not a default**
-  ([#8](https://github.com/polymorph-components/polyengine/issues/8)): no
-  code path may require full `unsafe-eval`. The specialized-JS executor is
-  emission-only (§8) — a deploy-time AOT step or a server-side first-load
-  cache import — never runtime `eval`/`new Function`.
-- The runtime core is platform-neutral by contract (§4.3), pinned by
-  `runtime/tests/platform_purity_test.ts` — no `node:*` builtins, no Deno
-  APIs.
+The runtime does not depend on WebAssembly JS type reflection. The
+translator supplies signatures that `WebAssembly.Module.imports()` cannot
+provide on the supported baseline.
+
+**CSP invariant:** compiling wasm bytes requires `wasm-unsafe-eval`, not
+full `unsafe-eval`. The runtime does not use `eval` or `new Function`.
+Any future specialized-JS executor must be emitted as importable modules
+(§8), not generated and evaluated inside a browser at runtime. Core
+platform neutrality is checked by
+`runtime/tests/platform_purity_test.ts`; platform-specific loaders and
+WASI backends sit outside it.
 
 ## 4. Architecture
 
-One deterministic pipeline, run either at first load (and cached) or ahead of
-time — "AOT" and "runtime linking" are the same code executed at different
-moments.
+Build-time and runtime translation use the same pipeline. Both currently
+execute the host boundary through the descriptor interpreter.
 
-```
-                       Rust (compiled to wasm32, runs everywhere)
-                     ┌──────────────────────────────────────────┐
- component.wasm ───► │ translator = wasmtime-environ (validate,  │
-                     │ resolve linkage) + FACT (fused adapters)  │
-                     │ + shim (stable output format)             │
-                     └──────────────┬───────────────────────────┘
-                                    │ artifacts (bytes, content-addressed)
-                                    ▼
-        ┌────────────────────────────────────────────────────┐
-        │ plan: instantiation ops, type tables, CABI          │
-        │       descriptors, required-intrinsics list         │
-        │ core modules: byte ranges sliced from the component │
-        │ adapter modules: FACT-generated core wasm           │
-        └──────────────┬─────────────────────────────────────┘
-                       │
-                       ▼            TypeScript (platform-neutral)
-        ┌────────────────────────────────────────────────────┐
-        │ runtime: plan executor, host-boundary lift/lower,   │
-        │ resource tables, intrinsics, instance-state rules,  │
-        │ JSPI trampolines, 0.3 task scheduler (core)         │
-        └────────────────────────────────────────────────────┘
+```text
+component.wasm
+    |
+    v
+wasm32 translator: wasmtime-environ + FACT + translator-shim
+    |
+    +-- plan: initializers, core-module ranges, types, CABI descriptors,
+    |         required intrinsics, resource metadata
+    +-- FACT adapter modules
+    |
+    v
+TypeScript runtime + original component bytes
+    +-- compile core modules and adapters with WebAssembly APIs
+    +-- instantiate and link in plan order
+    +-- interpret host-boundary lift/lower
+    +-- manage resources, tasks, streams/futures, and JSPI entries
 
- wit/*.wit ──► bindgen (Rust, wit-bindgen-core) ──► typed TS bindings
-                                   (verified against the plan at instantiate())
+WIT source --> bindgen --> typed TS facade + expected world digest
+                                      |
+                              checked at instantiation
 ```
 
 ### 4.1 Translator: wasmtime's frontend compiled to wasm
 
-We reuse wasmtime's "decide what to do" layer, which is separable from its
-"do it" layer and has no native-code dependency:
+`crates/translator-shim` compiles wasmtime's translation frontend to a
+plain core wasm module with a bytes-in/bytes-out ABI:
 
-- `wasmtime-environ`'s component translator: parsing, validation, subtyping,
-  and resolution of the component's linking structure into a flat
-  instantiation plan.
-- `wasmtime-environ::fact` (FACT): generates **fused adapters** — the glue for
-  cross-component calls (canonical-ABI lift composed with lower) — **as plain
-  core wasm modules** via `wasm-encoder`.
+- `wasmtime-environ` parses and validates components, resolves types and
+  linkage, and flattens instantiation into a plan.
+- FACT generates fused canonical lift/lower adapters as core wasm. These
+  perform cross-component conversion without a JS adapter frame between
+  guest calls, allowing suspension on those paths (§5).
+- The shim maps environ's internal structures to the versioned
+  [plan format](../contracts/plan-format.md).
 
-Why this is the cornerstone decision:
+The frontend and FACT remain upstream dependencies, not a replacement
+for runtime conformance testing. FACT calls host intrinsics for operations
+including transcoding, resource transfer, state bookkeeping, and traps.
+The runtime implements that interface under
+[contracts/intrinsics.md](../contracts/intrinsics.md); the plan lists the
+required intrinsics. Host-boundary conversion is also this runtime's
+responsibility, not FACT's.
 
-- **Wasmtime compatibility by construction.** We inherit wasmtime's
-  interpretation of the spec for the largest correctness surface (validation,
-  types, adapter semantics) and turn "compat with wasmtime" into a version pin.
-- **It solves the JSPI stack-purity problem (§5) by construction** — all
-  cross-component call paths are wasm, never JS.
-- **It removes the hardest codegen** (flattening, param spilling, string
-  transcoding, resource transfer, post-return) from our scope.
+**Local FACT correction.** Adapters are not copied verbatim from the
+pinned frontend: `crates/translator-shim/src/fact_string_limits.rs`
+corrects recognized pre-realloc string guards to enforce the reference's
+source-byte limit of `(1 << 28) - 1`, rather than the pinned generator's
+destination-width/retry thresholds. Only FACT-generated adapters pass
+through this correction; embedded guest modules are untouched. It
+preserves module length, validates the result, and rejects unrecognized
+guard shapes or an environ revision change. Every frontend pin update
+must review whether to retain, revise, or remove this correction. The
+producer matrix and drift checks are in
+`crates/translator-shim/tests/fact_string_source_limits.rs` and
+`runtime/tests/fact_string_source_limits_test.ts`.
 
-Constraints and mitigations:
-
-- `wasmtime-environ` is an **internal, unstable API**. Mitigation: a thin Rust
-  **shim** crate owns the dependency and maps environ's output into our own
-  stable plan format. Wasmtime churn is confined to the shim. Pin wasmtime and
-  wasm-tools versions; upgrade deliberately (the staged bump is
-  [#1](https://github.com/polymorph-components/polyengine/issues/1)).
-- FACT adapters import **host intrinsics** (string transcoders,
-  `resource-transfer-own/borrow`, enter/exit bookkeeping, trap). The TS
-  runtime implements this contract — specified in
-  **[contracts/intrinsics.md](../contracts/intrinsics.md)** — and the shim
-  emits the required-intrinsics list per component so the contract is explicit
-  at translation time, not discovered at instantiation. These intrinsics are
-  synchronous JS calls that return before any suspension can occur —
-  compatible with the JSPI frame rule.
-- The translator ships as a **plain core wasm module** with a bytes-in/bytes-out
-  ABI (no components-all-the-way-down bootstrap).
-- Size: 1.66 MiB size-tuned (~0.5 MiB gzip), sub-ms steady-state translation;
-  multi-MB consumer components translate in tens of ms. Being a real static
-  asset ≥ 128 kB, browsers code-cache the translator itself well — the most
-  expensive fixed cost of the pipeline is the part engines already handle.
+`wasmtime-environ` is an unstable internal API. Its git revision and the
+matching wasm-tools release train are pinned in [Cargo.toml](../Cargo.toml)
+and [Cargo.lock](../Cargo.lock). The shim contains dependency-specific
+mapping code; upgrades require integration gates, not just a pin change.
 
 ### 4.2 Plan format
 
-Specified in **[contracts/plan-format.md](../contracts/plan-format.md)**.
-Summary of the fixed decisions:
+[contracts/plan-format.md](../contracts/plan-format.md) defines the wire
+format and artifact set:
 
-- Defined by us, versioned, **operational content only**: instantiation ops,
-  core-module slice ranges, adapter module references, canonical-ABI
-  descriptors for host-boundary functions, type tables, required intrinsics,
-  resource-type metadata (dtor references).
-- **No WIT-level fidelity** (no docs, no feature gates, no aliasing
-  structure) — bindings generation reads WIT source instead (§9). This keeps
-  the format small and stable.
-- Encoding: JSON (the simplest thing that round-trips); revisit only if
-  measurable.
-- Deterministic: identical inputs (component bytes, translator build, flags)
-  produce identical artifacts. This is what makes caching trivial (§10).
+- JSON with strict format-version checking and structural validation.
+- Operational data: initializers, module references, CABI descriptors,
+  type tables, required intrinsics, and resource/destructor metadata.
+- Core modules referenced by byte ranges in the caller's original
+  component; generated adapters supplied separately. The plan does not
+  duplicate the component bytes.
+- No WIT source fidelity: documentation, source-level aliases, and feature
+  gates are not preserved for bindgen (§9).
+
+Identical component bytes, translator build, and feature settings are
+expected to produce identical artifacts. That identity supports caching
+(§10); it is not an authenticity guarantee.
 
 ### 4.3 TS runtime
 
-Platform-neutral core (dependencies: `WebAssembly` JS API, `TextEncoder`/
-`TextDecoder`, Promises — nothing else; pinned by
-`runtime/tests/platform_purity_test.ts`). Responsibilities:
+The runtime core requires only standard web-platform APIs, not
+platform-specific APIs. Guarded ambient probes for diagnostics or the
+scheduler seed may inspect Deno when available; they are not runtime
+requirements. Platform-specific cache backends and asset loaders are
+separate concerns. Core responsibilities are:
 
-1. Plan executor: compile sliced core modules and adapters, instantiate in
-   plan order, wire imports/exports.
-2. Host boundary: lift/lower per CABI descriptors (§8), `realloc`/
+1. Compile modules, instantiate in plan order, and wire imports/exports.
+2. Lift/lower host values from CABI descriptors, including `realloc` and
    `post-return` handling.
-3. Resource machinery: slab handle tables, own/borrow tracking (`num_lends`,
-   borrow invalidation at call return), dtor invocation (§7), FACT intrinsic
-   implementations.
-4. Instance-state rules: `may_leave` enforcement and poisoned-instance
-   refusal — **JSPI enforces no Component Model invariant for us**; the
-   state discipline is ours and must hold while suspended. (The spec has no
-   reentrance gate — reentrance into a live instance is valid; the only
-   entry refusal is the poisoned-corpse divergence, §6.)
-5. Task scheduler (§6): the 0.3 task/thread model is the runtime's core
-   structure, not an add-on — waitable sets, streams/futures, callback-ABI
-   event dispatch, backpressure, cancellation. Sync calls are the degenerate
-   case: a task driven to resolution before the call returns, exactly as in
-   the reference implementation.
+3. Maintain resource handle tables, own/borrow transfers, lend counts,
+   borrow invalidation, and destructor calls.
+4. Enforce Component Model state rules such as `may_leave`, and the
+   runtime's poisoned-instance refusal (§6). JSPI enforces none of these
+   rules. There is no separate reentrance gate into a live instance.
+5. Schedule tasks, threads, waitables, streams/futures, callback events,
+   backpressure, and cancellation. Sync calls use tasks too.
 
-Above the raw boundary sits the **embedder conventions layer**
-(`runtime/src/embedder/`, governed by
-[contracts/embedder-api.md](../contracts/embedder-api.md)): camelCase facades,
-branded `ComponentException`s, resources as classes in both directions, `Stream`/
-`Future` handles over web-native producers, and semver-canonical import
-resolution matching the spec + wasmtime's `NameMap`.
+The [embedder layer](../runtime/src/embedder/) adapts the raw interpreter
+boundary into camelCase facades, branded errors, resource classes,
+`Stream`/`Future` handles, and version-canonical import resolution. Its
+public behavior is governed by the
+[embedder contract](../contracts/embedder-api.md), not the raw boundary.
 
 ## 5. The JSPI frame rule (load-bearing constraint)
 
-From the JSPI spec ([js-promise-integration Overview]):
+JSPI suspends wasm computations, not arbitrary JS stacks. Between an
+entry through `WebAssembly.promising` and a `WebAssembly.Suspending`
+import, an intervening JS frame prevents suspension. See the
+[JSPI overview][js-promise-integration Overview].
 
-> Only WebAssembly computations may be suspended: **only WebAssembly frames may
-> be active between the call to a `promising` function and any call to a
-> `Suspending` wrapped import** — a JS frame in between traps.
-
-Consequences baked into this design:
-
-- **Host boundary JS glue is safe.** A `Suspending`-wrapped import's JS runs to
-  completion and returns a Promise; suspension happens after it returns, so
-  host-side lift/lower in JS never sits on the suspended stack.
-- **Cross-component glue must be wasm.** A JS adapter between components A and
-  B would trap the moment anything below it suspends. FACT adapters keep those
-  stacks pure wasm — this is why §4.1 is the cornerstone.
-- **Component exports invoked from JS** that may transitively suspend must be
-  entered through `WebAssembly.promising` trampolines. This includes
-  JS-initiated resource drops (§7).
-- **Guest-initiated cross-component dtor calls** route through generated wasm
-  (direct funcref call in the adapter/intrinsic path), not a JS bounce.
+- Host-boundary glue runs inside the suspending import and returns its
+  Promise before suspension. It is not an intervening frame.
+- Cross-component ABI adapters are wasm. A JS adapter that calls another
+  guest would prevent a later suspension below it.
+- JS calls into wasm that may suspend need a `promising` entry. The
+  executor also prepares such entries for suspension-capable host-initiated
+  resource drops.
+- **Guest-initiated destructor calls are a current exception to the
+  pure-wasm path:** their dispatch contains a JS frame. They must complete
+  synchronously; attempting JSPI suspension traps. Pure-wasm destructor
+  dispatch is not implemented (§7).
 
 ## 6. Concurrency (the core deliverable)
 
-Existing hosts handle non-async components adequately; 0.3.0 concurrency is
-why this project exists. The runtime is therefore designed around the 0.3
-task model **from day one** — sync-only operation falls out as the degenerate
-case, exactly as in the reference implementation (`definitions.py`, where
-`canon_lift` always creates a Task/Thread and the sync path is a driving loop
-over the same structures). This ordering was deliberate: retrofitting the task
-model onto a sync-first runtime is the rearchitecting we were not allowed to
-need. (It is also, empirically, the rearchitecting jco is stuck in — see
-[consumers.md](consumers.md).)
+The task model follows the executable reference's `Store`, `Task`,
+`Thread`, and `Subtask` structures. Scheduling is cooperative: the JS
+event loop supplies host settlements, and explicit queues determine guest
+progress. There is no preemption.
 
-Mapping the reference model onto the web platform:
-
-| Reference concept | Implementation |
+| Reference operation | Runtime mechanism |
 |---|---|
-| `Thread` (suspendable computation) | wasm activation entered via `WebAssembly.promising` |
-| `Thread.wait_until` / blocking | call to a `Suspending` import returning a scheduler-controlled Promise |
-| resume | scheduler resolves that Promise (event-loop turn) |
-| scheduler | JS event loop + explicit ready queues; cooperative, matching the CM model — no preemption exists or is needed |
-| `Waitable` / `WaitableSet` | host-side event structures; `wait` = suspension (stackful) or the callback return-code protocol (stackless) |
-| callback ABI | no suspension at all: the scheduler invokes the callback export with events |
-| sync `canon_lift` driving loop | same scheduler: pump ready threads until resolved, with the spec's deadlock trap. Async-typed exports have no such loop in the reference (`canon_lift` returns after the first resume, line 2189), so their driver exits on idle and the Promise stays pending for a later driver to settle — wasmtime `call_concurrent`, not `call_async` (#292; contracts/embedder-api.md §"Functions and async") |
-| `Subtask`, backpressure, cancellation | direct ports of the reference structures |
+| Stackful thread execution | Wasm activation entered through `WebAssembly.promising` |
+| Blocking wait | `Suspending` import returning a scheduler-controlled Promise |
+| Resume | Scheduler resolves or consumes the relevant settlement |
+| Callback ABI | Scheduler invokes the callback export with events; no suspended wasm stack |
+| Waitable / waitable set | Host-side event state, consumed by stackful waits or callback return codes |
+| Sync `canon_lift` | Drive the task to resolution, retaining the reference's deadlock trap |
+| Async `canon_lift` | Exit the driver on idle; an unresolved export Promise stays pending for later progress |
 
-JSPI's three roles, precisely:
+JSPI is used for no-callback stackful async lifts, blocking sync lowers,
+and sync guests calling host imports marked `suspending()`. A callback
+ABI alone needs no JSPI, but a guest's blocking imports may still require
+it. Rust guest fixtures and external Go consumer workloads exercise callback
+lifts; the Go integration test skips when its external artifact is absent.
 
-1. **Stackful async lifts** (no-callback `async`) — the guest blocks mid-stack.
-2. **Blocking sync lowers** — a caller waiting on an unresolved subtask
-   (`thread.wait_until(subtask.resolved)` in the reference).
-3. **Sync guests over async host imports** — falls out of the same mechanism;
-   a useful capability, not a separate deliverable.
+**Scheduling policy.** The default is deterministic FIFO in waiting-list
+order, not the time readiness became true; pending events use join order.
+Tests can use seeded shuffling through `POLYENGINE_SCHED_SEED` to exercise
+spec-permitted scheduling variation. See `runtime/src/task/scheduler.ts`.
 
-The callback ABI needs no JSPI (stackless by design). Empirical confirmation
-(reconfirmed by every consumer artifact): wit-bindgen emits **exclusively
-callback-ABI async lifts**, and componentize-go likewise — running real async
-guests requires the task core, not JSPI.
+**Overlapping drivers.** Concurrent exports may run overlapping
+`driveAsync` loops on one store. The invariant is that an activation
+consumes a settlement at most once and never resumes from an obsolete
+settlement. `runtime/src/exec/boundary.ts` enforces this with synchronous
+awaiting-membership removal, memoized Promise tags, Promise-identity
+checks, and per-store pending-resumption bookkeeping.
 
-Determinism: the reference scheduler makes explicitly nondeterministic
-choices (`random.choice` over ready threads). **Decided:** deterministic
-FIFO ready-queue by default; a seeded-shuffle mode (`POLYENGINE_SCHED_SEED` env
-var) exercises the spec-allowed nondeterminism in tests, verified across
-seeds. Documented at `runtime/src/task/scheduler.ts`. A load-bearing
-architectural rule: **one driver per store** — concurrent `driveAsync` loops
-can double-resume threads; between export calls the two fallback drivers
-stand down whenever an export-call driver is live (the invariant and its
-benignity argument are documented at the site in
-`runtime/src/exec/boundary.ts`). There are exactly three drivers: export
-calls, the host-activity pump (embedder stream/future operations landing
-between calls), and the settlement pump, which services host-import
-settlements that land while the store is driver-idle. The settlement pump is
-what gives background tasks host-driven liveness between export calls (a
-task parked on a waitable set whose pending host call is a clock resumes at
-settlement time); wasmtime only delivers such wakeups while the embedder
-dwells in `run_concurrent`, but a JS host's event loop is always dwelling,
-so polyengine makes it unconditional.
+The asynchronous host-activity and host-settlement pumps are fallback
+drivers: they stand down cooperatively when another driver is active.
+This is not a ban on synchronous pump participation: `HostActivity.pump()`
+services settled activations and ticks ready threads before its async
+fallback checks driver depth, including while an export driver is live.
+Arrival notifications wake parked drivers so they can yield or reconsider their
+waits. New host-call registrations also wake incumbent drivers rather
+than leaving them parked on an obsolete snapshot of pending work.
 
-Named divergence ([#92](https://github.com/polymorph-components/polyengine/issues/92)):
-**the async form of `subtask.cancel` is not atomic under jspi.** The
-reference built-in returns `[BLOCKED]` with no suspension; polyengine parks the
-caller on a determinacy wait so the BLOCKED/resolved answer matches the
-reference's synchronous-delivery outcomes across the engine's mandatory
-microtask hop (jspi pin (j), pinned by `cancellable.wast`). While parked,
-other ready threads of the store may run, so sibling-task effects can become
-observable across the single built-in call — a reordering *within* the
-reference's own `Store.tick` freedom, taken one built-in early; every
-interleaved sibling was already at a block point. Rationale and mechanics at
-the site (`runtime/src/intrinsics/async_builtins.ts`, the determinacy park
-in `createSubtaskCancel`); regression pinned across seeds by
-`runtime/tests/cancel_bracket_race_test.ts`.
+**Between-calls progress.** A host import settling can resume background
+guest work even with no export call in flight. A task waiting for the
+embedder's half of a stream/future remains pending until the embedder
+acts. An idle async-typed export may remain pending indefinitely; sync-typed
+exports retain deadlock detection. See the
+[function contract](../contracts/embedder-api.md#functions-and-async).
 
-**Host-import cancellation resolves promptly by default.** The reference
-leaves a host callee's `on_cancel` to the embedding (`Store.invoke`,
-definitions.py line 572); wasmtime hosts hand back a future whose drop *is*
-cancellation. A JS Promise offers no such channel, so polyengine's lowered
-host imports answer with the reference's prompt-cancel shape —
-`on_cancel = () => on_resolve(None)` — resolving the subtask
-CANCELLED_BEFORE_RETURNED and discarding the promise's eventual settlement
-(never lowered, rejections unreported, deregistered from deadlock
-accounting). This is a reference-legal host behavior, not a divergence; the
-per-declaration `deferCancel()` brand (contracts/embedder-api.md
-§"Functions and async") restores run-to-completion for imports with commit
-points. The host operation itself is never interrupted — only delivery is
-cancelled. `abortable()` closes that gap for hosts that can be stopped: a
-marked import receives a fresh `AbortSignal` appended after its
-WIT-declared parameters on every call, and the runtime aborts it a
-microtask after the discard — never synchronously inside
-`canon_subtask_cancel`, so a host abort listener never runs inside a live
-guest activation. Whatever settlement the abort provokes (typically an
-`AbortError` rejection) arrives with the subtask already resolved and lands
-on the resolved-subtask guards, discarded like any other late settlement.
+**Host-import cancellation.** By default, cancellation resolves the
+subtask promptly as `CANCELLED_BEFORE_RETURNED` and discards late Promise
+settlements. The result is not lowered, and the discarded call no longer
+counts as an outstanding host dependency. This cancels delivery, not the
+JS operation. `deferCancel()` instead keeps the import running to
+completion; `abortable()` supplies a per-call `AbortSignal`. On discard,
+the signal is aborted in a microtask, never inside the guest activation.
+These are embedding policies permitted by the reference's host-callee
+cancellation hook.
 
-Named divergence ([#173](https://github.com/polymorph-components/polyengine/issues/173)):
-**per-instance poisoning is polyengine's only entry refusal.** A trap that
-escapes a guest activation marks the instance's corpse
-(`poisonedInstances`); every entry site refuses a marked instance
-permanently, naming the original trap
-([#145](https://github.com/polymorph-components/polyengine/issues/145)).
-The reference has no instance-level trap state at all and wasmtime kills
-the whole store on trap, so per-instance corpse semantics — sibling
-instances of the same instantiation stay usable — is purely this runtime's
-choice, pinned by `builtin-trap-poisons-instance.wast`'s substring
-expectations and the runtime poisoning suites. The same-instance exemption
-(`caller === callee` passes vacuously) is preserved in the refusal guard
-for the dtor self-drop path. There is no reentrance gate besides this:
-the spec removed `may_enter`/`entering_set`
-([CM#705](https://github.com/WebAssembly/component-model/pull/705)), and
-reentrance into a live instance — host-mediated or otherwise — is simply
-valid.
+Named differences from the reference or other hosts:
 
-Named divergence ([#296](https://github.com/polymorph-components/polyengine/issues/296)):
-**cancel-read/cancel-write of a copy that already COMPLETED reports
-CANCELLED|count.** definitions.py's `cancel_copy` returns an already-armed
-pending event verbatim, so cancelling a stream copy the guest never observed
-completing would report COMPLETED|count; polyengine instead supersedes an
-undelivered stream COMPLETED with CANCELLED, count preserved, following the
-upstream suite (`test/async/big-interleaving-test.wast:1526-1531`, which
-asserts `0x42` where the reference's own rule gives `0x40`) over
-definitions.py itself. Mechanics at the site
-(`runtime/src/intrinsics/stream_builtins.ts`, `takeCancelEvent`); the
-definitions.py-vs-suite disagreement is tracked for upstream filing as
-[CM-3](../upstream-component-model-repo-findings.md#cm-3-cancel_copy-returns-a-stale-completed-where-wasmtime-reports-cancelled).
+- **Async `subtask.cancel` under JSPI is not atomic**
+  ([#92](https://github.com/polymorph-components/polyengine/issues/92)).
+  The runtime may park for a determinate cancellation result across the
+  engine's mandatory microtask hop. Ready sibling threads can run during
+  that park. See `createSubtaskCancel` in
+  `runtime/src/intrinsics/async_builtins.ts` and
+  `runtime/tests/cancel_bracket_race_test.ts`.
+- **Per-instance poisoning**
+  ([#173](https://github.com/polymorph-components/polyengine/issues/173)).
+  A trap escaping a guest activation permanently poisons that instance;
+  later entry names the original cause. Sibling instances remain usable
+  unless the trap propagates into them. The reference has no instance-level
+  trap state; wasmtime's store-level trap handling is not this policy.
+  The same-instance exemption in `entryRefusal` permits destructor
+  self-drops. Reentrance into an otherwise live instance is valid.
+- **Cancelling an unobserved completed stream copy reports
+  `CANCELLED|count`**, preserving the count rather than delivering the
+  pending `COMPLETED|count`
+  ([#296](https://github.com/polymorph-components/polyengine/issues/296)).
+  This is the sole §1 corpus/reference exception,
+  [CM-3](../upstream-component-model-repo-findings.md#cm-3-cancel_copy-returns-a-stale-completed-where-wasmtime-reports-cancelled).
+  See `takeCancelEvent` in `runtime/src/intrinsics/stream_builtins.ts`.
 
 ## 7. Canonical ABI decisions
 
-Authority: [CanonicalABI.md] and its executable reference
-(`design/mvp/canonical-abi/definitions.py`). Where the host has freedom, we
-decide deliberately and document here.
+The [Canonical ABI][CanonicalABI.md] and pinned `definitions.py` govern
+lift/lower behavior. Public host shapes are specified in the
+[embedder contract](../contracts/embedder-api.md#value-mapping-normative).
 
-- **Strings.** Component strings are USV sequences; JS strings are WTF-16.
-  Lowering a JS string with lone surrogates uses WebIDL `USVString`
-  replacement semantics (U+FFFD). Guest→host lift via `TextDecoder`;
-  host→guest lower via `TextEncoder.encodeInto` directly into guest memory.
-  `latin1+utf16` is implemented in the v1 interpreter (wit-bindgen guests
-  themselves use utf8).
-- **Numbers.** `u64`/`s64` ↔ `BigInt`; everything else ↔ `number`.
-  `list<u8>` ↔ `Uint8Array` (copy; views into guest memory are never
-  exposed — with one deliberate, scoped exception: the `stream<u8>`
-  direct-access sessions of contracts/embedder-api.md §"Streams and
-  futures" hand the callback a view over the peer guest's landing zone or
-  unread bytes, valid only for that synchronous callback, so an external
-  byte mover's last hop can BE the one ABI copy). Both directions are bulk
-  copies: lift via a `Uint8Array` slice, lower via `Uint8Array.set`
-  (issue #54 — the per-element interpreted store cost ~45 ns/byte and
-  capped host→guest byte traffic at ~22 MB/s). Stream payload copies share
-  these paths, and u8 stream chunks stay `Uint8Array` through host buffers
-  too, so a host-side stream read costs exactly the one rendezvous copy.
-  Lists of the other flat element types (bool, s8, u16–u64/s16–s64,
-  f32/f64) keep their plain-array host shapes but also copy bulk, through
-  TypedArray views with the deterministic profile's NaN canonicalization
-  preserved in both directions (issue #67); the platform's
-  little-endianness is a named assumption checked once, with the DataView
-  per-element path as the big-endian fallback. `char` stays per-element
-  (its lift is per-element USV validation).
-- **Memory views** are re-acquired after any call that can grow memory
-  (`ArrayBuffer` detach on `memory.grow`).
-- **Resources.** Host-facing handles are classes with `Symbol.dispose`
-  (TS `using`), an explicit `[Symbol.dispose]()`/`drop()`, and a
-  `FinalizationRegistry` backstop for leaks. (Backstop-vs-teardown ordering
-  policy: open, [#10](https://github.com/polymorph-components/polyengine/issues/10).)
-- **Destructors.** Per spec (CanonicalABI.md §`canon resource.drop`): the dtor
-  is a core function `[rep] -> []`, invoked as a normal **non-async**
-  cross-component call — *"the destructor may not block. However, the
-  destructor may spawn a cooperative thread that does."* Dtor entry into a
-  live instance is valid; a poisoned implementing instance refuses (§6
-  divergence, with the same-instance exemption preserved for self-drops),
-  and a trapping dtor poisons the **implementing** instance
-  (`runtime/src/cabi/handles.ts` `callDtorGated`).
-  Host policy:
-  - CM-level blocking in a dtor → deterministic trap (falls out of general
-    sync-task rules).
-  - Host-import latency is invisible to CM semantics; a dtor calling a
-    `Suspending` host import is legal but needs a suspension-legal stack:
-    JS-initiated drops (`using`, FinalizationRegistry) enter via a `promising`
-    trampoline (`ResourceTypeInfo.dtorHost`, wired by the executor in jspi
-    mode for suspension-capable dtors — a non-suspendable dtor keeps the
-    exact synchronous path, avoiding the promising microtask hop's
-    one-turn entered window; the async entry bracket is held until the
-    activation settles, tracked in `pendingHostCalls`). **Known
-    limitation**: a *guest*-initiated drop reaches the dtor through a JS
-    trampoline frame, not the §5 pure-wasm funcref path — a Suspending
-    import under it is a deterministic JSPI frame-rule trap, not a
-    supported suspension. The pure-wasm dispatch path is future machinery;
-    until then §5's "guest-initiated dtor calls route through generated
-    wasm" is aspiration, not description.
-  - Host-held own handles carry lend tracking mirroring `num_lends`
-    ([#86](https://github.com/polymorph-components/polyengine/issues/86)):
-    drop/GC-backstop defer while lent; a backstop dtor trap poisons the
-    implementing instance and lands on the host-failure channel (never
-    `catch {}`-swallowed).
-  - Upstream spec findings related to drops and backpressure are tracked in
-    [upstream-component-model-repo-findings.md](../upstream-component-model-repo-findings.md),
-    the single source for component-model issue/PR filing. Implementation is
-    sync-only drop regardless of upstream timing.
-- **Component `value` imports/exports** (the component-level `value`
-  definition feature): wasmtime doesn't implement them; excluded from parity
-  scope. Note the official suite's `test/values/` directory is **not** this
-  feature — it is plain canonical-ABI value-passing tests (`canon lift` with
-  memory options) and is fully in scope.
-- **Reentrance**: the spec has no reentrance gate; the only entry refusal is
-  the poisoned-instance divergence (§6, enforced per §4.3 item 4).
+**Strings.** Host strings are plain JS strings without encoding provenance.
+Lowering treats them as UTF-16 code units and replaces lone surrogates
+with U+FFFD (WebIDL `USVString`). UTF-8 and UTF-16 lifts use fatal
+`TextDecoder`s; latin1 uses a byte-to-code-point mapping because the
+WHATWG `latin1` label means Windows-1252. All three CABI encodings,
+including `latin1+utf16`, are implemented.
+
+The current UTF-8 lowering path copies an ASCII prefix directly, then on
+non-ASCII input reallocates to the worst-case size, uses
+`TextEncoder.encode`, copies the encoded suffix, and shrinks if needed.
+UTF-16 uses explicit little-endian encoding; compact strings begin as
+latin1 and widen when necessary. There is no `encodeInto` fast path.
+See `runtime/src/cabi/strings.ts`.
+
+**Numbers and lists.** `u64`/`s64` use `bigint`; other numeric types use
+`number`. NaNs follow the deterministic profile. `list<u8>` uses copied
+`Uint8Array`s; other lists retain ordinary array host shapes. Flat numeric
+lists use bulk TypedArray paths on little-endian hosts, with NaN
+canonicalization and a DataView fallback for big-endian hosts. `char`
+requires per-element Unicode scalar validation.
+
+**Memory lifetime.** Views are reacquired after calls that can grow memory.
+Ordinary lifted lists never expose guest memory. The explicit
+`stream<u8>` direct-access API is the narrow exception: its callback may
+access the peer's landing zone or unread bytes only during that
+synchronous callback. See
+[Streams and futures](../contracts/embedder-api.md#streams-and-futures).
+
+**Resources.** Host-facing handles are classes with `drop()` and
+`Symbol.dispose` for explicit disposal, plus a `FinalizationRegistry`
+backstop. Finalization is not deterministic cleanup. Host-held owns track
+lends; explicit disposal invalidates the wrapper immediately but defers
+destruction while lent, as does the backstop. Backstop
+failure is reported through the host-failure channel, not swallowed.
+Backstop-versus-teardown policy remains tracked in
+[#10](https://github.com/polymorph-components/polyengine/issues/10).
+
+**Destructors.** `canon_resource_drop` lifts a core `[rep] -> []`
+destructor with synchronous canonical options. The destructor may not
+Component-Model-block, though the spec permits spawning an explicit
+thread that blocks without preventing the destructor's implicit thread
+from returning. This does not imply support for the deferred explicit-thread
+built-ins (§11). Both guest- and host-initiated drops of guest resources use
+`createDtorEntry` in `runtime/src/exec/boundary.ts`, creating a fresh
+synchronous task and implicit thread rather than borrowing the caller's
+task. A missing destructor still goes through that lift machinery.
+
+Guest-initiated drops use the synchronous drive and must finish before
+returning; thenables are refused. Their JS dispatch frame also prevents
+JSPI suspension (§5). Host-initiated drops can use a `promising` entry
+for a suspension-capable destructor: host-import latency does not itself
+constitute CM blocking. `drop(): void` does not wait for that activation's
+tail; the store drives completion, and asynchronous failures surface on
+the host-failure channel. The completion Promise is not itself registered
+as external host work; genuine host imports register their own waits.
+
+Destructor entry into a live instance is permitted. A trapping destructor
+poisons its implementing instance, with propagation able to poison its
+caller too. Poisoned-instance refusal retains the same-instance exemption
+for self-drops. Host-implemented resources have no guest implementing
+instance to enter or poison.
+
+**Component `value` definitions.** Component-level `value` imports/exports
+are excluded from the wasmtime parity target because the frontend does not
+implement them. The official `test/values/` directory tests ordinary CABI
+value passing and remains in scope.
 
 ## 8. Performance strategy
 
-Requirement: not critical now; must become fast **without rearchitecting**.
+The shipping host-boundary executor is the generic CABI descriptor
+interpreter, governed by
+[contracts/descriptor-ir.md](../contracts/descriptor-ir.md). FACT already
+generates wasm adapters for cross-component conversions, but these may
+call runtime intrinsics; they are not a guarantee of a JS-free hot path.
+Current optimizations include bulk list copies, byte-stream paths, slab
+handle tables, and grow-aware memory views. String implementation details
+are in §7.
 
-- **Cross-component calls are already the fast path**: FACT adapters, pure
-  wasm, no JS in the hot path. Nothing to do later.
-- **Host boundary** has two executors over one IR — specified in
-  **[contracts/descriptor-ir.md](../contracts/descriptor-ir.md)**:
-  - The shim emits **CABI descriptor tables** (a compact ops IR per function).
-  - v1: a generic interpreter walks descriptors. CSP-clean, everywhere.
-    This is what ships today; it has been fast enough for every consumer
-    gate so far.
-  - v2 (when a gap is measured — gated on
-    [#17](https://github.com/polymorph-components/polyengine/issues/17), not the calendar;
-    [#8](https://github.com/polymorph-components/polyengine/issues/8)): a generator from the
-    same descriptors to specialized JS **modules** — emission-only, never
-    `eval`/`new Function` (§3's CSP invariant). One mechanism, two
-    invocation times: a deploy-time AOT step, or — on server hosts
-    (Deno/Node, no CSP) — first-load emission into a cache directory and
-    `import()`; pre-warming and freezing that cache *is* the AOT step.
-    Browsers running dynamically-loaded components stay on the interpreter.
-    The generated-module contract is AOT-shaped from day one (explicit
-    linking context; no closure capture of live runtime state) so both
-    invocation times share one artifact. Two executors over one IR double
-    as a differential-testing oracle — exercised by importing emitted
-    modules, i.e. the production delivery mechanism itself.
-- Disciplines adopted from the start because they're hard to retrofit: slab
-  handle tables; no per-call closure/object allocation on hot paths; view
-  reuse with grow-aware invalidation; `encodeInto` for strings.
-- Future options, noted not planned: JS string builtins (now widely shipped)
-  for string-heavy host boundaries. Deploy-time unbundling (real URLs per
-  module → engine code-cache hits) is a packaging concern independent of the
-  executor choice and lives on the caching track (§10,
-  [#7](https://github.com/polymorph-components/polyengine/issues/7)).
+**Future, not implemented:** emit specialized JS modules from the same
+descriptors when measurements justify the additional executor
+([#8](https://github.com/polymorph-components/polyengine/issues/8),
+[#17](https://github.com/polymorph-components/polyengine/issues/17)).
+The proposed delivery is deploy-time emission, or server-side emission
+into a cache followed by `import()`, never `eval`/`new Function`.
+Dynamically loaded browser components would retain the interpreter.
+Differential tests between interpreted and emitted execution belong to
+that work; they are not a current gate.
+
+Translation time, artifact size, and call throughput depend on component,
+engine, and build configuration. There is no universal startup or
+throughput bound. Measure the relevant workload before adding another
+execution path or changing deployment packaging.
 
 ## 9. Bindings generation
 
-- A Rust CLI crate (`crates/bindgen`) built on **wit-bindgen-core**, consuming
-  `wit_parser::Resolve` + `WorldId`. **WIT source is the input** — the plan
-  cannot reproduce high-fidelity bindings (docs are lost in binaries, feature
-  gates are resolved away, aliasing is flattened) and the
-  bindings-before-any-component workflow requires WIT anyway.
-- Output: TypeScript — typed world/interface APIs, `.d.ts`, resource classes
-  (`using`-compatible), JSDoc from WIT doc comments, honoring
-  `@since`/`@unstable` gates.
-- Generated bindings import the runtime through a configurable base
-  (`--import-base`), defaulting to the versioned JSR specifier
-  `jsr:@polyengine/runtime@^<runtime/deno.json version>` (derived at build
-  time, never hand-written). A path or URL base addresses files
-  (`{base}/{module}/mod.ts`); a bare or registry base addresses package
-  exports (`{base}/{module}`) — `--import-base --help` states the rule and
-  its scheme fallback in full. The in-repo fixtures use the relative base
-  `../../../src` so `deno check` stays offline and on this checkout's source.
-- Host-facing value conventions (error model, stream/future wrappers,
-  variant/option/result shapes, resource classes, module-per-interface
-  authoring) are governed by the embedder conventions contract
-  (**[contracts/embedder-api.md](../contracts/embedder-api.md)**). Bindgen
-  also emits host-side types for **import worlds** (what an embedder must
-  provide), not only export-side facades — the consumers' host modules
-  ([consumers.md](consumers.md)) are the reference consumers of that surface.
-- **Skew protection, the wasmtime way**: the generator embeds a canonical
-  structural digest of the expected world into the bindings
-  ([contracts/digest.md](../contracts/digest.md)); `instantiate()` verifies it
-  against the loaded component's types (already computed by the translator)
-  and fails fast with a useful diff. Compile-time fidelity from WIT; load-time
-  truth from the binary.
-- Secondary, degraded mode: bindings from a component binary via its decoded
-  types (structure only, no docs). For third-party components; never primary.
-- Guest-side bindings are stock wit-bindgen (Rust et al.) — that toolchain is
-  the compatibility target, exercised by its own runtime tests (§11).
-- Version pinning: wit-parser/wasm-tools pinned to the same versions as the
-  translator's wasmtime, so WIT feature resolution matches.
+`crates/bindgen` reads a WIT file or directory through `wit_parser::Resolve`
+and selects a `WorldId`. It emits world/interface types, resource class
+declarations, host-provider types, an expected structural world digest,
+and a TypeScript instantiation wrapper. Guest-side bindings still come from external toolchains
+such as wit-bindgen.
+
+WIT is the source input because component translation does not retain its
+source-level fidelity. The current CLI emits a `.ts` file; it does not
+offer a separate `.d.ts` or component-binary generation mode. `.d.ts`
+files in the npm distribution come from the package build, not this CLI.
+
+WIT documentation/stability-aware output and a degraded binary-input mode
+remain design targets, not current CLI capabilities. The latter could
+recover structural types but not WIT source documentation.
+
+The generated instantiation wrapper checks its digest against the loaded
+plan, then delegates to the runtime, which constructs the facade and
+resource classes and adapts values. Generated resource declarations are
+not implementations that callers can import as constructors. The digest
+check follows [contracts/digest.md](../contracts/digest.md).
+This detects structural skew between bindings and component types. It
+does not authenticate the plan (§10).
+
+`--import-base` controls runtime imports. A path or URL addresses source
+files (`{base}/{module}/mod.ts`); a bare or registry specifier addresses
+package exports (`{base}/{module}`). The default JSR range derives from
+`runtime/deno.json` at build time. **Development manifests name the next
+release**, which may not exist in the registry: use an explicit compatible
+released base or the local source when generating from a checkout.
+In-repo fixtures use `../../../src`.
+
+The translator and bindgen share a pinned wasm-tools release train.
+Host value shapes, import resolution, errors, async behavior, and resource
+classes remain governed by the
+[embedder contract](../contracts/embedder-api.md).
 
 ## 10. Caching
 
-Two independent layers; nothing may *depend* on the second.
+**Artifact cache.** `runtime/src/cache/` stores the plan and FACT adapters,
+not the original component bytes. Its key includes the component SHA-256,
+translator build hash, and feature settings. `webCache()` uses the Cache
+API; `dirCache()` uses a Deno filesystem directory. A hit skips
+translation, not core-module compilation or instantiation.
 
-1. **Artifact cache (ours, bytes only).** `runtime/src/cache/` —
-   content-addressed by `(component sha256, translator build hash, features)`;
-   deterministic translation makes this trivial. Storage: Cache API in
-   browsers (`webCache`), a cache directory in Deno (`dirCache`). Skips the
-   translation stage on reload. The plan is stored, never the component bytes
-   (the plan slices the component by offset; whoever holds the cache key
-   already holds the bytes).
-2. **Engine code caches (opportunistic).** Chrome's wasm code cache is keyed
-   by URL but anchored to the **HTTP resource cache entry** (invalidation via
-   304/200 semantics + V8 version), applies only to
-   `compileStreaming`/`instantiateStreaming`, and only to modules **≥ 128 kB**
-   after full tier-up. Consequences:
-   - Service-worker-**synthesized** responses get streaming *compilation* but
-     no persistent code cache (no HTTP cache entry to anchor to). Same
-     conclusion in Firefox (alt-data on HTTP cache entries). Safari: no
-     persistent wasm code cache known.
-   - FACT adapters are kilobytes — under the threshold, never code-cached
-     anyway. Only large sliced core modules matter; recurring cost is
-     re-tier-up CPU, not startup latency (Liftoff is fast).
-   - If a deployment has a build step: run the translator there (same wasm,
-     under Deno) and publish artifacts at real URLs → full engine caching with
-     zero tricks. Optionally warm via service-worker install-time
-     `compileStreaming` of those real URLs.
-   - Empirical verification of the code-cache behavior is open:
-     [#7](https://github.com/polymorph-components/polyengine/issues/7).
+`translateCached` requires a non-null translator `buildHash`, including on
+a hit. `Translator.create(bytes)` computes it;
+`Translator.fromExports(ns, { buildHash })` accepts a known asset hash.
+The packaged loader's Deno wasm-module path currently supplies no hash,
+so that translator cannot be used directly with `translateCached`.
 
-Trust boundary (recorded lean, not yet forced by anything): trust locally-run
-translation; never trust artifacts that did not come from the local cache
-keyed by component hash. The runtime re-validates plan structure at load
-(strict `formatVersion`, schema checks) but does not re-verify that artifacts
-faithfully derive from the component bytes. Consequence for embedders — write
-access to a cache root is worth about what write access to the component files
-is worth: see [security.md](security.md) "The artifact cache is a trust input",
-which carries the pre-warmed read-only-cache recipe.
+Cache I/O failures must not fail an otherwise valid translation:
+`translateCached` falls back to fresh translation on `get` failure and
+returns fresh artifacts even if `put` fails. Backend self-heal eviction
+is best-effort; explicit `evict()` still reports errors.
+`onCacheError` reports caught `get`/`put` failures, while backend failures
+already converted to misses need not produce a callback. Component
+validation failures still propagate. Correctly populated entries can be
+read from a read-only cache, with a translator available for misses.
 
-No cache failure may fail a translation
-([#196](https://github.com/polymorph-components/polyengine/issues/196)): a
-`get`/`put`/self-heal-eviction failure — an unwritable root included — degrades
-to a fresh translation, reported only through `translateCached`'s opt-in
-`onCacheError`. That is what makes a read-only cache root a usable deployment
-rather than a crash. The public `evict()` still throws for explicit callers.
+**Current directory-cache limitation:** `put` preserves adapter names such
+as `adapters/0.wasm` beneath its own `adapters/` directory but does not
+create the additional nested directory. Normal adapter-bearing writes
+therefore fail and `translateCached` returns fresh artifacts without
+populating that entry. Adapter-free writes are not implicated, and
+correctly laid-out entries can still be read. Verify actual
+`fromCache: true` results after prewarming; successful translation alone
+does not establish that the cache was populated.
+
+**Engine code caches.** These are independent, opportunistic platform
+optimizations; correctness and artifact caching do not depend on them.
+V8's [published code-cache description](https://v8.dev/blog/wasm-code-caching)
+ties persistence to streaming compilation, HTTP cache entries, module
+size, and tier-up. Thresholds and policies are engine/version details,
+not polyengine guarantees. Synthesized responses or sliced component
+bytes should not be assumed to get the same persistent cache behavior as
+standalone modules served at real URLs. Deployment-specific verification
+is tracked in [#7](https://github.com/polymorph-components/polyengine/issues/7).
+
+**Trust.** Plans and adapters are trusted inputs whether produced locally,
+loaded from a cache, or shipped as build artifacts. The runtime checks
+structure, format versions, and component-byte identity, but does not
+prove that supplied artifacts are what the translator would produce.
+Protect them like executable inputs. See
+[The artifact cache is a trust input](security.md#the-artifact-cache-is-a-trust-input)
+for deployment guidance.
 
 ## 11. Conformance and testing
 
-There is no single official conformance suite; the corpus is assembled:
+| Source | Coverage |
+|---|---|
+| Pinned [Component Model][WebAssembly/component-model] `test/` corpus | Binary format, validation, linking, resources, values, and async behavior |
+| `definitions.py` and `run_tests.py` | Reference-derived lift/lower tests and fixtures in `runtime/tests/` |
+| Rust/wit-bindgen fixtures | Real guest ABI and runtime integration in `examples/guests/` |
+| External componentize-go consumer artifacts | `wasi/tests/integration_engine_go_test.ts` skips when the external artifact or shim is absent; consumer smoke tools provide additional external coverage |
+| Polymorph conformance suites and consumer smoke gates | Host-provider interfaces, composed components, background tasks, and resource flows; see [consumers.md](consumers.md) |
+| `runtime/tests/conventions/` | Committed transcripts of the public host ABI, gated with protocol versioning |
 
-| Source | What | How used |
-|---|---|---|
-| [WebAssembly/component-model] `test/` | official, growing WAST suite: `binary/`, `validation/`, `linking/`, `resources/`, `values/`, `async/` | git submodule; primary gate, all directories in scope. Independent check on the wasmtime-frontend reuse. |
-| same repo, `design/mvp/canonical-abi/definitions.py` + `run_tests.py` | executable CABI reference | lift/lower edge-case tests ported to TS unit tests (`runtime/tests/`) |
-| wit-bindgen runtime tests | guest programs exercising bindings | Rust guests, sync and async (wit-bindgen + `wasm-tools component new`), run against our host = the executable wit-bindgen-compat claim (`examples/guests/`) |
-| wasmtime `tests/misc_testsuite/component-model/` | engine-grade wast corpus | supplementary coverage |
-| polymorph conformance matrices (webcrypto/websocket/webrtc/tls, driven by polymorph-test) | per-interface implementation×environment conformance suites over real WIT surfaces | consumer lane ([consumers.md](consumers.md)): `ct-runner` executes them |
-| experiment-mosh gates + minimized repros (`compose-async-tdz`) | composed 3-component client: mixed sync/async exports, background pumps, resources re-exported across interfaces, componentize-go guest | strongest known real-workload exercisers — this family surfaced ≥5 distinct jco defect classes no WAST corpus expresses (`tools/smoke-c0/`) |
+Wasmtime's component-model tests are supplementary reference material
+([references.md](references.md)), not an additional corpus executed by the
+current generation or gate paths.
 
-Harness pipeline: an offline Rust step (`crates/testgen`) converts `.wast`
-into JSON commands + `.wasm` binaries by driving the `wast` and
-`json-from-wast` crates (the `wasm-tools json-from-wast` implementation) as
-libraries — the same conversion wasmtime's own wast runner performs
-in-process; the schema is upstream's, unmodified. The harness classifies
-each binary as core module vs component from its preamble (V8 cannot even
-validate component binaries). The TS harness executes the JSON identically
-under `deno test` and in browsers (`tools/browser/run-lane.ts`: static
-server + automated Chromium / Firefox-with-pref / WebKit, with per-lane
-expectation overlays and stale-delta detection) — and directly under engine
-*shells* and server runtimes (`tools/shell/run-lane.ts`: SpiderMonkey `js`,
-JSC `jsc`, and node/bun via a host preamble; same classification machinery,
-no browser). Because the corpus is engine-shaped, the per-push/PR engine
-gates are the **pinned shell lanes** (`sm-pinned` = the Firefox-release
-shell matching the browser lane, `jsc-pinned` = a sha256-mirrored trunk
-build, `node-pinned` = the node ≥ 26 runtime; `bun-pinned` rides along
-findings-only until it has a track record; `tools/shell/pins.json`);
-browser lanes run post-merge, verifying the embedding and shipped-channel
-configs and gating the prerelease. Trunk/nightly shells and a Deno-canary
-probe run weekly as findings-only canaries (`.github/workflows/canary.yml`)
-with a capability-probe preamble that surfaces wasm-proposal landings
-(multi-memory, GC, EH, memory64, …) before the corpus exercises them.
+`crates/testgen` uses `wast` and `json-from-wast` to convert WAST into JSON
+commands and wasm binaries. The TS harness distinguishes core modules
+from components by their preambles and executes the commands across Deno,
+browsers, engine shells, and server runtimes. Engine trap-message
+normalization belongs to `TRAP_MESSAGE_EQUIVALENTS` in
+`harness/src/runner.ts`, not the runtime.
 
-Also planned: differential testing of the interpreter vs emitted
-specialized-JS modules (§8, [#8](https://github.com/polymorph-components/polyengine/issues/8));
-differential fuzzing
-against native wasmtime with `wasm-smith`-generated components
-([#9](https://github.com/polymorph-components/polyengine/issues/9)).
+Expected failures are classified, not counted as conformance. Known
+classes include deferred thread support
+([#12](https://github.com/polymorph-components/polyengine/issues/12)),
+sync scheduling gaps
+([#249](https://github.com/polymorph-components/polyengine/issues/249)),
+and upstream-unimplemented features
+([#248](https://github.com/polymorph-components/polyengine/issues/248)).
+Per-lane overlays distinguish engine limitations from runtime failures.
+The current base classification is in [harness/src/xfail.ts](../harness/src/xfail.ts).
+Unexpected failures and stale expected failures fail their gate.
 
-Epistemic note: because our frontend *is* wasmtime's, wasmtime-derived tests
-partly test wasmtime against itself — weight the official suite and
-definitions.py ports accordingly. And passing suites is necessary, not
-sufficient: the consumer workloads found real defects that no WAST corpus
-expresses — which is why the in-repo smoke legs (`just smoke-tls`,
-`just smoke-c0`) are kept as gates, and the consumers' own matrices as
-high-yield sanity checks ([consumers.md](consumers.md)).
+The [justfile](../justfile) is the command surface; CI job bodies live in
+[.github/justfile](../.github/justfile). Required PR checks use the pinned
+shell lanes alongside core tests. Browser lanes run post-merge and gate
+prereleases; findings-only lanes do not become required checks merely by
+running there. Weekly canaries probe newer runtimes and engine features.
+`just gates` adds consumer smoke checks that require external checkouts.
+
+Passing suites is evidence, not proof. Wasmtime-derived tests share code
+with the translator; spec-derived tests and independent consumer workloads
+cover different failure modes. Native-wasmtime differential fuzzing is
+future work ([#9](https://github.com/polymorph-components/polyengine/issues/9)),
+as is interpreter-versus-emitted-module testing (§8).
 
 ## 12. Risks
 
-| Risk | Severity | Mitigation |
-|---|---|---|
-| wasmtime internal API churn (`wasmtime-environ` is internal/unstable) | medium, recurring | shim isolation + version pinning (a git rev of `main` since the 49-dev bump, not a crates.io release); upgrades are deliberate events ([#1](https://github.com/polymorph-components/polyengine/issues/1)) |
-| JSPI phase-4 drift | medium | small trampoline surface, centralized; track proposal |
-| Safari: stable-channel JSPI status unverified | accepted | floor is explicit; JSPI unflagged on WPE 26.5, and Safari Technology Preview carries JSPI + multi-memory — stable channel is the remaining gap ([#11](https://github.com/polymorph-components/polyengine/issues/11)); callback-ABI consumers don't need it |
-| JSC/SpiderMonkey engine gaps | medium | Deno-first dev; file upstream. SpiderMonkey JSPI is clean over the full corpus (pref-flipped); **JSC's real gap was missing multi-memory** (capped the WebKit lane — the CABI routinely needs >1 memory per module), not JSPI. Resolved in WebKit trunk: default-on from the webkit-2342 playwright roll, lane at effective parity there ([#11](https://github.com/polymorph-components/polyengine/issues/11)) |
-| Testing wasmtime-with-wasmtime blind spots | medium | official suite + definitions.py ports as independent checks; consumer suites as real-workload sanity checks |
-| CSP variance in embedders | low | baseline needs only `wasm-unsafe-eval` — an invariant, no path may require full `unsafe-eval` (§3); specialized JS is emission-only, deploy-time or server-side cache import ([#8](https://github.com/polymorph-components/polyengine/issues/8)) |
-| Consumer coupling churn: 7+ downstream repos tracking pre-1.0 plan/contract formats | medium | caret-honest registry releases ([#16](https://github.com/polymorph-components/polyengine/issues/16)): still 0.x/unstable, compatible within a minor line, breaking changes bump the minor — consumers couple by caret; `pre-<shorthash>` prerelease artifacts (exact pins) and git refs track `main` between releases; strict formatVersion equality already fails loud |
-| Consumer scope creep pulling WASI implementations into the core | medium | the wasi package is a separate deliverable with consumer-driven scope; §2 non-goal stands |
-| Host-boundary perf vs jco's generated JS (v1 interpreter) | low-medium | translation throughput measured (multi-MB components in tens of ms); cutover benches tracked with [#8](https://github.com/polymorph-components/polyengine/issues/8) |
+| Risk | Current response / limitation |
+|---|---|
+| Unstable wasmtime frontend API | Pin dependencies, isolate mapping in the shim, and run integration gates on upgrades |
+| Engine capability gaps | Explicit per-lane expectations; do not infer stable Safari or older runtime support from trunk results |
+| JSPI frame restrictions | Wasm adapters and centralized entry wrapping; guest-initiated suspending destructors remain unsupported |
+| Scheduler and shared-frontend blind spots | Seeded scheduling, reference tests, regression fixtures, and consumer gates; none establish exhaustive parity |
+| Host-boundary interpreter cost | Measure workloads; specialized-module emission remains future work |
+| Pre-1.0 interface churn | Compatible minor-line releases, explicit breaking-version events, and strict plan-format checks |
+| Artifact or host-provider authority | Trusted artifacts and explicit capability grants; WASI confinement is not a hostile-guest sandbox ([security.md](security.md)) |
+| Resource cleanup timing | Prefer explicit disposal; finalization and teardown ordering have limits (§7) |
 
 [WebAssembly/component-model]: https://github.com/WebAssembly/component-model
 [CanonicalABI.md]: https://github.com/WebAssembly/component-model/blob/main/design/mvp/CanonicalABI.md

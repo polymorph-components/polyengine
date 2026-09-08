@@ -19,12 +19,10 @@ export function alignTo(ptr: number, alignment: number): number {
 
 /**
  * Everything the lift/lower paths need to know about one type's byte layout,
- * computed once and shared (issue #261).
+ * computed once and shared.
  *
- * Deliberately ONE flat interface rather than a discriminated union of
- * per-kind layouts: every `Layout` then has the same hidden class, so the hot
- * property loads in `load`/`store` stay monomorphic. Fields that do not apply
- * to a kind carry null/0 — please do not "improve" this into a union.
+ * One flat shape keeps property access uniform across kinds. Fields that do
+ * not apply carry null/0; consumers must interpret them using `d.kind`.
  */
 export interface Layout {
   /** The despecialized type (definitions.py `despecialize`). */
@@ -42,11 +40,8 @@ export interface Layout {
  * Layout memo, keyed on type identity — see the despecialization memo in
  * types.ts for why identity is a sound key.
  *
- * One map PER POINTER WIDTH, because layout is a function of both: `string`,
- * variable-length `list` and the handle types all size off `ptrSize(ptrType)`.
- * A single map keyed on the type alone would return i32 layouts to a memory64
- * instance — silently, and with no corpus coverage to catch it, which is why
- * layout_cache_test.ts pins it explicitly.
+ * Separate maps per pointer width: string and variable-list descriptors
+ * contain pointer-sized fields. Handles remain four bytes in either mode.
  */
 const layoutsI32 = new WeakMap<ValType, Layout>();
 const layoutsI64 = new WeakMap<ValType, Layout>();
@@ -56,16 +51,12 @@ export function layoutOf(t: ValType, ptrType: PtrType): Layout {
   const hit = cache.get(t);
   if (hit !== undefined) return hit;
   const l = computeLayout(t, ptrType);
-  // Cached only after the computation returns, so a type that trips
-  // `elemSizeRecord`'s "empty record" assert keeps tripping it on every call
-  // instead of leaving a half-built node behind.
+  // Failed computations must not leave a cache entry.
   cache.set(t, l);
   return l;
 }
 
-/** Frozen for the same reason the despecialized nodes are: the node is now
- * shared by every caller, and the engine is a better guarantor of that than
- * an audit of today's call sites. */
+/** Freeze shared layout metadata; the input type itself must stay immutable. */
 function mkLayout(
   d: DespecializedValType,
   align: number,
@@ -74,12 +65,8 @@ function mkLayout(
   discSize: 0 | 1 | 2 | 4 = 0,
   payloadOffset = 0,
 ): Layout {
-  // The premise the whole cache rests on: every alignment is a power of two.
-  // It is what lets `load`/`store` substitute `ptr % align === 0` for
-  // `ptr === alignTo(ptr, align)`, and what lets the retained field/payload
-  // offsets be base-relative (the aligned base factors out of `alignTo`).
-  // True by induction over `computeLayout` — asserted here so it stays true,
-  // once per type rather than per value.
+  // Power-of-two alignments divide the containing type's alignment, allowing
+  // field/payload offsets to be relative to an aligned base.
   assert_(
     align > 0 && (align & (align - 1)) === 0,
     "layout alignment must be a power of two",
@@ -95,10 +82,7 @@ function mkLayout(
 }
 
 /**
- * definitions.py `alignment` (line 1201) and `elem_size` (line 1259) fused:
- * the two functions switch over the same despecialized kinds, and every hot
- * caller wants both. The compound kinds delegate to the per-kind kernels
- * below, which stay the line-by-line spec mirror.
+ * definitions.py `alignment` and `elem_size`, computed together.
  */
 function computeLayout(t: ValType, ptrType: PtrType): Layout {
   const d = despecialize(t);
@@ -149,17 +133,10 @@ function computeLayout(t: ValType, ptrType: PtrType): Layout {
 }
 
 /**
- * The field offsets are exactly the intermediate `p` that
- * `elemSizeRecord` computes and discards — the same accumulation, retained
- * rather than re-derived, so the offsets cannot drift from the spec's own
- * arithmetic. Size and alignment still come from the kernels themselves,
- * which remain the single source of truth (and the "empty record" assert).
- *
- * They are BASE-RELATIVE, where the spec realigns a running absolute `p`.
- * The two agree because `load`/`store` have already asserted that the base is
- * aligned to this record's own alignment, which is the max over its fields',
- * and alignments are powers of two: `alignTo(base + p, a) == base +
- * alignTo(p, a)` whenever `a` divides `base`.
+ * Retain the field offsets from the reference's running alignment arithmetic.
+ * Offsets are byte distances from an aligned record base. This is equivalent
+ * to realigning absolute pointers because each field alignment divides the
+ * base: `alignTo(base + p, a) == base + alignTo(p, a)`.
  */
 function recordLayout(
   d: DespecializedValType,

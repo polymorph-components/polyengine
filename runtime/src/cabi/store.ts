@@ -31,10 +31,7 @@ export function store(
   ptr: number,
 ): void {
   const mem = requireMemory(cx.opts);
-  // The load-side mirror: one cached layout node carrying the despecialized
-  // type as well (issue #261), and `ptr % align === 0` in place of
-  // `ptr === alignTo(ptr, align)` — identical for power-of-two alignments,
-  // minus the float divide.
+  // The cached layout also supplies the despecialized type.
   const L = layoutOf(t, mem.ptrType());
   assert_(ptr % L.align === 0, "store misaligned");
   assert_(ptr + L.size <= mem.length, "store OOB");
@@ -172,20 +169,15 @@ export function storeListIntoValidRange(
   const mem = requireMemory(cx.opts);
   const L = layoutOf(elemType, mem.ptrType());
   const kind = L.d.kind;
-  // docs/architecture.md §7: list<u8> is Uint8Array-shaped on the host, and
-  // both directions are bulk copies — this is the store-side mirror of
-  // load.ts `loadListFromValidRange`'s u8 fast path (issue #54: the
-  // per-element interpreted store cost ~45 ns/byte, capping async imports
-  // returning list<u8> at ~22 MB/s while the lift ran at memcpy speed).
+  // list<u8> uses Uint8Array at the raw and facade boundaries.
   if (kind === "u8") {
     const dst = bytesOf(mem, ptr, v.length);
     if (v instanceof Uint8Array) {
       dst.set(v);
       return;
     }
-    // Plain-array sources (raw-layer embedders) keep the exact per-element
-    // semantics of `storeInt(…, 1)`: assert integer-ness, then mask mod 256
-    // (a Uint8Array element write and DataView.setUint8 wrap identically).
+    // Plain arrays assert integer shape but wrap modulo 256, unlike scalar
+    // storeInt's range assertion. See bulk_lists.ts for this raw-input split.
     for (let i = 0; i < v.length; i++) {
       const x = v[i];
       assert_(typeof x === "number" && Number.isInteger(x), "int store");
@@ -193,10 +185,8 @@ export function storeListIntoValidRange(
     }
     return;
   }
-  // Other flat element types store bulk too (issue #67), preserving the
-  // per-element semantics exactly (same asserts, same wrap, canonical-NaN
-  // floats); falls through for compound types, char, and non-little-endian
-  // platforms.
+  // Bulk integer stores wrap; floats canonicalize NaNs (bulk_lists.ts).
+  // Unsupported kinds/platforms/views fall back to scalar stores.
   if (tryStoreNumericList(mem, v, ptr, kind)) return;
   const size = L.size;
   for (let i = 0; i < v.length; i++) {
@@ -204,8 +194,7 @@ export function storeListIntoValidRange(
   }
 }
 
-/** The store-side mirror of `loadRecord`: indexed offset writes, no per-field
- * layout recomputation (issue #261). */
+/** Byte offsets must match these fields and the memory's pointer width. */
 export function storeRecord(
   cx: LiftLowerContext,
   v: Record<string, ComponentValue>,
@@ -225,11 +214,8 @@ export function matchCase(
   cases: CaseType[],
 ): [number, ComponentValue] {
   const label = v.kind;
-  // `caseIndexOf` is the memoized form of the linear scan this used to run on
-  // every variant stored (issue #261); it maps a duplicated label to -1, so
-  // the "exactly one match" condition below is unchanged. A missing or
-  // non-string `kind` cannot be a key of that Map either, so this one assert
-  // covers a malformed value too.
+  // Missing labels and duplicates (-1) both violate the exactly-one-match
+  // host precondition.
   const i = caseIndexOf(cases).get(label);
   assert_(i !== undefined && i >= 0, `variant case '${label}' not found`);
   return [i as number, v.value];

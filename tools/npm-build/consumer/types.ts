@@ -37,10 +37,7 @@ export async function typeSurface(componentBytes: Uint8Array) {
 
   // A byte stream is `Stream<number>`: `Chunk<T>` widens a numeric element
   // type to `Uint8Array | number[]`, so the u8 bulk path is expressible.
-  // `createStream` (contracts/embedder-api.md §"The host-ABI surface and
-  // its version") is the application-surface spelling of
-  // the former `Stream.create()` static — the concrete class is no longer
-  // exported.
+  // createStream is the application factory; Stream is the returned handle type.
   const { stream, writer } = createStream<number>();
   await writer.write(new Uint8Array([1, 2, 3]));
   await writer.close();

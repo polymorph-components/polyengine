@@ -1,12 +1,9 @@
 // Float bit handling (definitions.py NaN canonicalization and
 // reinterpretation helpers).
 //
-// The reference has a DETERMINISTIC_PROFILE toggle; this port implements only
-// the deterministic profile (NaNs canonicalized on lift and on
-// store/lower). JS forces this: NaN payloads are not reliably observable or
-// preservable through JS numbers, so the "scramble" branch of the reference
-// is not implementable — and run_tests.py itself runs the deterministic
-// profile. Recorded as a decision in runtime/README.md.
+// Use the reference's deterministic NaN policy on lift and store/lower.
+// JS numbers do not reliably preserve NaN payloads, so raw payload identity
+// is not part of this value boundary's contract.
 
 export const CANONICAL_FLOAT32_NAN = 0x7fc00000;
 export const CANONICAL_FLOAT64_NAN = 0x7ff8000000000000n;

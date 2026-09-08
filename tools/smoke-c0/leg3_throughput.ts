@@ -1,11 +1,10 @@
 // Leg 3 — translator throughput on the multi-MB consumer corpus.
 //
-//   deno run --allow-read leg3_throughput.ts
+//   deno task leg3
 //
 // Times `translateRaw` cold + 3 warm per artifact, records envelope size and
 // plan shape, and dumps `errorDetail` verbatim for rejections (rejections are
 // FINDINGS for the consumer-smoke discrepancy table, not failures of this leg).
-// Baseline datum: 94 KB component in ~28 ms.
 
 import {
   ARTIFACTS,

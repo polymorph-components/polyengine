@@ -5,7 +5,7 @@
 #   1. cargo build --release --target wasm32-unknown-unknown
 #      (pure computational reactors: no WASI imports, so no wasip1 adapter)
 #   2. wasm-tools component new   core module -> component
-#   3. wasm-tools validate        (component-model; + cm-async for async-probe)
+#   3. wasm-tools validate        (component-model; + cm-async for async guests)
 #   4. wasm-tools component wit   print the component's world (round-trip sanity)
 #
 # Outputs land in guests/build/ (gitignored). All guest crates share
@@ -23,7 +23,7 @@ export CARGO_TARGET_DIR="$PWD/guests/target"
 GUESTS="hello values resources async-probe context-user stream-echo stream-pass future-user future-import resource-stream tcp-echo http-fetch test-suite fs-probe net-probe cancel-import"
 
 # Most guests are pure computational reactors on wasm32-unknown-unknown;
-# fs-probe and net-probe build for wasm32-wasip2 ON PURPOSE — std::fs /
+# fs-probe and net-probe build for wasm32-wasip2: std::fs /
 # std::net through wasi-libc is the linkage under test, and the wasip2
 # target emits a finished component (no `component new` step).
 target_for() {
@@ -76,8 +76,7 @@ if command -v wasmtime >/dev/null 2>&1; then
   check 'label("hi")' values.component.wasm          'echo-variant(label("hi"))'
   check '{read, exec}' values.component.wasm         'echo-flags({read, exec})'
   check '0' resources.component.wasm                 'live-counters()'
-  # Component Model 0.3 async export (callback ABI): runs on wasmtime 47
-  # with default flags; exercises yield suspension + task.return.
+  # Callback-ABI async exports exercise yield suspension and task.return.
   check '42' async-probe.component.wasm              'wait-then-double(21)'
   check '6' context-user.component.wasm               'interleave(4)'
   echo "smoke run OK"

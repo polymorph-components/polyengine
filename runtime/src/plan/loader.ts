@@ -8,7 +8,7 @@
 //     (types.ts drops ABI-irrelevant names; labels are preserved separately
 //     for bindgen/digest use)
 //   - own/borrow `resource: <table index>` (wire) -> `ResourceTypeInfo`
-//     identity tokens created per resource table at load time
+//     identity tokens shared by concrete tables naming one resource
 
 import {
   type FuncType,
@@ -63,34 +63,8 @@ export class TranslateError extends Error {
 }
 
 /**
- * The single formatVersion this executor understands.
- *
- * v5 (wasmtime `main` bump, polyengine translator-shim update): CoreDef lost
- * `"task-may-block"` (wasmtime #14146 dropped the FACT-visible may-block
- * global; sync-blocking is now enforced lazily by the scheduler). The `trap`
- * trampoline gained a `code` field (now one nullary import per trap code,
- * `runtime.trap<N>`, rather than a call argument). The thread trampoline set
- * was renamed/expanded: `thread-suspend-to-suspended`, `thread-suspend-to`,
- * `thread-unsuspend`, `thread-yield-to-suspended` are gone; `thread-index`
- * gained an `instance` field; `thread-resume-later`,
- * `thread-suspend-then-resume`, `thread-yield-then-resume`,
- * `thread-suspend-then-promote`, `thread-yield-then-promote` are new.
- * v4 (2026-08-17, polyengine#13): `exports[]` gained the `"module"` kind — a
- * component exporting one of its own embedded core modules, surfaced as the
- * already-compiled `WebAssembly.Module`.
- * v3 (2026-08-10, polyengine#89): `errorContextTables` — the index space the
- * `error-context-transfer` trampoline actually uses (it was resolved through
- * the *resource*-table mapping before, a different space) — and
- * `task-return`'s `resultType` / raw `results` split, which lets a FACT
- * callee task carry its declared result type.
- * v2: `streamTables` / `futureTables` — the element types the
- * stream and future built-ins need to size their copy buffers.
- * v1 (contracts/plan-format.md v0.3): `CoreDef` gained `"unsafe-intrinsic"`.
- * The change is purely additive, but the contract's compat rule is a strict
- * equality check ("Validate `formatVersion` and fail fast on mismatch",
- * producer and consumer bumped in the same commit), so v0 plans are refused
- * rather than best-effort accepted — a stale cached artifact must be a loud
- * failure, not a subtly different execution.
+ * The only accepted formatVersion. Strict equality prevents stale plans
+ * from being interpreted with different wire semantics.
  * @internal
  */
 export const SUPPORTED_FORMAT_VERSION = 5;
@@ -109,9 +83,9 @@ export interface LoadedPlan {
   /** Converted types table, index-aligned with `wire.types`. */
   types: LoadedType[];
   /**
-   * Identity tokens for resource tables, index-aligned with
-   * `wire.resourceTables`. The executor fills `impl`/`dtor` while running
-   * `resource` initializers.
+   * Index-aligned with wire.resourceTables. Concrete tables naming the same
+   * ResourceIndex share a token; abstract tables get distinct tokens.
+   * The executor fills implementation/destructor state during instantiation.
    */
   resourceTokens: ResourceTypeInfo[];
   /**
@@ -120,21 +94,21 @@ export interface LoadedPlan {
    * (the `importedResources` field; contracts/plan-format.md schema).
    */
   numImportedResources: number;
-  /** Element type per stream table (plan v2); `null` = zero-width payload. */
+  /** Element type per stream table; `null` = zero-width payload. */
   streamElems: (ValType | null)[];
-  /** Element type per future table (plan v2). */
+  /** Element type per future table. */
   futureElems: (ValType | null)[];
-  /** Owning component instance per stream/future table (plan v2). */
+  /** Owning component instance per stream/future table. */
   streamTableInstances: number[];
   futureTableInstances: number[];
   /**
-   * Owning component instance per error-context table (plan v3), index space
+   * Owning component instance per error-context table, index space
    * == `TypeComponentLocalErrorContextTableIndex`.
    */
   errorContextTableInstances: number[];
   /**
    * Raw wasmtime `TypeTupleIndex` -> `plan.types` index, collected from the
-   * `task-return` trampolines (plan v3). The key is what FACT's
+   * `task-return` trampolines. The key is what FACT's
    * `prepare-call` passes as `task_return_type` at runtime; the value is the
    * interned tuple type. A callee with no `task.return` trampoline of its own
    * (a sync-lifted callee) contributes no entry, and the lookup then reports
@@ -163,19 +137,9 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
       "canonicalOptions",
       "types",
       "resourceTables",
-      // ISSUE #94(2): the shim (crates/translator-shim/src/plan.rs) has no
-      // `skip_serializing_if` on `stream_tables`/`future_tables` — a real
-      // emitted v2 plan always serializes these as arrays (`[]` when empty,
-      // never absent). Requiring presence here keeps the loader consistent
-      // with what the producer actually emits, rather than silently
-      // tolerating an absent field via `?? []` (which would also mask a
-      // genuinely malformed/truncated envelope).
+      // The producer emits empty arrays, not absent table fields.
       "streamTables",
       "futureTables",
-      // Same reasoning at v3 (the shim has no `skip_serializing_if` on
-      // `error_context_tables` either): presence is what the producer
-      // guarantees, so absence is a malformed envelope, not an empty table
-      // space.
       "errorContextTables",
       "imports",
       "exports",
@@ -186,14 +150,8 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
     }
   }
 
-  // ISSUE #94(3): deep-schema strictness. `initializers` / `trampolines` /
-  // `canonicalOptions` / `CoreDef`s reach `runInitializers` unchecked today;
-  // a malformed op object (e.g. `{"op":"instantiate-module"}` missing
-  // `args`) dies as a raw `TypeError` deep in the executor rather than a
-  // typed `PlanError` here at load time. Proportionate check: a
-  // discriminated-union switch per op/trampoline kind verifying required
-  // fields are present and primitively typed — not a full JSON-schema
-  // engine.
+  // Validate required fields and primitive shapes before execution. These
+  // checks are not a complete schema or cross-reference validator.
   wire.initializers.forEach((init, i) =>
     validateInitializer(init, `initializers[${i}]`)
   );
@@ -203,20 +161,11 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
   wire.canonicalOptions.forEach((o, i) =>
     validateCanonicalOptions(o, `canonicalOptions[${i}]`)
   );
-  // plan v3: `errorContextTables` entries are `{ instance }` and nothing
-  // else; the executor routes real handle-table lookups through them, so a
-  // malformed entry must fail here rather than as an undefined index later.
   wire.errorContextTables.forEach((t, i) => {
     const where = `errorContextTables[${i}]`;
     expect(isRecord(t), where, `must be an object, got ${describeValue(t)}`);
     expectNumber(t as unknown as Record<string, unknown>, "instance", where);
   });
-  // ISSUE #187: `modules[]` / `exports[]` / `imports[]` get the same
-  // deep-schema treatment as initializers/trampolines/canonicalOptions
-  // (#94(3)) — a malformed entry must die here as a typed `PlanError`,
-  // never as a raw TypeError in `Executor.buildExport` or (worse) as a
-  // silent negative-offset slice of the wrong component bytes in
-  // `compileModules` (executor.ts's only guard was an upper-bound check).
   wire.modules.forEach((m, i) => validateModule(m, `modules[${i}]`));
   wire.imports.forEach((imp, i) => validateImport(imp, `imports[${i}]`));
   wire.exports.forEach((exp, i) => validateExport(exp, `exports[${i}]`));
@@ -234,22 +183,9 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
     }
   }
 
-  // Identity tokens: one per RESOURCE, aliased through every table that
-  // names it — NOT one per table. plan-format.md "Type exports index into `resourceTables`": "one
-  // resource type can be reachable through several distinct table indices …
-  // Consumers keying per-resource state must key by `resourceTables[n]
-  // .resource`, treating table indices as aliases." Minting per-table broke
-  // exactly the way that warning predicts (found by the #18 polymorph-tls
-  // smoke): in a wac-composed component the source and destination future
-  // tables of a FACT transfer resolve `own<R>` through different table
-  // indices, and `valTypeEqual`'s documented reference-identity comparison
-  // (cabi/types.ts) saw two tokens for one resource — "future: destination
-  // element mismatch" on every resource-bearing element type. wasmtime
-  // interns identity at the `ResourceIndex` level and its transfer libcall
-  // never re-compares element types at runtime (47.0.3
-  // futures_and_streams.rs `guest_transfer`); unifying here restores parity
-  // for every structural-equality site at once. Abstract tables keep
-  // per-table tokens (no `resource` to key by; none in the current corpus).
+  // Nominal identity is per ResourceIndex, not table index. Alias concrete
+  // tables so resource-bearing type comparisons agree across component hops.
+  // Abstract tables have no ResourceIndex and retain per-table tokens.
   const tokenByResource = new Map<number, ResourceTypeInfo>();
   const resourceTokens = wire.resourceTables.map((table) => {
     if (table.kind !== "concrete") return new ResourceTypeInfo(null, null);
@@ -263,7 +199,7 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
   const types = wire.types.map((t, i) =>
     loadTypeDecl(t, resourceTokens, `types[${i}]`)
   );
-  // plan v3: the `task-return` decls double as the `TypeTupleIndex` ->
+  // The `task-return` decls double as the `TypeTupleIndex` ->
   // `plan.types` dictionary (see `LoadedPlan.resultTupleTypes`). Two decls
   // naming the same raw tuple must agree — they are interned from one
   // wasmtime type, so disagreement means a hand-edited/corrupt plan.
@@ -312,9 +248,8 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
 
 /**
  * Component-wide `ResourceIndex` for a `DefinedResourceIndex` (the `index`
- * field of a `resource` initializer). Mirrors wasmtime
- * `Component::resource_index` (wasmtime-environ 47.0.3
- * `component/info.rs:222`).
+ * field of a `resource` initializer). Imported resources precede definitions,
+ * matching wasmtime's `Component::resource_index`.
  * @internal
  */
 export function resourceIndexOfDefined(
@@ -342,8 +277,7 @@ export function loadEnvelope(json: string): {
     throw new PlanError(`envelope is not valid JSON: ${e}`);
   }
   if (envelope.error !== undefined) {
-    // v0.1 producers send only `error`; treat the missing structured verdict
-    // as "internal" — an unknown phase must never be read as a validation
+    // Without a structured phase, the error cannot count as a validation
     // verdict (see TranslateError).
     throw new TranslateError(
       envelope.errorDetail ??
@@ -366,7 +300,7 @@ function base64Decode(s: string): Uint8Array {
   return out;
 }
 
-// --- ISSUE #94(3): deep-schema validation --------------------------------
+// --- Wire shape validation ----------------------------------------------
 //
 // Proportionate shape-checking for the wire-format ops the executor runs
 // strictly: required-field presence + primitive-type checks per
@@ -424,11 +358,8 @@ function expectString(
   );
 }
 
-// ISSUE #187: `offset`/`len` reach `Uint8Array.slice` unchecked today; a
-// negative or non-integer value is not merely "wrong type" (expectNumber
-// would pass NaN and negatives through) but silently slices the *wrong*
-// component bytes (`slice(-100, -8)` reads from the tail). Reject anything
-// that is not a non-negative safe integer.
+// Slice offsets/lengths need safe non-negative integers: negative offsets
+// would silently select bytes relative to the component's end.
 function expectNonNegativeInt(
   o: Record<string, unknown>,
   field: string,
@@ -580,10 +511,9 @@ function validateInitializer(init: unknown, where: string): void {
 
 // Trampoline kinds with precise wire shapes (format.ts's non-catch-all
 // arms). Everything else falls to the `{ kind: string; index: number;
-// [field: string]: unknown }` catch-all — milestone-aware unsupported
-// kinds the executor rejects at instantiate time (contracts/intrinsics.md
-// §B), so only `kind` (string) and `index` (number) are load-time
-// invariants for those.
+// [field: string]: unknown }` catch-all. Some catch-all kinds are implemented
+// by the intrinsic factory; only their common fields are validated here.
+// Unsupported kinds fail when the executor resolves them.
 function validateTrampoline(t: unknown, where: string): void {
   expect(isRecord(t), where, `must be an object, got ${describeValue(t)}`);
   const tr = t as Record<string, unknown>;
@@ -604,7 +534,7 @@ function validateTrampoline(t: unknown, where: string): void {
     case "task-return":
       expectNumber(tr, "instance", where);
       expectNumber(tr, "results", where);
-      // plan v3: required, `number | null`.
+      // Required, `number | null`.
       expectNumberOrNull(tr, "resultType", where);
       expectNumber(tr, "options", where);
       return;
@@ -615,8 +545,7 @@ function validateTrampoline(t: unknown, where: string): void {
       expectNumber(tr, "resource", where);
       return;
     default:
-      // Catch-all: unknown/milestone-gated kind, only the common fields
-      // above are required.
+      // Catch-all: only common fields are checked here.
       return;
   }
 }
@@ -658,12 +587,7 @@ function validateCanonicalOptions(o: unknown, where: string): void {
   }
 }
 
-// ISSUE #187: `modules[]` — mirrors format.ts's `WireModule` union exactly.
-// `embedded`'s `offset`/`len` are the fields the negative-offset walk in
-// the issue exploits (executor.ts's only guard was `end > length`, which a
-// negative `offset` sails through); `adapter`'s `file`/`len`/`intrinsics`
-// are what `compileModules`/intrinsic wiring dereference unchecked
-// downstream.
+// Validate WireModule fields used by compilation and intrinsic wiring.
 function validateModule(m: unknown, where: string): void {
   expect(isRecord(m), where, `must be an object, got ${describeValue(m)}`);
   const mm = m as Record<string, unknown>;
@@ -702,9 +626,7 @@ function validateIntrinsicEntry(entry: unknown, where: string): void {
   validateCoreDef(e.def, `${where}.def`);
 }
 
-// ISSUE #187: `imports[]` — mirrors format.ts's `WireImport`. `type` is
-// optional on the wire (present only for imports that carry an interned
-// type-table index), so it is checked only when present.
+// Only imports carrying an interned type-table index have a `type` field.
 function validateImport(imp: unknown, where: string): void {
   expect(isRecord(imp), where, `must be an object, got ${describeValue(imp)}`);
   const i = imp as Record<string, unknown>;
@@ -721,9 +643,7 @@ function validateImport(imp: unknown, where: string): void {
   if (i.type !== undefined) expectNumber(i, "type", where);
 }
 
-// ISSUE #187: `exports[]` — mirrors format.ts's `WireExport` union,
-// recursing into `instance`'s nested `exports[]` (the "each kind's fields
-// shape-checked … recursive for nested instance export lists" requirement).
+// Recurse through nested instance exports as well as checking each leaf.
 function validateExport(exp: unknown, where: string): void {
   expect(isRecord(exp), where, `must be an object, got ${describeValue(exp)}`);
   const e = exp as Record<string, unknown>;

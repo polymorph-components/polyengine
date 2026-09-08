@@ -1,10 +1,6 @@
-// Canonical ABI v1 reference interpreter — public surface.
-//
-// A direct TypeScript port of the value lift/lower machinery of
-// third_party/component-model/design/mvp/canonical-abi/definitions.py
-// (readable over fast; docs/architecture.md §8 "v1: a generic interpreter").
-// Task/thread/waitable machinery is deliberately absent — see
-// runtime/README.md for the port/defer inventory.
+// Canonical ABI value interpreter exports (contracts/descriptor-ir.md).
+// Semantics follow definitions.py with the host representations documented
+// in types.ts. Scheduling and waitables live in ../task/.
 
 export * from "./trap.ts";
 export * from "./types.ts";

@@ -1,4 +1,4 @@
-// Plan v0 wire format (contracts/plan-format.md) — TypeScript mirror of the
+// Plan wire format (contracts/plan-format.md) — TypeScript mirror of the
 // shim's serde schema (crates/translator-shim/src/plan.rs). Field names and
 // shapes must track the Rust side tag-for-tag; the shim is the producer of
 // record.
@@ -25,30 +25,24 @@ export interface WirePlan {
   types: WireTypeDecl[];
   resourceTables: WireResourceTable[];
   /**
-   * Stream-table metadata (plan v2), index space == wasmtime's
+   * Stream-table metadata, index space == wasmtime's
    * `TypeStreamTableIndex`; referenced by the `streamTable` field of every
    * `stream.*` trampoline. `element` is the `T` of `stream<T>`, `null` for the
    * zero-width payload.
    *
-   * ISSUE #94(2): the shim never `skip_serializing_if`s this field
-   * (crates/translator-shim/src/plan.rs), so every v2 plan the producer
-   * emits carries it (`[]` when empty). Required, not optional: the loader
-   * only ever accepts `formatVersion === 2` (strict equality,
-   * `SUPPORTED_FORMAT_VERSION`), so there is no live v1-compat path that
-   * needs this to be absent.
+   * Required even when empty, matching the producer's serialization.
    */
   streamTables: WireAsyncTable[];
-  /** Future-table metadata (plan v2); see `streamTables`. */
+  /** Future-table metadata; see `streamTables`. */
   futureTables: WireAsyncTable[];
   /**
-   * Error-context-table metadata (plan v3), index space == wasmtime's
+   * Error-context-table metadata, index space == wasmtime's
    * `TypeComponentLocalErrorContextTableIndex` — the space the
    * `error-context-transfer` trampoline's `srcTable`/`dstTable` *runtime*
    * arguments live in. No element type: wasmtime's `TypeErrorContextTable`
    * is `{ instance }` and nothing else.
    *
-   * Required for the same reason as `streamTables`/`futureTables`: the shim
-   * always serializes it and the loader accepts only `formatVersion === 3`.
+   * Required even when empty, like streamTables/futureTables.
    */
   errorContextTables: WireErrorContextTable[];
 
@@ -57,9 +51,8 @@ export interface WirePlan {
    * `ResourceIndex = importedResources.length + DefinedResourceIndex`
    * (wasmtime `Component::resource_index`).
    *
-   * The `importedResources` field (contracts/plan-format.md schema); optional
-   * here so plans produced by an older shim still load — absent is read as
-   * "no imported resources".
+   * The loader accepts absence as no imported resources, although the
+   * current producer serializes the list even when empty.
    */
   importedResources?: WireImportedResource[];
   imports: WireImport[];
@@ -113,12 +106,12 @@ export type WireCoreDef =
   | { kind: "instance-flags"; instance: number }
   | { kind: "trampoline"; index: number }
   /**
-   * `CoreDef::UnsafeIntrinsic` (plan v1 / contracts/plan-format.md v0.3).
+   * `CoreDef::UnsafeIntrinsic`.
    * `intrinsic` is wasmtime's stable symbol name
    * (`UnsafeIntrinsic::name()`), not an enum ordinal. The executor
    * materializes `context-{get,set}-i32-{0,1}` as host functions over the
    * current thread's context storage (definitions.py `canon_context_get` /
-   * `canon_context_set`, lines 2348/2358) and fails at instantiate time on
+   * `canon_context_set`) and fails at instantiate time on
    * every other symbol.
    */
   | { kind: "unsafe-intrinsic"; intrinsic: string };
@@ -137,9 +130,9 @@ export interface WireExportItem {
 
 /**
  * Trampoline declarations, tag-for-tag with the wasmtime `Trampoline` enum.
- * Only the variants the executor implements are given precise field types;
- * the rest are matched by `kind` and rejected at instantiate time with
- * capability-aware errors (contracts/intrinsics.md §B).
+ * Selected variants have precise field types; the catch-all also covers
+ * implemented intrinsics whose fields are interpreted by the factory.
+ * Unsupported kinds fail when resolved (contracts/intrinsics.md §B).
  * @internal
  */
 export type WireTrampoline =
@@ -181,8 +174,7 @@ export type WireTrampoline =
     instance: number;
     /**
      * The **raw** wasmtime `TypeTupleIndex` of the task's declared results
-     * (plan v3; in v2 this field held the interned `plan.types` index that
-     * `resultType` now carries). It is the key FACT's `prepare-call` passes
+     * It is the key FACT's `prepare-call` passes
      * as `task_return_type` at runtime, so it is what lets a FACT callee task
      * find its own declared result type.
      */
@@ -270,7 +262,6 @@ export type WireResourceTable =
   | { kind: "concrete"; resource: number; instance: number }
   | { kind: "abstract"; id: number };
 
-/** One stream or future table (plan v2). */
 /**
  * One error-context table: the owning component instance, nothing else.
  * @internal
@@ -279,7 +270,8 @@ export interface WireErrorContextTable {
   instance: number;
 }
 
-/** @internal */
+/** One stream or future table: element type and owning component instance.
+ * @internal */
 export interface WireAsyncTable {
   element: WireValType | null;
   instance: number;
@@ -334,12 +326,11 @@ export type WireTypeExport =
 export interface WireEnvelope {
   plan?: WirePlan;
   adapters?: { file: string; wasm: string }[];
-  /** Failure message (v0.1 shape; unchanged meaning). */
+  /** Failure message. */
   error?: string;
   /**
-   * Structured verdict accompanying `error` (contracts v0.2 proposal). Absent
-   * from v0.1 producers; consumers must tolerate that (treat as phase
-   * `"internal"`, i.e. "not a statement about the component").
+   * Structured verdict accompanying `error`. If absent, consumers treat the
+   * phase as internal, not a validation verdict about the component.
    */
   errorDetail?: WireErrorDetail;
 }
@@ -347,7 +338,7 @@ export interface WireEnvelope {
 /**
  * Structured translation failure.
  *
- * `phase` is the load-bearing field: only `"validation"` means *the component
+ * Only phase `"validation"` means *the component
  * is invalid/malformed* — the verdict the official suite's `assert_invalid` /
  * `assert_malformed` commands require. `"unsupported"` means the component is
  * valid but uses a shape this plan-format version cannot express, and

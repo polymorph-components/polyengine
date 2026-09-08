@@ -1,69 +1,26 @@
 // WebKit lane expectation — a findings lane (best-effort, non-gating).
 //
-// RESULT (2026-08-09, playwright 1.62.1 webkit build 2336 =
-// Safari/WebKit 26.5, linux-arm64 WPE headless): **the lane runs the full
-// corpus.** All 59 files, 1395 commands, 10.3 s wall clock — the fastest of
-// the three engines.
-//
-// GETTING IT TO LAUNCH (this host is Ubuntu questing/25.10; playwright's
-// WebKit bundle is linked against the Ubuntu 24.04 ABI, so
-// `playwright install-deps` cannot satisfy it — libicu74 in particular has no
-// questing candidate). Recipe, all outside the repo except the browser cache:
-// fetch the noble arm64 .debs for libicu74, libxml2, libavif16 (+ its codec
-// deps libdav1d7 libgav1-1 librav1e0 libyuv0 libSvtAv1Enc1d1 libabsl…),
-// libenchant-2-2, libevent-2.1-7t64, libflite1,
-// libgstreamer-plugins-bad1.0-0, libharfbuzz-icu0, libhyphen0,
-// libmanette-0.2-0, libwayland-server0, libevdev2; `dpkg-deb -x` them; copy
-// the resulting `usr/lib/aarch64-linux-gnu/*.so*` into BOTH
-// `.browser-cache/webkit-<build>/minibrowser-wpe/sys/lib/` and
-// `…/minibrowser-gtk/sys/lib/`. Those directories are already on the
-// bundle wrapper's `LD_LIBRARY_PATH`, which is the only reliable channel —
-// exporting `LD_LIBRARY_PATH` around the driver does NOT reach the browser
-// process. Then run with `PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS=1`.
-//
 // ENGINE FINDINGS
 // ---------------
-// 1. JSPI WORKS on JavaScriptCore, in a stock playwright WebKit build, with
-//    no flag: `{suspending: true, promising: true, roundTrip: true}` from the
-//    in-page end-to-end probe. docs/architecture.md §12 (Risks) records "Safari: JSPI in STP only"
-//    and excludes stable Safari; on this build the API is present and a real
-//    suspend/resume round trip completes. Worth re-checking against shipping
-// Safari before the exclusion in docs/architecture.md §12 (Risks) is relaxed.
-// 2. **JSC does not implement multi-memory in this pinned build** — 58
-//    commands fail at `WebAssembly.Module` compile time with "there can at
-//    most be one Memory section for now". This is the substantive WebKit
-//    finding: the Component Model's canonical ABI routinely needs more than
-//    one memory in a single core module (transcoding, cross-component
-//    copies, realloc-into-another-instance), so a JSC lane is capped until
-//    multi-memory ships there. It is an engine capability gap, not a host
-//    defect: the same components run on V8 and SpiderMonkey. 111 further
-//    commands are CASCADE entries from those failed instantiations ("no
-//    current instance").
-//    RESOLVED UPSTREAM (measured 2026-08-09, polyengine#11): webkit-2342
-//    (playwright 1.63 alpha roll) ships multi-memory ENABLED BY DEFAULT —
-//    the lane reaches 1248/0 against it and 173 of this file's 175 deltas
-//    collapse, leaving only the two wording entries of finding 3. This
-//    build's `JSC_useWasmMultiMemory` option is an inert stub (verified:
-//    the env route works — `JSC_useWasm=0` kills wasm — but the flag
-//    changes nothing). When the playwright pin reaches a webkit-2342+ roll,
-//    collapse this overlay to EMPTY; the stale-delta detector
-//    will insist. Details: https://github.com/polymorph-components/polyengine/issues/11
-// 3. Trap wording (JSC vs. V8) is no longer a lane delta. JSC says
+// 1. The pinned Playwright WebKit build passes the in-page JSPI round-trip
+//    probe without flags. This does not establish support in shipping Safari.
+// 2. The pinned build rejects multi-memory modules at compile time. FACT
+//    adapters can require multiple memories for cross-component copies and
+//    transcoding. Subsequent commands cascade from failed instantiations.
+//    The gap is tracked in https://github.com/polymorph-components/polyengine/issues/11;
+//    newer WebKit builds have demonstrated multi-memory support. Re-measure
+//    when advancing the pin and remove deltas that the stale-delta detector
+//    identifies, rather than carrying the overlay forward unchanged.
+// 3. Trap wording (JSC vs. V8) is normalized harness-side. JSC says
 //    "Unreachable code should not be executed" for the core `unreachable`
 //    trap where the suite expects the wasmtime/V8 wording
 //    (docs/architecture.md §1); the runtime passes each engine's raw text
 //    through unmodified (`mapCoreException`, runtime/src/exec/boundary.ts)
-//    and the harness now normalizes it (`TRAP_MESSAGE_EQUIVALENTS`,
+//    and the harness normalizes it (`TRAP_MESSAGE_EQUIVALENTS`,
 //    harness/src/runner.ts).
 //
-// FINDING M3A-1 IS CLOSED, and its 18 entries are gone from this file. The
-// runtime no longer depends on a platform async-context facility (see
-// `chromium.ts`), so nothing here is attributable to it any more. The
-// cascades that used to hang off those entries re-attribute upward to
-// finding 2: in this corpus every `async/` file that M3A-1 broke on JSC also
-// contains a multi-memory core module, so the earliest failure in the file is
-// the compile-time rejection and the rest of the file cascades from THAT.
-// Read finding 2 before blaming anything here on the host.
+// M3A-1 (platform async-context dependency) is closed. Cascades in this
+// overlay are attributed to finding 2's multi-memory compile rejection.
 
 import type { LaneExpectation } from "./types.ts";
 

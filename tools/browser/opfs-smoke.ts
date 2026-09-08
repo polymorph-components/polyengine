@@ -10,22 +10,10 @@
 // (Recipe: `just smoke-opfs <lane>`; both lanes ride `just browsers` and
 // the post-merge browser CI job.)
 //
-// What it does: bundles `harness/browser/opfs_entry.ts` (and, always, the
-// `opfs_worker_entry.ts` dual-mode worker module — issue #129 realm
-// neutrality; the extra bundle is cheap and keeps the driver's bundling step
-// single-shaped regardless of `--realm`), starts the lane's static server
-// (which also serves /opfs.html and the wasip2 fixture corpus under
-// /fixtures/), launches the browser (shared launcher — Firefox gets the
-// JSPI pref), calls the in-page `__opfsSmoke(realm)`, and asserts every
-// check passed. Two halves (see opfs_entry.ts): the direct descriptor
-// battery (no wasm) and the composed fs-probe guest (std::fs through
-// wasi-libc, parking through the marks contracts/embedder-api.md §"The WASI
-// parking kernel" describes — JSPI required, so this is also the browser
-// exercise of the suspending kernel over real async
-// storage). `--realm page` (default) runs both halves on the page; `--realm
-// worker` / `--realm shared-worker` run the SAME battery inside a spawned
-// dedicated/shared worker (opfs_worker_entry.ts) — the OPFS × JSPI-parking
-// × worker-realm intersection issue #129 exists to pin.
+// Bundles the page and worker entries, serves them with the fixture corpus,
+// and asserts every __opfsSmoke(realm) check passes. Covers direct descriptor
+// operations and fs-probe guest I/O through the JSPI parking kernel over real
+// async storage. Page (default), worker and shared-worker run the same battery.
 //
 // Prerequisites: `just shim` (the translator shim wasm) and
 // `just fixtures` (examples/guests/build/fs-probe.component.wasm) — both
@@ -74,9 +62,7 @@ async function main(): Promise<void> {
   if (!["page", "worker", "shared-worker"].includes(realm)) {
     fail(`unknown --realm '${realm}' (page | worker | shared-worker)`);
   }
-  // `--realm <v>`'s value is not a flag, so exclude it from the lane guess
-  // (mirrors run-lane.ts's parseArgs — the sibling track hit the same
-  // `--realm worker chromium` misparse).
+  // Exclude --realm's value from the positional lane guess.
   const realmValIdx = realmIdx >= 0 ? realmIdx + 1 : -1;
   const lane =
     Deno.args.filter((a, i) => !a.startsWith("-") && i !== realmValIdx)[0] ??

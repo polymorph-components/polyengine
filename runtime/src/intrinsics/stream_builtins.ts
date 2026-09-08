@@ -1,6 +1,5 @@
 // The stream / future / error-context canonical built-ins
-// (definitions.py `canon_stream_new` line 2504 through `canon_error_context_drop`
-// line 2803).
+// (definitions.py `canon_stream_new` through `canon_error_context_drop`).
 //
 // The copy built-ins all share one shape, which is worth stating once:
 //
@@ -14,10 +13,8 @@
 //      *blocked* — `BLOCKED` for the async form, and for the sync form a
 //      genuine wasm-frame block, i.e. JSPI.
 //
-// Step 4 is where the reference's `e.wait_for_pending_event()` sits. A
-// stackless runtime cannot do that, so the sync form returns its answer when
-// the rendezvous already happened and reports `NeedsJspi` otherwise — the same
-// rule already applied to `waitable-set.wait` and `sync-start-call`.
+// Step 4 implements `e.wait_for_pending_event()`: the sync form requires JSPI
+// only when no event is ready. Plain mode then reports `NeedsJspi`.
 
 import { blockCurrentActivation } from "../jspi/mod.ts";
 import type { SuspensionMode } from "../jspi/mod.ts";
@@ -58,10 +55,7 @@ import { BLOCKED } from "./async_builtins.ts";
 import { removeHandleWithUnwind } from "../task/scheduler.ts";
 
 /**
- * Standing probe (CE_COPY_TRACE=1): per-call return codes of the copy /
- * cancel built-ins, in both modes. This is the plain-vs-jspi differential's
- * data source — a divergence list of packed codes beats stack traces when the
- * guest asserts exact `expect-code` values (big-interleaving-test.wast).
+ * CE_COPY_TRACE=1 logs copy/cancel return codes for plain-vs-JSPI diagnostics.
  */
 const COPY_TRACE = (() => {
   try {
@@ -79,11 +73,11 @@ export function traceCopy(msg: string): void {
 export interface StreamTrampolineContext {
   componentInstance(index: number): ComponentInstanceState;
   options(index: number): ResolvedOptions;
-  /** Element type of a `TypeStreamTableIndex` (plan v2 `streamTables`). */
+  /** Element type of a `TypeStreamTableIndex` (`streamTables`). */
   streamElem(index: number): ValType | null;
-  /** Element type of a `TypeFutureTableIndex` (plan v2 `futureTables`). */
+  /** Element type of a `TypeFutureTableIndex` (`futureTables`). */
   futureElem(index: number): ValType | null;
-  /** Suspension discipline; decides whether site 4 blocks or signals. */
+  /** Suspension discipline for sync copy/cancel waits. */
   suspensionMode?: SuspensionMode;
 }
 
@@ -92,7 +86,7 @@ export interface StreamTrampolineContext {
 // ---------------------------------------------------------------------------
 
 /**
- * definitions.py `canon_stream_new` (line 2504) / `canon_future_new` (2512).
+ * definitions.py `canon_stream_new` / `canon_future_new`.
  * Returns both handles packed into an i64: `ri | (wi << 32)`.
  */
 export function createStreamNew(
@@ -134,7 +128,7 @@ function packEnds(ri: number, wi: number): bigint {
 
 type EndCtor = new (shared: never) => CopyEnd;
 
-/** definitions.py `stream_copy` (line 2530). */
+/** definitions.py `stream_copy`. */
 function streamCopy(input: {
   EndT: EndCtor;
   reading: boolean;
@@ -176,10 +170,7 @@ function streamCopy(input: {
   const cx = new LiftLowerContext(cabiOptions(opts), inst, null);
   const buffer = new GuestBuffer(elem, cx, ptr, n);
 
-  // definitions.py `stream_copy`: `assert(not isinstance(stream_t, CharType))`
-  // — plan validation is expected to reject a char-typed stream before this
-  // point (streams of `char` are not a representable component type), so this
-  // documents that invariant rather than defending against a reachable case.
+  // This implementation's copy path does not accept a char element.
   assert_(elem === null || elem.kind !== "char", "stream copy: char element");
 
   // definitions.py `stream_event`: the payload is computed at *delivery* time,
@@ -196,8 +187,7 @@ function streamCopy(input: {
       buffer.progress <= BUFFER_MAX_LENGTH,
       "stream progress out of packing range",
     );
-    // definitions.py `stream_copy`/`stream_event`: `assert(0 <= result < 2**4)`.
-    // `CopyResult` is a fixed 0..2 enum so this can't fire; kept for parity.
+    // Low four bits hold the result; the remaining bits count elements.
     assert_(
       result >= 0 && result < 2 ** 4,
       "stream event: packed result out of 4-bit range",
@@ -223,7 +213,7 @@ function streamCopy(input: {
 // future.{read,write}
 // ---------------------------------------------------------------------------
 
-/** definitions.py `future_copy` (line 2584). */
+/** definitions.py `future_copy`. */
 function futureCopy(input: {
   EndT: EndCtor;
   reading: boolean;
@@ -242,11 +232,7 @@ function futureCopy(input: {
   trapIf(!(e instanceof EndT), "future copy: wrong end type for this handle");
   const end = e as ReadableFutureEnd | WritableFutureEnd;
   trapIf(!sameElem(end.shared.t, elem), "future copy: element type mismatch");
-  // The writable side reaches DONE by two different routes — its own write
-  // completed, or it was notified the readable end dropped — and wasmtime's
-  // message names both (`futures_and_streams.rs:3522`). The shorter text the
-  // other two assertions in `trap-if-done.wast` use (:446, :448) is a prefix
-  // of this one, so the single full string satisfies all three.
+  // Writable DONE covers either a completed write or a dropped readable end.
   trapIf(
     end.state === CopyState.DONE,
     reading
@@ -280,20 +266,11 @@ function futureCopy(input: {
 
   end.state = CopyState.COPYING;
   const onCopyDone = (result: CopyResult) => {
-    // #84/#90: an unwritten future whose writable side was torn down (a
-    // trap-poisoned instance's table, or the host's `drop()` door) can never
-    // satisfy this reader. definitions.py keeps that state unreachable
-    // (:1183-1184 traps the early writable drop, so :2607 may assert a
-    // readable end never sees DROPPED); where we bypass the trap we owe the
-    // reader a *trap at its rendezvous point* instead of a DROPPED answer.
-    //
-    // The pending event stays a thunk, so the trap is raised exactly where
-    // the reader observes it: `waitable-set.wait`'s delivery (both the
-    // fast-path and the JSPI `produce`, intrinsics/async_builtins.ts:290/311),
-    // the callback loop's `waitForEventAnd` (exec/boundary.ts:1766), and
-    // `finishCopy`'s `take()` below — every one of which is inside the
-    // reader's guest activation, so the throw propagates as that task's trap
-    // and poisons *its* instance, and nothing else.
+    // Host abandonment or instance poisoning can tear down an unwritten
+    // future, unlike the reference's ordinary writable-drop path, which
+    // traps. Report a trap when the reader observes its event, never a
+    // readable DROPPED result. The thunk keeps that trap in the reader's
+    // activation whether delivery is through a waitable set or finishCopy.
     const abandoned = reading && result === CopyResult.DROPPED
       ? abandonReasonOf(end.shared)
       : null;
@@ -344,7 +321,7 @@ function finishCopy(
       // definitions.py `e.wait_for_pending_event()`: block this wasm frame
       // until the other end shows up.
       if (mode === "jspi" && inst !== undefined) {
-        // SITE 4 (lit). `hasSyncWaiter` marks the end as having a blocked
+        // `hasSyncWaiter` marks the end as having a blocked
         // synchronous reader/writer, which is what makes a concurrent
         // `cancel-copy` on it a trap (see `cancelCopy`). Setting it only now
         // is correct: before this point nothing was actually waiting.
@@ -361,11 +338,7 @@ function finishCopy(
             traceCopy(`${what} sync copy i=${i} RESUME -> 0x${p.toString(16)}`);
             return p;
           },
-          // #106: `abandon` never runs `produce`; without the backstop the
-          // flag stayed set forever and a later `cancel-copy` on this end
-          // trapped "sync waiter" against a waiter that no longer exists.
-          // Idempotent, so the success path's clear-before-`take` ordering
-          // inside `produce` is untouched.
+          // Abandonment skips produce; clear the claim on that path too.
           onSettled: () => {
             end.hasSyncWaiter = false;
           },
@@ -390,8 +363,7 @@ function finishCopy(
 
 /**
  * `cancel_copy`'s reporting tail, shared by its immediate and blocking exits.
- * Kept verbatim (including the wasmtime divergence below) so the blocking form
- * cannot drift from the non-blocking one.
+ * Both exits apply the CM-3 completion-superseding exception below.
  */
 function takeCancelEvent(
   end: CopyEnd,
@@ -404,24 +376,13 @@ function takeCancelEvent(
     !end.copying() && code === eventCode && index === i,
     `unexpected event delivered by ${what}`,
   );
-  // UPSTREAM DIVERGENCE (definitions.py is wrong here; wasmtime is right).
-  //
-  // `cancel_copy` (definitions.py line 2654) returns an already-armed pending
-  // event verbatim, so cancelling a stream write that had been partially
-  // satisfied yields COMPLETED with the copied count. wasmtime instead
-  // *supersedes* an undelivered stream COMPLETED with CANCELLED, keeping the
-  // count (`futures_and_streams.rs:4004-4015`):
-  //
-  //     (ReturnCode::Completed(count), Event::StreamWrite { .. })
-  //         => ReturnCode::Cancelled(count),
-  //     (ReturnCode::Dropped(_) | ReturnCode::Completed(_), _) => code,
-  //
-  // and `test/async/big-interleaving-test.wast:1526-1531` asserts wasmtime's
-  // answer (0x42 = CANCELLED | 4<<4, not 0x40). The reasoning is sound: the
-  // guest never observed the completion, so reporting it as completed would
-  // lose the fact that the operation was cancelled. Note the two exclusions
-  // encoded below — DROPPED keeps its code, and a *future* COMPLETED keeps
-  // its code (only `Event::Stream{Read,Write}` is converted).
+  // CM-3 exception (upstream-component-model-repo-findings.md): adopt the
+  // corpus/wasmtime semantics pending upstream adjudication, rather than
+  // definitions.py `cancel_copy`'s verbatim pending event. An undelivered
+  // stream COMPLETED becomes CANCELLED with the same element count;
+  // DROPPED and future COMPLETED remain unchanged. See
+  // `test/async/big-interleaving-test.wast` and wasmtime's
+  // `futures_and_streams.rs` cancellation handling; docs/architecture.md §1.
   const isStreamEvent = eventCode === EventCode.STREAM_READ ||
     eventCode === EventCode.STREAM_WRITE;
   if (isStreamEvent && (payload & 0xf) === CopyResult.COMPLETED) {
@@ -433,7 +394,7 @@ function takeCancelEvent(
   return payload;
 }
 
-/** definitions.py `cancel_copy` (line 2636). */
+/** definitions.py `cancel_copy`, with the CM-3 exception in takeCancelEvent. */
 function cancelCopy(input: {
   EndT: EndCtor;
   eventCode: EventCode;
@@ -465,7 +426,7 @@ function cancelCopy(input: {
     if (!end.hasPendingEvent()) {
       if (!async_) {
         if (mode === "jspi") {
-          // SITE 4b (lit): definitions.py `cancel_copy` blocks until the
+          // definitions.py `cancel_copy` blocks until the
           // cancellation settles, then reports through the same tail.
           return blockCurrentActivation({
             store: inst.store,
@@ -490,7 +451,7 @@ function cancelCopy(input: {
 // drop-{readable,writable}
 // ---------------------------------------------------------------------------
 
-/** definitions.py `drop` (line 2670). */
+/** definitions.py `drop`. */
 function dropEnd(
   EndT: EndCtor,
   elem: ValType | null,
@@ -498,7 +459,7 @@ function dropEnd(
   hi: number,
   what: string,
 ): void {
-  // Guest-supplied index is u32; core wasm delivers i32 args signed (F3, R2).
+  // Guest-supplied index is u32; core wasm delivers i32 args signed.
   hi = hi >>> 0;
   trapIf(!inst.mayLeave, `${what}: cannot leave component instance`);
   removeHandleWithUnwind(inst, hi, (e) => {
@@ -514,13 +475,12 @@ function dropEnd(
 // ---------------------------------------------------------------------------
 
 /**
- * definitions.py `canon_error_context_new` (line 2778).
+ * definitions.py `canon_error_context_new`.
  *
  * The reference is deliberately non-committal about the message: under
  * `DETERMINISTIC_PROFILE` it stores the empty string, otherwise it may apply a
  * `host_defined_transformation`. We keep the guest's message verbatim — the
- * most useful behaviour for a debugging aid, and within what the spec allows
- * (the message is explicitly not semantically load-bearing).
+ * diagnostic policy, within what the spec allows outside that profile.
  */
 export function createErrorContextNew(
   decl: { options: number },
@@ -541,7 +501,7 @@ export function createErrorContextNew(
   };
 }
 
-/** definitions.py `canon_error_context_debug_message` (line 2792). */
+/** definitions.py `canon_error_context_debug_message`. */
 export function createErrorContextDebugMessage(
   decl: { options: number },
   ctx: StreamTrampolineContext,
@@ -565,7 +525,7 @@ export function createErrorContextDebugMessage(
   };
 }
 
-/** definitions.py `canon_error_context_drop` (line 2803). */
+/** definitions.py `canon_error_context_drop`. */
 export function createErrorContextDrop(
   inst: ComponentInstanceState,
 ): CoreFn {
@@ -823,10 +783,9 @@ void currentTask;
 // ---------------------------------------------------------------------------
 //
 // The fused-adapter form of `lift_async_value` + `lower_stream`/`lower_future`
-// (definitions.py lines 1530 / 1828), with the source and destination tables
+// in definitions.py, with the source and destination tables
 // named by index rather than implied by the running instance — exactly the
-// arrangement `resource.transfer-own` already uses. Signature (wasmtime
-// `vm/component/libcalls.rs:567,576,585`):
+// arrangement `resource.transfer-own` uses. Signature:
 //     (src_idx: i32, src_table: i32, dst_table: i32) -> i32 dst_idx
 //
 // Transferring moves the *readable* end: the writable end, if this component
@@ -919,15 +878,13 @@ export function createFutureTransfer(ctx: AsyncTransferContext): CoreFn {
 
 /**
  * error-context transfer. Unlike stream/future ends, an `error-context` is
- * shareable: `lift_error_context` (definitions.py line 1451) *reads* the handle
+ * shareable: definitions.py `lift_error_context` reads the handle
  * rather than removing it, so the source keeps its own.
- */
-/**
+ *
  * `instanceOf` resolves through the plan's `errorContextTables` section
  * (contracts/plan-format.md schema) — the
  * `TypeComponentLocalErrorContextTableIndex` space these arguments actually
- * live in. It replaced a resource-table lookup, which shared neither the
- * index space nor (in a multi-instance composition) the answer.
+ * live in, distinct from resource-table indices.
  *
  * The arguments are the trampoline's own core parameters, so a missing one is
  * an arity fault, not a zero: no `?? 0` defaults — `instanceOf(undefined!)`

@@ -3,14 +3,13 @@
 // schema — contracts/plan-format.md). Counterpart:
 // crates/bindgen/src/digest.rs, computed from `wit_parser::Resolve`. Both
 // must produce byte-identical canonical JSON (and therefore identical
-// sha256) for a structurally-equivalent world — this equality IS the
-// design validation (see runtime/tests/digest_test.ts's cross-language
-// fixture test). The wire plan's own `worldDigest` field is legacy
+// sha256) for supported world shapes (runtime/tests/digest_test.ts).
+// The wire plan's own `worldDigest` field is legacy
 // (contracts/plan-format.md), retained for wire compatibility only; this
 // module computes the normative digest independently.
 //
-// THE NORMALIZATION SPEC IS DOCUMENTED ONCE, in crates/bindgen/src/digest.rs's
-// module doc comment (kept in sync with this file) — read it first. Short
+// Normalization is governed by contracts/digest.md, with the Rust counterpart
+// in crates/bindgen/src/digest.rs. Short
 // version: sort import/export lists by name; keep everything else
 // (record fields, variant cases, enum/flags label order, function
 // parameter order) positional because it's ABI-relevant; drop parameter
@@ -18,24 +17,12 @@
 // convention) and all docs/stability metadata (not present in the plan at
 // all); identify resources by qualified name, not by table index.
 //
-// ## Known limitation (plan side only): resourceTables aliasing
-//
-// The plan's `own`/`borrow` `resource: N` indexes into `resourceTables`,
-// and empirically (the `resources` fixture) an `own`/`borrow` occurrence in
-// an exported function's type and the `{kind:"type"}` export that *names*
-// that same nominal resource can reference two *different* resourceTables
-// indices (one per component-linking instance boundary — the type export
-// sits at the sub-instance that defines the resource, `own`/`borrow` sites
-// reference the root instance's re-export of it). Resolving this in
-// general requires walking wasmtime's resource-alias chain, which the plan
-// format does not expose directly — this is exactly the "impedance between
-// wit-parser's view and the plan's types" flagged for the §9 degraded-mode
-// question in the track report. This implementation takes an honest
-// shortcut: when a world has exactly one nominal resource type, every
-// `own`/`borrow` occurrence (regardless of table index) is identified with
-// that resource — correct for every world in the current fixture corpus
-// (each has 0 or 1 resource types), but a world with 2+ resources throws a
-// clearly-labeled `DigestError` rather than silently guessing.
+// Current implementation limits: imported resources are refused. With one
+// named exported resource, every table index maps to that name. With multiple
+// names, only directly named table indices are resolved; extra table aliases
+// cause refusal. Unlike plan/loader.ts, this digest implementation does not
+// use concrete tables' ResourceIndex to unify aliases. This is not a missing
+// plan capability. Flat import names also do not reconstruct nested interfaces.
 
 import type {
   WireExport,
@@ -45,7 +32,7 @@ import type {
   WireValType,
 } from "../plan/format.ts";
 
-// cewd = component-engine world digest, the project's pre-rebrand name; kept as an opaque wire constant.
+// Version of the canonical `cewd` document, independent of plan formatVersion.
 /** @internal */
 export const CEWD_VERSION = 1;
 
@@ -106,19 +93,8 @@ function hex(buf: ArrayBuffer): string {
 // ---------------------------------------------------------------------------
 
 function buildResourceNameMap(plan: WirePlan): Map<number, string> {
-  // CONTRACT: the `importedResources` field (contracts/plan-format.md
-  // schema; format.ts:23-33). An imported resource occupies
-  // `ResourceIndex` slots *before* every defined (own/exported) resource
-  // (`ResourceIndex = importedResources.length + DefinedResourceIndex`), and
-  // this implementation has no alias map from those imported-resource
-  // indices to a qualified name (no plan-format extension exists yet for
-  // that — see the module-level "Known limitation" comment). Silently
-  // aliasing an own/borrow reference to an imported resource with the lone
-  // exported resource's name (the pre-fix single-resource-world shortcut
-  // below) would produce a digest that matches a WIT world it is NOT
-  // ABI-compatible with — worse than an unresolved-index throw. Refuse
-  // conservatively whenever the plan declares any imported resources, full
-  // stop, regardless of how many named (exported) resources exist.
+  // This implementation names exported resources only. Refuse imports
+  // rather than accidentally assign them the single exported name below.
   if (
     plan.importedResources !== undefined && plan.importedResources.length > 0
   ) {
@@ -136,9 +112,8 @@ function buildResourceNameMap(plan: WirePlan): Map<number, string> {
   walkExportsForResourceNames(plan.exports, [], named);
 
   if (named.size <= 1) {
-    // Single-resource (or zero-resource) world: identify EVERY resourceTables
-    // index with the one named resource, sidestepping the aliasing gap
-    // documented in the module comment above.
+    // Single-name fallback: all tables receive that name. This does not
+    // prove that unnamed tables denote the same nominal resource.
     const theOne = named.size === 1 ? [...named.values()][0] : undefined;
     const all = new Map<number, string>();
     if (theOne !== undefined) {
@@ -146,8 +121,7 @@ function buildResourceNameMap(plan: WirePlan): Map<number, string> {
     }
     return all;
   }
-  // Multi-resource world: table-index aliasing across instance boundaries
-  // is not resolved by this implementation. Fail loudly.
+  // Multiple names: this implementation cannot attribute extra table aliases.
   if (named.size < plan.resourceTables.length) {
     throw new DigestError(
       `digest: world has ${named.size} named resource type(s) but ` +
@@ -184,17 +158,9 @@ function canonImport(
   imp: WireImport,
   resourceNames: Map<number, string>,
 ): Canon {
-  // CONTRACT: the plan's `imports` list is flat (`{name, path, kind, type}`)
-  // even for interface-qualified imports (`imports[].path`,
-  // contracts/plan-format.md schema — "Untested: current corpus has no
-  // imports"); no fixture in this repo's
-  // sync corpus (hello/values/resources) has any imports, so this path is
-  // exercised by no test. Best-effort flattened-name treatment, chosen to
-  // be structurally analogous to the export side's nested naming without
-  // requiring the executor to reconstruct nested WorldItem::Interface shape
-  // from a flat list. Revisit when a corpus component actually imports
-  // something (flagged in the track report for §9's degraded-mode
-  // question).
+  // Flatten path segments followed by import name. This does not reconstruct
+  // bindgen's nested interface items; interface-qualified imports can therefore
+  // produce a digest mismatch even when their function signatures agree.
   const name = imp.path.length > 0
     ? [...imp.path, imp.name].join("/")
     : imp.name;
@@ -243,16 +209,8 @@ function canonExportItem(
   if (exp.type.kind === "resource") {
     return { kind: "resource", name: exp.name };
   }
-  // Non-resource named types (records/variants/etc. declared at
-  // interface/world scope) do not themselves appear as component exports —
-  // only functions and resources do — so they are intentionally NOT
-  // emitted as a top-level item here; they still affect the digest via
-  // whichever function signatures reference them. Mirrors
-  // crates/bindgen/src/digest.rs's `canon_interface`/`canon_items` (both
-  // skip non-resource `TypeDefKind` entries with the identical rationale).
-  // Caller must filter these out of the containing list (see canonExportItem's
-  // caller / the `null`-sentinel handling below), since this returns a
-  // JSON value, not `undefined`, when called directly.
+  // Non-resource type exports contribute through function signatures, not
+  // as standalone digest items, matching bindgen's canon_interface/canon_items.
   return null;
 }
 
@@ -333,10 +291,7 @@ function canonValType(
         err: t.err === null ? null : canonValType(t.err, resourceNames),
       };
     case "map":
-      // Despecialized to list<tuple<K,V>> — matches crates/bindgen/src/
-      // digest.rs's treatment of wit_parser's `TypeDefKind::Map`. Fixture-
-      // only path (descriptor-ir.md "Open items": not emitted by current
-      // translators), unexercised by the sync corpus.
+      // Match bindgen's TypeDefKind::Map normalization to list<tuple<K,V>>.
       return {
         kind: "list",
         element: {

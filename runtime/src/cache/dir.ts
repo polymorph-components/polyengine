@@ -4,15 +4,9 @@
 //   meta.json         CacheMeta (layoutVersion, componentSha256,
 //                      translatorBuildHash, features)
 //   plan.json          the wire WirePlan, JSON-serialized
-//   adapters/<name>    one file per adapter, name = the tail of the wire
-//                       plan's `modules[].file` (which is already
-//                       `adapters/<idx>.wasm` shaped upstream — see
-//                       contracts/plan-format.md "Artifact set" — so this
-//                       backend nests one more `adapters/` level under the
-//                       key directory: `<path>/<keyhex>/adapters/<idx>.wasm`)
+//   adapters/<file>    one file per adapter, using modules[].file verbatim
 //
-// Deliberately does NOT store component bytes — see core.ts's
-// "PERSISTED-ARTIFACT-SET DECISION" docs for why that's sound, not a gap.
+// Original component bytes remain caller-supplied (see core.ts).
 
 import type {
   ArtifactCache,
@@ -63,11 +57,7 @@ class DirCache implements ArtifactCache {
     return `${this.root}/${await keyHex(key)}`;
   }
 
-  /** Internal self-heal eviction (issue #196): the caller is `get`'s own
-   * recovery path for a poisoned/stale entry, not an explicit caller of
-   * `evict()` — so a failure here (e.g. an unwritable cache root) must not
-   * escape and fail what would otherwise be a clean miss. The public
-   * `evict()` below keeps throwing; only this internal path swallows. */
+  /** Best-effort stale-entry eviction; unlike public evict, failure is a miss. */
   async #tryEvict(key: CacheKey): Promise<void> {
     try {
       await this.evict(key);
@@ -118,11 +108,7 @@ class DirCache implements ArtifactCache {
 
       return { plan, adapters };
     } catch {
-      // Any parse/read/structural/I-O failure = a poisoned entry (or an
-      // unreadable/unwritable cache root, issue #196): miss + best-effort
-      // evict, never trust and never throw out of `get` (dispatch
-      // requirement). This also covers `exists()`'s rethrow of non-
-      // `NotFound` stat errors (ENOTDIR, EACCES, ...).
+      // Parse, validation and I/O failures become misses, even if eviction fails.
       await this.#tryEvict(key);
       return null;
     }
@@ -156,11 +142,7 @@ class DirCache implements ArtifactCache {
       await rmIfExists(dir);
       await Deno.rename(tmp, dir);
     } catch (e) {
-      // A `put` failure is non-fatal at the `translateCached` layer
-      // (issue #196), but repeated failures must not litter the cache
-      // root with orphaned `.tmp-<uuid>` scratch directories. Cleanup
-      // failures here are themselves swallowed — `put` still throws its
-      // original error either way.
+      // Remove partial output best-effort, preserving the original put error.
       try {
         await rmIfExists(tmp);
       } catch {

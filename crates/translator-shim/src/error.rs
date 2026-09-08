@@ -8,8 +8,8 @@
 //!   saying no. This, and only this, is the verdict that satisfies the
 //!   official suite's `assert_invalid` / `assert_malformed` commands.
 //! - **`unsupported`** — the component is valid, but uses a shape this
-//!   plan-format version cannot represent yet (async `CoreDef`s, GC data
-//!   model, module exports, …). A conformance run must *not* score these as
+//!   plan-format version cannot represent (e.g. the GC data model or
+//!   re-exported imported modules). A conformance run must *not* score these as
 //!   correct rejections; they are triage items.
 //! - **`internal`** — a shim invariant broke. Always a bug here.
 //!
@@ -19,12 +19,6 @@
 //! string-matching wasmtime's messages. Both map to `validation`, which is
 //! sound for the suite (a rejection with the right phase is what both
 //! commands require).
-//
-// CONTRACT: contracts/plan-format.md v0.1 specifies the C-ABI error envelope
-// as `{"error": "<message>"}` with "no other field present". This module adds
-// a sibling `errorDetail` object; `error` keeps its exact v0.1 meaning and
-// value, so v0.1 consumers are unaffected. Proposed for contracts v0.2 (see
-// the track report).
 
 use std::fmt;
 
@@ -117,7 +111,7 @@ impl TranslateError {
     }
 }
 
-/// Marker error: a valid component whose shape plan v0 cannot represent.
+/// Marker error: a valid component whose shape the plan cannot represent.
 /// Constructed via [`unsupported!`].
 #[derive(Debug)]
 pub struct Unsupported(pub String);

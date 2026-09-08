@@ -1,14 +1,11 @@
-// `CoreDef::UnsafeIntrinsic` (plan v1 / contracts/plan-format.md v0.3):
+// `CoreDef::UnsafeIntrinsic` (contracts/plan-format.md):
 // wasmtime compile-time builtins that a component's core modules import
 // directly, bypassing the trampoline table.
 //
-// Of wasmtime-environ 47.0.3's 21 unsafe intrinsics
-// (`component/intrinsic.rs`, `for_each_unsafe_intrinsic!`) only four have
-// Component Model meaning: `context-{get,set}-i32-{0,1}`, the canonical
-// `context.get` / `context.set` built-ins. The other seventeen
-// (`*-native-load` / `*-native-store` / `store-data-address`) are raw host
-// memory access for wasmtime's own internals; they have no portable meaning
-// in a JS host and are refused at instantiate time.
+// Supported symbols are `context-{get,set}-i32-{0,1}`, the canonical
+// `context.get` / `context.set` built-ins. Native-memory symbols such as
+// `*-native-load`, `*-native-store` and `store-data-address` have no portable
+// meaning in a JS host and are refused at instantiate time.
 
 import { assert_, trapIf } from "../cabi/trap.ts";
 import { currentThreadForInstance } from "../task/mod.ts";
@@ -19,19 +16,17 @@ import { UnsupportedFeatureError } from "./errors.ts";
 
 /**
  * Number of `i32` context slots per thread. definitions.py `Thread.storage`
- * is initialised `[0,0]` (line 347) and `canon_context_{get,set}` assert
+ * is initialised `[0,0]` and `canon_context_{get,set}` assert
  * `i < len(thread.storage)` — so exactly two, matching the intrinsic names
  * `context-*-i32-0` and `context-*-i32-1`.
  */
 export const NUM_CONTEXT_SLOTS = 2;
 
 /**
- * definitions.py `canon_context_get` (line 2348).
+ * definitions.py `canon_context_get`.
  *
  * The storage is **per thread**, not per task: two threads of one task have
- * independent context. wit-bindgen 0.60 keeps its async-executor task pointer
- * in slot 0, which is why this intrinsic is the entry blocker for async
- * guests.
+ * independent context.
  */
 export function canonContextGet(i: number, inst?: unknown): number {
   const thread = currentThreadForInstance<CurrentThreadLike>(inst);
@@ -42,9 +37,7 @@ export function canonContextGet(i: number, inst?: unknown): number {
   return result >>> 0;
 }
 
-// Standing probe (CE_CTX_TRACE=1): per-call context-slot traffic with the
-// full ambient state — the instrument that isolated issue #24. Cheap and
-// env-gated; keep.
+// CE_CTX_TRACE=1 logs context-slot traffic and ambient thread attribution.
 const CTX_TRACE = (() => {
   try {
     return Deno.env.get("CE_CTX_TRACE") === "1";
@@ -66,7 +59,7 @@ function trace(msg: string, thread: unknown): void {
   );
 }
 
-/** definitions.py `canon_context_set` (line 2358). */
+/** definitions.py `canon_context_set`. */
 export function canonContextSet(i: number, v: number, inst?: unknown): void {
   const thread = currentThreadForInstance<CurrentThreadLike>(inst);
   assert_(i < NUM_CONTEXT_SLOTS, `context.set slot ${i} out of range`);

@@ -1,12 +1,7 @@
 // Builds the browser-lane bundle into `harness/browser/dist/` (gitignored).
 //
-// Bundler: `deno bundle --platform browser` (Deno 2.9.5 ships it as an
-// experimental esbuild-backed bundler; it resolves the workspace's
-// `@polyengine/*` bare specifiers natively, so no alias plumbing is
-// needed). The runtime is platform-neutral by contract (docs/architecture.md §4.3) — a
-// `node:` specifier appearing in the bundle graph means a regression; the
-// M3A-1 episode (scheduler ambient on `node:async_hooks`, fixed by explicit
-// ambient threading) is pinned by runtime/tests/platform_purity_test.ts.
+// `deno bundle --platform browser` resolves workspace specifiers. Platform-only
+// imports in the runtime graph are regressions (runtime/tests/platform_purity_test.ts).
 //
 // Usage: deno run -A tools/browser/bundle.ts
 

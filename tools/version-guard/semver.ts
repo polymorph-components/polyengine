@@ -1,9 +1,5 @@
-// A minimal semver, deliberately dependency-free: the guard runs as the very
-// first step of `gha::core` and inside release.yml before `deno publish`, so
-// every import it takes is a way for a registry outage to fail a release.
-// Only what the guard actually decides is implemented — parse, compare, and
-// the minor-level questions the versioning policy asks (AGENTS.md
-// §Versioning).
+// Dependency-free semver parsing/comparison for the release guard, avoiding a
+// registry dependency before CI and publish checks can run.
 
 export type Semver = {
   major: number;

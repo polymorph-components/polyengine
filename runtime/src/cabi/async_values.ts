@@ -1,26 +1,11 @@
 // Lift and lower for the async value types: `stream`, `future` and
-// `error-context` (definitions.py `lift_async_value` line 1530,
-// `lower_stream`/`lower_future` line 1828, `lift_error_context` line 1451,
-// `lower_error_context` line 1757).
+// `error-context` (definitions.py `lift_async_value`, `lower_stream`,
+// `lower_future`, `lift_error_context`, `lower_error_context`).
 //
-// ===========================================================================
-// HOST SHAPE (interpreter decision — flagged, per contracts/descriptor-ir.md)
-// ===========================================================================
-//
-// Every other `ComponentValue` in this interpreter is plain data: numbers,
-// strings, arrays, records. The async value types cannot be, and the reference
-// is explicit about why: `lift_async_value` returns `e.shared` — the *shared*
-// stream/future object, not a copy and not an index — and `lower_stream` wraps
-// that same object in a fresh `ReadableStreamEnd` in the destination
-// instance's handle table. The identity of the shared object is the value; two
-// components holding ends of one stream must observe each other's copies.
-//
-// So a lifted `stream`/`future` is a `SharedStreamImpl`/`SharedFutureImpl`
-// instance, and a lifted `error-context` is an `ErrorContext` instance. Host
-// code that receives one should treat it as an opaque token. This is the same
-// concession the reference makes; it is recorded here because it widens what
-// `ComponentValue` can hold beyond plain data, which the descriptor-IR
-// contract's "host-shaped component values" wording did not anticipate.
+// Raw values are shared object identities, not copies or handle indices:
+// SharedStreamImpl, SharedFutureImpl, and ErrorContext. Lowering a stream or
+// future wraps that identity in a fresh readable end in the destination table.
+// The public embedder layer supplies facades over these internal tokens.
 
 import { copyCensus, ERROR_CONTEXT, hasBrand } from "@polyengine/protocol";
 import { assert_, trapIf } from "./trap.ts";
@@ -44,11 +29,8 @@ import { removeHandleWithUnwind } from "../task/scheduler.ts";
  * without being one of THIS copy's `ErrorContext`s (contracts/embedder-api.md
  * §"Module identity").
  *
- * A backstop, deliberately: the embedder's lowering site (embedder/values.ts)
- * refuses a foreign error-context before it can ever reach a handle table, so
- * this branch should be unreachable. It exists because "handle is not an
- * error-context" is precisely the misleading generic that made #83 expensive
- * to diagnose — if a path ever does get here, it says what happened.
+ * The embedder lowering site also checks identity; this backstop gives raw
+ * paths the same specific diagnostic rather than a generic handle error.
  *
  * This layer is below `embedder/`, so it composes the census from
  * `@polyengine/protocol` directly rather than importing `embedder/copy.ts`.
@@ -70,10 +52,11 @@ function containsBorrow(t: ValType): boolean {
 }
 
 /**
- * definitions.py `lift_async_value` (line 1530).
+ * definitions.py `lift_async_value`.
  *
  * Lifting **removes** the handle: the readable end is transferred out of this
- * instance's table, which is why a stream can only be passed on once.
+ * instance's table. That handle cannot be used again; the shared value can
+ * later return through another lowering/lifting transfer.
  */
 function liftAsyncValue(
   cx: LiftLowerContext,
@@ -110,18 +93,13 @@ function liftAsyncValue(
       `cannot lift ${what} while it's in a waitable set`,
     );
     // Remember the driving store so a host wrapper can pump the guest later.
-    // Single-store only: a shared object crossing into a SECOND store is
-    // unsupported misuse — fail loudly rather than silently pumping the first
-    // (review advisory, host-streams round). Class field initializes to null;
-    // != null covers both sentinels.
+    // A shared object cannot be driven by two stores. The nullish check also
+    // admits structural test doubles whose store field is absent.
     const holder = end.shared as { boundStore?: unknown };
     const store = (inst as unknown as { store?: unknown }).store;
     if (holder.boundStore != null && store != null) {
-      // module identity: when several runtime copies are loaded, "a second store" is very
-      // often "a second COPY" — the shared object was minted by one runtime and
-      // is being driven by another. The two stores are indistinguishable from
-      // here (stores carry no copy identity), so the census is appended as the
-      // hypothesis it is, rather than asserted (issue #83).
+      // Stores carry no runtime-copy identity, so the census is diagnostic
+      // context, not proof that this is a cross-copy mismatch.
       const census = copyCensus();
       assert_(
         holder.boundStore === store,
@@ -133,7 +111,7 @@ function liftAsyncValue(
       );
     }
     holder.boundStore ??= store;
-    // Host-wrapper re-arm hook (#162, contracts/embedder-api.md §"Streams and futures"): the readable
+    // Host-wrapper re-arm hook (contracts/embedder-api.md §"Streams and futures"): the readable
     // end just left a guest table, so whoever receives it can act on it again.
     // See `bindOnLower` in exec/host_streams.ts for the retention rule.
     (end.shared as { onLifted?: ((i: unknown) => void) | null }).onLifted?.(
@@ -159,7 +137,7 @@ export function liftFuture(
   return liftAsyncValue(cx, i, t, ReadableFutureEnd, t.element, "future");
 }
 
-/** definitions.py `lower_stream` (line 1828). */
+/** definitions.py `lower_stream`. */
 export function lowerStream(
   cx: LiftLowerContext,
   v: SharedBase,
@@ -170,14 +148,8 @@ export function lowerStream(
     "lower_stream expects a shared stream value",
   );
   assert_(!containsBorrow(t), "stream may not contain a borrow");
-  // Loud element-type check. A host-created stream carries a hand-passed
-  // `ValType` (typed derivation is bindgen's job), so this is the first point
-  // at which a mismatch against the guest's declared `stream<T>` can be
-  // caught — and a silent mismatch would corrupt every copy, since the
-  // element type is what sizes and lifts the buffer. `fmtValType`, not
-  // `JSON.stringify`: the latter throws on resource-bearing element types
-  // (cabi/types.ts `valTypeEqual` contract note) — and as a template-literal
-  // argument it was evaluated even when the assertion PASSED.
+  // Host-precondition check: element types determine buffer size and lifting.
+  // Diagnostics must use fmtValType, not serialize resource identity cycles.
   const declared = (t as { element?: ValType | null }).element ?? null;
   if (!sameElemType(v.t, declared)) {
     assert_(
@@ -194,7 +166,7 @@ export function lowerStream(
   return inst!.handles.add(new ReadableStreamEnd(v));
 }
 
-/** definitions.py `lower_future` (line 1833). */
+/** definitions.py `lower_future`. */
 export function lowerFuture(
   cx: LiftLowerContext,
   v: SharedBase,
@@ -221,7 +193,7 @@ export function lowerFuture(
   return inst!.handles.add(new ReadableFutureEnd(v));
 }
 
-/** definitions.py `lift_error_context` (line 1451). Does NOT remove the handle. */
+/** definitions.py `lift_error_context`. Does not remove the handle. */
 export function liftErrorContext(
   cx: LiftLowerContext,
   i: number,
@@ -236,7 +208,7 @@ export function liftErrorContext(
   return e as ErrorContext;
 }
 
-/** definitions.py `lower_error_context` (line 1757). */
+/** definitions.py `lower_error_context`. */
 export function lowerErrorContext(
   cx: LiftLowerContext,
   v: ErrorContext,

@@ -1,18 +1,14 @@
-// Plan v3 (contracts/plan-format.md schema, polyengine#89) pins.
+// Plan table index spaces (contracts/plan-format.md, polyengine#89).
 //
 //   1. `errorContextTables` is a required section, and the
 //      `error-context-transfer` trampoline resolves its table arguments
-//      through it — NOT through the resource-table mapping it borrowed at v2.
-//      The v2 arrangement was not merely "structurally wrong": the
-//      resource-table accessor answers successfully whenever a concrete
-//      resource table exists at the colliding index, so a composition with an
-//      ErrorContext at that slot read and wrote a *different instance's*
-//      handle table with no diagnostic at all.
+//      through it, not through resourceTables. A colliding resource-table
+//      index can silently route to a different instance's handle table.
 //   2. `task-return` decls carry the raw wasmtime `TypeTupleIndex` (`results`)
 //      alongside its interned `plan.types` entry (`resultType`). That pair is
 //      the dictionary a FACT callee task needs to know its own declared result
-//      type, which re-enables `canon_task_return`'s
-//      `trap_if(result_type != task.ft.result)` (definitions.py:2388) for FACT
+//      type, enabling `canon_task_return`'s
+//      `trap_if(result_type != task.ft.result)` (definitions.py) for FACT
 //      tasks.
 
 import { assertEq } from "./support/asserts.ts";

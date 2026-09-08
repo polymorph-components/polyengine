@@ -1,21 +1,9 @@
 // SpiderMonkey nightly lane expectation — a findings lane (best-effort,
 // non-gating; issue #22).
 //
-// RESULT (2026-08-09, SpiderMonkey nightly `js` shell, linux-aarch64,
-// jsshell-linux-aarch64.zip fetched from
-// archive.mozilla.org/pub/firefox/nightly/latest-mozilla-central/): **the
-// lane runs the full corpus, Deno-identical.** All 59 files, 1395 commands,
-// zero deltas, zero stale xfails, zero unexpected failures.
-//
-// CAPABILITY MATRIX (this run): jspi = {suspending: true, promising: true,
-// roundTrip: true}, multiMemory = true, wasmGc = true, exceptionHandling =
-// true, memory64 = true, tailCalls = true, relaxedSimd = true. Every
-// proposal this lane's compile-probes (`tools/shell/probes/*.wasm`) check is
-// already implemented in this nightly build — consistent with SpiderMonkey
-// nightly being the trailing-edge-but-still-ahead-of-stable-Firefox
-// reference issue #22 was written to watch (JSPI unflagged here vs. Firefox
-// 153's `javascript.options.wasm_js_promise_integration` pref — see
-// `harness/browser/expectations/firefox.ts`).
+// Expect the Deno baseline with no per-command deltas. The shell's JSPI
+// defaults do not establish availability in the shipping browser config;
+// see harness/browser/expectations/firefox.ts.
 //
 // SHELL-SURFACE FINDINGS (feed the polyfill scope in `tools/shell/polyfill.ts`
 // and the shell detection in `tools/shell/entry.ts`):
@@ -42,12 +30,6 @@
 // Track this file the same way `harness/browser/expectations/firefox.ts`
 // tracks Firefox: any future delta gets a named, dated entry here, never a
 // blanket overlay.
-//
-// CM#705 pin advance to 2f13265 (polyengine#173): re-measured (this host is
-// aarch64) — full Deno-lane parity holds exactly, zero deltas, zero stale
-// xfails. Corpus grew 1416->1475 commands; see harness/src/xfail.ts and
-// sm-pinned.ts's header for the new-class breakdown (engine-independent by
-// construction).
 
 import type { ShellLaneExpectation } from "./types.ts";
 

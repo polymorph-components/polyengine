@@ -45,7 +45,7 @@ export function mkCanonicalOptions(
   };
 }
 
-/** Memory accessor that traps-or-asserts like `cx.opts.memory` derefs. */
+/** Assert the caller supplied the memory option required by this operation. */
 export function requireMemory(opts: LiftOptions): MemInst {
   assert_(opts.memory !== null, "canonical option `memory` required");
   return opts.memory;
@@ -53,8 +53,7 @@ export function requireMemory(opts: LiftOptions): MemInst {
 
 /**
  * Minimal component-instance stand-in for the value interpreter: a handle
- * table plus the `may_leave` gate. The full ComponentInstance (backpressure,
- * threads, ...) belongs to the task machinery, which cabi must not import.
+ * table plus the `may_leave` gate. Scheduling state belongs to the task layer.
  */
 export interface ComponentInstanceLike {
   handles: Table<unknown>;
@@ -62,14 +61,10 @@ export interface ComponentInstanceLike {
 }
 
 /**
- * Brand marking a value as a REAL component instance (task/mod.ts
- * `ComponentInstanceState`), as opposed to the many structural
- * `ComponentInstanceLike` stand-ins — imported/host resources carry no
- * instance at all, and test harnesses supply bare `{handles, mayLeave}`
- * doubles. cabi must not depend on task/, so the symbol lives here and
- * `ComponentInstanceState` declares it; cabi/handles.ts `isComponentInstance`
- * is the only reader. `ComponentInstanceLike` stays deliberately structural:
- * the brand is NOT part of it.
+ * Distinguishes `ComponentInstanceState` from structural test doubles.
+ * Imported host resources have no implementing instance. `callDtorGated`
+ * uses this brand to decide whether to enter a real task/lift harness;
+ * `ComponentInstanceLike` deliberately does not require it.
  */
 export const COMPONENT_INSTANCE: unique symbol = Symbol(
   "polyengine.ComponentInstance",
@@ -79,8 +74,7 @@ export const COMPONENT_INSTANCE: unique symbol = Symbol(
  * Borrow scopes (definitions.py `LiftLowerContext.borrow_scope`):
  * - lifting a borrow requires the *subtask* side: `add_lender`.
  * - lowering a borrow requires the *task* side: `num_borrows`.
- * The real Task/Subtask classes are deferred; these are the minimal
- * interfaces the value code needs.
+ * These structural interfaces also admit FACT call scopes.
  */
 export interface SubtaskBorrowScope {
   addLender(h: import("./handles.ts").ResourceHandle): void;
@@ -101,9 +95,8 @@ export class LiftLowerContext {
    * definitions.py `LiftLowerContext.reallocate`: the guest's realloc runs
    * with `may_leave` cleared, so a realloc that lowers an import traps
    * (`canon_lower`'s `trap_if(not ...may_leave)`, implemented here by
-   * exec/boundary.ts `createLoweredImport`). That bracket is implemented
-   * below, and it is the whole story: the pinned reference does not route
-   * the call through `canon_lift` (CM#705). polyengine issue #147.
+   * exec/boundary.ts `createLoweredImport`). Unlike a resource destructor,
+   * realloc does not enter a fresh `canon_lift` task.
    */
   reallocate(
     old: number,
@@ -121,10 +114,9 @@ export class LiftLowerContext {
     }
     assert_(this.inst.mayLeave, "realloc with may_leave already false");
     this.inst.mayLeave = false;
-    // NO try/finally, deliberately: same bare bracket as the post-return one
-    // in intrinsics/fact_calls.ts (#91) and the reference's `assert`/restore
-    // pair. A trapping realloc skips the restore exactly as the reference
-    // does; the host-boundary unwind and instance poisoning handle the rest.
+    // No local finally: a trap skips the reference's restore. Host-boundary
+    // unwind may restore sibling flags; see createLiftedFunction's
+    // entry-identity rule in exec/boundary.ts.
     const ptr = realloc!(old, oldByteLength, alignment, newByteLength);
     this.inst.mayLeave = true;
     return ptr;

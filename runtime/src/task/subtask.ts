@@ -1,12 +1,11 @@
-// definitions.py `### Subtask State` (line 858): one in-progress call from
-// this component to an import.
+// definitions.py `Subtask`: one in-progress call to an import.
 
 import { assert_, trapIf } from "../cabi/trap.ts";
 import type { ResourceHandle } from "../cabi/handles.ts";
 import type { CoreValue } from "../cabi/types.ts";
 import { EventCode, Waitable } from "./waitable.ts";
 
-/** definitions.py `Subtask.State` (line 859). */
+/** definitions.py `Subtask.State`. */
 export enum SubtaskState {
   STARTING = 0,
   STARTED = 1,
@@ -16,9 +15,7 @@ export enum SubtaskState {
 }
 
 /**
- * Anything that can be lent to a callee. `ResourceHandle` is the only
- * implementor today; typed structurally so cabi's borrow-scope interfaces
- * keep working unchanged.
+ * Structural lender interface shared with cabi's borrow scopes.
  */
 export interface Lendable {
   numLends: number;
@@ -35,26 +32,20 @@ export class Subtask extends Waitable {
   flatResults: CoreValue[] = [];
 
   /**
-   * The callee TASK behind this subtask, when there is one (FACT
-   * cross-component calls; host-import subtasks have none). `subtask.cancel`
-   * needs it under jspi: a cancellation delivered to a suspended activation
-   * resumes it on a MICROTASK (the engine's, not ours), so the async form
-   * must wait until the callee's state is determinate before choosing
-   * between BLOCKED and the resolved state — the same determinacy question
-   * `async-start-call` answers, and it needs the same object to ask it of.
+   * FACT callee task; host imports have none. Async subtask.cancel uses it
+   * to wait for a JSPI-delivered cancellation to reach a determinate state
+   * before choosing BLOCKED versus a resolved status.
    */
   // deno-lint-ignore no-explicit-any
   calleeTask: any = null;
 
   /**
-   * Handles lent to the callee for the duration of the call. `null` once
-   * `deliverResolve` has run — the reference uses exactly this
-   * `lenders is None` sentinel to mean "resolve delivered" (line 908), so the
-   * nullability is semantic, not an optimization.
+   * Lenders remain live until resolution is delivered, not merely recorded.
+   * Null is `Subtask.resolve_delivered`'s sentinel.
    */
   lenders: Lendable[] | null = [];
 
-  /** definitions.py `Subtask.resolved` (line 880). */
+  /** definitions.py `Subtask.resolved`. */
   resolved(): boolean {
     switch (this.state) {
       case SubtaskState.STARTING:
@@ -65,7 +56,7 @@ export class Subtask extends Waitable {
     }
   }
 
-  /** definitions.py `Subtask.add_lender` (line 890). */
+  /** definitions.py `Subtask.add_lender`. */
   addLender(h: Lendable): void {
     assert_(
       !this.resolveDelivered() && !this.resolved(),
@@ -75,7 +66,7 @@ export class Subtask extends Waitable {
     this.lenders!.push(h);
   }
 
-  /** definitions.py `Subtask.resolve` (line 895). */
+  /** definitions.py `Subtask.resolve`. */
   resolve(state: SubtaskState, flatResults: CoreValue[]): void {
     assert_(
       state === SubtaskState.RETURNED || flatResults.length === 0,
@@ -86,7 +77,7 @@ export class Subtask extends Waitable {
     this.flatResults = flatResults;
   }
 
-  /** definitions.py `Subtask.deliver_resolve` (line 902). */
+  /** definitions.py `Subtask.deliver_resolve`. */
   deliverResolve(): void {
     assert_(
       !this.resolveDelivered() && this.resolved(),
@@ -96,7 +87,7 @@ export class Subtask extends Waitable {
     this.lenders = null;
   }
 
-  /** definitions.py `Subtask.resolve_delivered` (line 908). */
+  /** definitions.py `Subtask.resolve_delivered`. */
   resolveDelivered(): boolean {
     assert_(
       this.lenders !== null || this.resolved(),
@@ -106,20 +97,10 @@ export class Subtask extends Waitable {
   }
 
   /**
-   * Release a never-delivered subtask's lenders after its call broke off a
-   * non-poisoning exit — trap-rethrow past the CALLEE, capability bail, or
-   * an abandoned park (contracts/intrinsics.md §A's trap-unwind/lender-release
-   * obligation; the park legs are #102/#106).
-   *
-   * The reference has no analogue because it never resumes after a trap:
-   * the store dies with the lent handles inside it. The resolution state
-   * mirrors `canon_lower`'s `on_resolve(None)` branch (definitions.py
-   * line 2267): CANCELLED_BEFORE_STARTED if the callee never started,
-   * CANCELLED_BEFORE_RETURNED otherwise.
-   *
-   * Idempotent, and a no-op when the resolution was already delivered — a
-   * settled hook can call it unconditionally without disturbing the success
-   * path's own `deliverResolve`.
+   * Idempotent lender cleanup for abandoned calls and non-poisoning unwind
+   * (contracts/intrinsics.md's trap-unwind/lender-release obligation).
+   * Unresolved calls take `canon_lower`'s cancellation state according to
+   * whether they started. Already-delivered resolutions are unchanged.
    */
   unwindLenders(): void {
     if (!this.resolved()) {
@@ -133,7 +114,7 @@ export class Subtask extends Waitable {
     if (!this.resolveDelivered()) this.deliverResolve();
   }
 
-  /** definitions.py `Subtask.drop` (line 912). */
+  /** definitions.py `Subtask.drop`. */
   override drop(): void {
     trapIf(
       !this.resolveDelivered(),
@@ -143,17 +124,9 @@ export class Subtask extends Waitable {
   }
 
   /**
-   * definitions.py `canon_lower`'s `on_progress`/`subtask_event` closure
-   * (lines 2297-2298). The event payload is computed **at delivery time** and
-   * delivering it is what runs `deliver_resolve` — so the lent handles are
-   * released exactly when the guest observes the resolution, not when it
-   * happens.
-   *
-   * The `!this.resolveDelivered()` guard has no reference analogue: it exists
-   * so this can coexist with `unwindLenders()` (which may itself have already
-   * delivered the resolve on an abandoned path). The reference's
-   * `subtask_event` calls `deliver_resolve()` unconditionally and would
-   * assert on a double delivery.
+   * `canon_lower`'s event thunk reads status at delivery and releases lenders
+   * when the guest observes resolution. The delivered guard also tolerates
+   * an earlier unwindLenders cleanup on an abandoned path.
    */
   setSubtaskPendingEvent(subtaski: number): void {
     this.setPendingEvent(() => {
@@ -164,8 +137,8 @@ export class Subtask extends Waitable {
 }
 
 /**
- * Pack a `canon_lower` async return value: `state | (subtaski << 4)`
- * (definitions.py line 2306, with the accompanying asserts on the ranges).
+ * Pack a `canon_lower` async result: low four bits hold state, upper 28 the
+ * nonzero subtask handle index.
  */
 export function packSubtaskResult(
   state: SubtaskState,

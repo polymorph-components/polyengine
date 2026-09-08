@@ -1,17 +1,10 @@
 // The real executor: components run through the plan executor
-// (translator shim -> plan v0 -> runtime/src/exec), core modules through the
-// JS WebAssembly API (delegated to CoreOnlyExecutor's module path, which is
-// exact and needs no reimplementation).
+// (translator shim -> plan -> runtime/src/exec), core modules through the
+// JS WebAssembly API (CoreOnlyExecutor's module path).
 //
-// Scope note: the runtime is a *sync* executor (docs/architecture.md §6
-// degenerate path); async canonical options / stream|future types raise
-// PlanError("... task scheduler ...") from
-// runtime/src/exec/boundary.ts createLiftedFunction, or NotImplemented from
-// runtime/src/cabi lift/lower for stream/future values. Both are mapped here
-// to PendingRuntimeError with a `pending-capability: ` prefix (see
-// runner.ts) rather than left to surface as a failure, since the command is
-// understood but the capability plainly doesn't exist yet — precise
-// hand-off to whichever track builds it.
+// Declared capability gaps are mapped to PendingRuntimeError with a
+// `pending-capability: ` prefix. Other exceptions retain their failure
+// classification; see CAPABILITY_MARKERS and the phase-specific handlers.
 
 import { loadPlan, PlanError, TranslateError } from "@polyengine/runtime/plan";
 import type { LoadedPlan } from "@polyengine/runtime/plan";
@@ -40,8 +33,7 @@ import {
 import type { Value } from "./schema.ts";
 import { collapseResultsByArity, toComponentValue } from "./value-mapping.ts";
 
-/** Substrings that indicate the command needs a not-yet-built runtime
- * capability (async/streams/etc) rather than a genuine bug. Checked
+/** Substrings used to classify declared runtime capability gaps. Checked
  * against thrown error messages from the shim/plan/executor. Keep narrow —
  * anything else surfaces as a real failure. */
 const CAPABILITY_MARKERS = [

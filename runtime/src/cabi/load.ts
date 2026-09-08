@@ -24,11 +24,9 @@ export function load(
   t: ValType,
 ): ComponentValue {
   const mem = requireMemory(cx.opts);
-  // One cached layout node per (type, pointer width) — issue #261; it carries
-  // the despecialized type too, so this is the only map lookup on the path.
+  // The cached layout also supplies the despecialized type.
   const L = layoutOf(t, mem.ptrType());
-  // Alignments are always powers of two, so `ptr % align === 0` decides
-  // exactly what `ptr === alignTo(ptr, align)` did, without the float divide.
+  // Callers establish alignment and bounds before loading a value.
   assert_(ptr % L.align === 0, "load misaligned");
   assert_(ptr + L.size <= mem.length, "load OOB");
   const d = L.d;
@@ -137,7 +135,7 @@ export function loadListFromValidRange(
   if (kind === "u8") {
     return bytesOf(mem, ptr, length).slice();
   }
-  // Other flat element types lift bulk too (issue #67) — same host shapes
+  // Other flat element types lift in bulk with the same raw shapes
   // (number[]/bigint[]/boolean[]), same NaN canonicalization; falls through
   // to the per-element loop for compound types, char (per-element USV
   // validation is the point), and non-little-endian platforms.
@@ -152,12 +150,8 @@ export function loadListFromValidRange(
 }
 
 /**
- * `offsets[i]` is field i's byte offset from `ptr`, precomputed on the layout
- * node, so the loop is an indexed read rather than the per-field
- * `alignTo`/`alignment`/`elemSize` recomputation it used to be (issue #261).
- * Taking the offsets rather than the whole `Layout` keeps the function
- * self-consistent: its two arguments are the ones the result depends on, and
- * there is no unchecked "these came from the same type" invariant to violate.
+ * `offsets[i]` is field i's byte offset from the aligned base `ptr`.
+ * Callers must supply offsets computed for these fields and pointer width.
  */
 export function loadRecord(
   cx: LiftLowerContext,

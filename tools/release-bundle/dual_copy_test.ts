@@ -1,34 +1,12 @@
-// THE dual-copy pin (contracts/embedder-api.md §"Module identity and
-// @polyengine/protocol"; issue #83).
+// Cross-copy contract tests (contracts/embedder-api.md "Module identity and
+// @polyengine/protocol"). Copy A is the source tree; copy B is a separate bundle.
+// Query-string cache-busting an entry would still share its dependency modules
+// and classes, so it would not test this boundary.
 //
-// Two GENUINELY distinct runtime copies in one process:
-//
-//   copy A — the source tree (`runtime/src/embedder/mod.ts`);
-//   copy B — the release bundle built by ./build.ts.
-//
-// The bundle is the second copy on purpose, and it is the *production* shape
-// of the bug: two separately-built bundles on one page each embed a copy, and
-// no resolution discipline can reach that case. Note that the obvious cheap
-// trick — importing the same entry twice with different query strings — does
-// NOT produce a second copy: the entry module is duplicated, but every
-// relative import below it resolves to the same already-cached module, so the
-// classes and symbols underneath are shared and every assertion here would
-// pass vacuously.
-//
-// What is pinned: the census sees both copies; the STATELESS contract values
-// (`ComponentException`, the `suspending` mark, hand-rolled brands) are honored across
-// the boundary; the STATEFUL ones (`Stream`) are refused with a named
-// cross-copy error rather than silently adapted; and an unbranded throw in a
-// multi-copy graph says so.
-//
-// contracts/embedder-api.md §"The host-ABI surface and its version" shrinks
-// the SHIPPED bundle (./entry.ts) to application
-// surface only — it no longer re-exports `@polyengine/protocol` vocabulary,
-// on purpose (contracts/embedder-api.md §"The host-ABI surface and its
-// version"). This test builds copy B from ./test_entry.ts instead: the same
-// dependency graph as the shipped entry, plus protocol re-exports so this
-// test can still reach copy B's OWN classes — the premise the test pins.
-// The production artifact (built from entry.ts) is unaffected.
+// The census sees both copies; stateless brands interoperate; stateful Stream
+// handles are refused; unbranded throws include the multi-copy diagnostic.
+// test_entry.ts adds protocol exports solely to expose copy B's classes to the
+// test. The shipped entry.ts keeps its application-only surface.
 
 import { buildBundle } from "./build.ts";
 import { COPY_URL, instantiate } from "../../runtime/src/embedder/mod.ts";

@@ -42,7 +42,7 @@ export function artifactKind(bytes: Uint8Array): Kind {
 /**
  * `pending-capability` is a precise, named-in-report subset of
  * `pending-runtime`: the executor understood the command but a specific
- * runtime feature it needs (e.g. async/streams) does not exist yet.
+ * runtime feature it needs (e.g. shared-everything threads) is unsupported.
  * `PendingRuntimeError` messages prefixed `pending-capability: ` are
  * classified this way (see `RuntimeExecutor`).
  */

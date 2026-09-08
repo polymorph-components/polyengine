@@ -7,7 +7,7 @@
 //
 // Entries here are removed as the runtime gains the capability that makes
 // them pass; an xfail entry whose command now PASSES fails the run loudly
-// (the stale-xfail detector in tests/conformance_test.ts, a real G7 gate) —
+// (the stale-xfail detector in tests/conformance_test.ts) —
 // prune stale entries rather than accumulating masks.
 
 export interface XfailEntry {
@@ -157,12 +157,10 @@ export const XFAIL: XfailEntry[] = [
   // --- values/post-return.json: post-return.wast:4 ($Tester) declares
   // every async built-in (task.return, thread.yield/INDEX, waitable-set.*,
   // subtask.*, stream.*, future.*) to assert they trap from a post-return
-  // function. The task core shipped; the SURVIVING refusal is
-  // 'thread-index' — the 🧵 shared-everything-threads class, deferred by
-  // https://github.com/polymorph-components/polyengine/issues/12 — so the component still declines at instantiation and all 28
-  // assert_traps cascade off 'no current instance'. (Reason strings
-  // rewritten after the task core shipped: they previously named it as
-  // missing, which would misdirect triage.)
+  // function. Instantiation requires the unsupported 'thread-index'
+  // trampoline: deferred-threads, shared-everything threads,
+  // https://github.com/polymorph-components/polyengine/issues/12.
+  // The assertions cascade off 'no current instance'.
   {
     file: "values/post-return.json",
     line: 202,
@@ -307,84 +305,19 @@ export const XFAIL: XfailEntry[] = [
     line: 256,
     reason: "same 🧵 thread-index (deferred threads, https://github.com/polymorph-components/polyengine/issues/12) dependency as line 202",
   },
-  // post-return.wast:260 uses `context.get`/`context.set`, which wasmtime
-  // lowers to `CoreDef::UnsafeIntrinsic` — the CoreDef `unsafe-intrinsic`
-  // encoding (contracts/plan-format.md schema) has no wire form for this yet
-  // — a known task-scheduler blocker.
-  // post-return.wast:334 calls `backpressure.inc`/`backpressure.dec` from a
-  // post-return function. NOTE the observed symptom is a *wrong value*
-  // ("expected u32 11, got 5"), not an error: the module command fails as a
-  // capability skip and the invoke then runs against the previously
-  // instantiated component, which also exports `f`. The value mismatch is an
-  // artifact of that, not a canonical-ABI bug.
-  // --- values/variants.json: GREEN. variants.wast:83's component mixes an
-  // async-lifted export (`mix-ret`) with sync ones, reached through FACT
-  // adapters; prepare-call / {sync,async}-start-call made it
-  // instantiate and run — pinned by runtime/tests/integration/
-  // e2e_suite_test.ts ("async-lifted exports instantiate and run"). ---
-
-  // =====================================================================
-  // async/ — triage as of streams/futures/error-context support.
-  //
-  // Streams, futures and error-context are IMPLEMENTED; the entries below no
-  // longer describe a missing value type. The dominant remaining class is
-  // JSPI: the *synchronous* form of a stream/future copy, of
-  // `waitable-set.wait`, and of a cross-component call all block the calling
-  // wasm frame, which a stackless runtime cannot do. See
-  // runtime/src/intrinsics/stream_builtins.ts `finishCopy`.
-  //
-  // Historic note (early triage) follows.
-  //
-  // What now works and is NOT listed here: `trap-on-reenter`,
-  // `validate-no-async-abi-for-sync-type` and `validate-no-stream-char` are
-  // fully green, and individual commands pass in eight more files.
-  //
-  // What blocks the rest, in order of weight:
-  //   * FACT cross-component async calls (`async-start-call`,
-  //     `sync-start-call`) — 49 commands. This phase implements the async ABI
-  //     at the *host* boundary; the suite almost always drives async through a
-  //     second component, which goes via FACT's adapter intrinsics instead.
-  //   * streams / futures — 41 commands (out of this track).
-  //   * 166 further commands are *cascades*: once a component instance is
-  //     declined at instantiation, every later command against it fails with
-  //     "no current instance". They carry the root cause's reason.
-  //   * 4 genuine one-off gaps, each with its own entry (trap-message
-  //     fidelity, instance poisoning, instantiation-time task context, and one
-  //     shim decoder gap).
-  // =====================================================================
-  // --- async/builtin-trap-poisons-instance.json: root cause: STREAMS ---
-  // --- async/cancel-stream.json: root cause: STREAMS ---
-  // --- async/closed-stream.json: root cause: STREAMS ---
-  // --- async/cross-abi-calls.json: root cause: FACT-ASYNC ---
-  // --- async/cross-task-future.json: root cause: STREAMS ---
-  // --- async/drop-cross-task-borrow.json: root cause: FACT-ASYNC ---
-  // --- async/drop-stream.json: root cause: STREAMS ---
-  // --- async/drop-waitable-set.json: root cause: FACT-ASYNC ---
+  // Async failures below distinguish unsupported capabilities from assertions
+  // cascading after a skipped instantiation. Keep each cascade tied to its
+  // root cause rather than treating it as an independent runtime failure.
   // --- async/during-sync-call-*.json + during-sync-scheduling-candidates.json:
   // all pin 🧵 sync-call-blocking semantics and are built largely from thread
   // built-ins (thread.new-indirect / resume-later / suspend-then-resume /
   // suspend / index / yield-then-promote) — the deferred-threads class,
-  // https://github.com/polymorph-components/polyengine/issues/12. (History: at the prior pin these components
-  // failed TRANSLATION first, under the now-exited wasmparser/wast
-  // pin-drift class — see the EXIT note at the top of this file.) At the
-  // current pin every one of these components TRANSLATES and DEFINES
-  // fine; the remaining failure is that INSTANTIATING them requires a
-  // host trampoline for a thread built-in (`thread-index`,
-  // `thread-new-indirect`, ...) that polyengine's executor does not yet
-  // implement — a `module`/`module_instance` command reports
-  // `pending-capability: instantiate: component requires host trampoline
-  // '...'` and is SKIPPED (not failed; no xfail entry needed for it), and
-  // every later assert against that instance cascades with "no current
-  // instance". `async/during-sync-call-exclusive-resume.json` and
-  // `async/during-sync-scheduling-candidates.json` are BRAND NEW files added by
-  // the CM#705 pin advance (polyengine#173, third_party/component-model
-  // 2f13265) — they did not exist pre-advance, so these are new entries,
-  // not renumbered ones. Predicted class from that dispatch was
-  // `cm705-sync-sched` (polyengine#249, a semantic scheduling deviation);
-  // investigation there found the observed failures were translator-level
-  // at the time (the since-exited pin-drift class); the subsequent re-pin
-  // resolved that translation gap, uncovering the SAME deferred-threads
-  // class (#12) one layer down at instantiation. ---
+  // https://github.com/polymorph-components/polyengine/issues/12.
+  // Translation and definition succeed, but instantiation requires unsupported
+  // thread trampolines. `module`/`module_instance` is skipped as
+  // pending-capability; later assertions cascade with "no current instance".
+  // These are deferred-threads failures, not the initially suspected
+  // cm705-sync-sched class (polyengine#249) or the resolved pin-drift class.
   {
     file: "async/during-sync-call-may-block-if-other-ready-threads.json",
     line: 111,
@@ -427,14 +360,9 @@ export const XFAIL: XfailEntry[] = [
     line: 207,
     reason: "same cascade as line 206, see that entry",
   },
-  // async/during-sync-call-exclusive-resume.json: BRAND NEW file (CM#705 pin
-  // advance, polyengine#173; test/async/during-sync-call-exclusive-resume.wast
-  // is 100% new content, not a renumbering of the deleted
-  // during-sync-call-no-exclusive-resume.wast). All three of its components
-  // are built from thread.index/suspend/resume-later; each `module` command
-  // is itself pending-capability ('thread-index' at line 9, 'thread-suspend'
-  // at line 65 -- for the third component, whose own preceding module
-  // command line is not separately listed here) and needs no xfail entry.
+  // async/during-sync-call-exclusive-resume.json: thread.index/suspend/
+  // resume-later make the module commands pending-capability. Only the
+  // cascading assertions need xfail entries (deferred-threads, #12).
   {
     file: "async/during-sync-call-exclusive-resume.json",
     line: 59,
@@ -461,8 +389,7 @@ export const XFAIL: XfailEntry[] = [
     line: 103,
     reason: "same cascade as line 102, see that entry",
   },
-  // async/during-sync-scheduling-candidates.json: BRAND NEW file (CM#705 pin
-  // advance, polyengine#173). Six components, each built from thread
+  // async/during-sync-scheduling-candidates.json: components built from thread
   // built-ins (thread.new-indirect/resume-later/suspend/index/
   // yield-then-promote); every component's `module`/`module_instance`
   // command is pending-capability (deferred thread built-ins, #12) and
@@ -526,11 +453,8 @@ export const XFAIL: XfailEntry[] = [
     line: 237,
     reason: "same cascade as line 234, see that entry",
   },
-  // Note: this file's line 245 ("BlockedCallbackTester" component
-  // definition) itself now TRANSLATES AND DEFINES successfully at the
-  // 4675ee1 pin (it was stale here pre-cleanup, per the stale-xfail
-  // detector, and has been pruned); the definition's later use at line 303
-  // still needs a host trampoline this executor lacks.
+  // BlockedCallbackTester defines successfully; instantiating it requires
+  // an unsupported thread trampoline.
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 304,
@@ -557,9 +481,7 @@ export const XFAIL: XfailEntry[] = [
     line: 309,
     reason: "same cascade as line 308, see that entry",
   },
-  // Same as above for line 315 ("SyncLiftedTester"): the definition itself
-  // is pruned-stale here (now translates fine); its uses at 403/407 still
-  // lack a host trampoline.
+  // SyncLiftedTester has the same instantiation-time thread dependency.
   {
     file: "async/during-sync-scheduling-candidates.json",
     line: 404,
