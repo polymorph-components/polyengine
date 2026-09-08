@@ -41,7 +41,9 @@ async function instantiateGuest() {
   return await instantiateFixture(guest("cancel-import"), {
     sleep: (ms: bigint) => delay(Number(ms)),
     block: (_ms: bigint) => {
-      throw new Error("cancel-import cancellation discard tests never call `block`");
+      throw new Error(
+        "cancel-import cancellation discard tests never call `block`",
+      );
     },
     "sleep-defer": deferCancel((ms: bigint) => delay(Number(ms))),
     timers: {

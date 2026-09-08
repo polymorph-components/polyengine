@@ -69,7 +69,10 @@ const componentWasm = await Deno.readFile(
 
 /** The value `tick` builds on every call (fixture layout: two inner lists). */
 function assertTickValue(actual: unknown, where: string): void {
-  assert(Array.isArray(actual), `${where}: expected an array, got ${Deno.inspect(actual)}`);
+  assert(
+    Array.isArray(actual),
+    `${where}: expected an array, got ${Deno.inspect(actual)}`,
+  );
   const outer = actual as unknown[];
   assertEquals(outer.length, 2, `${where}: outer list length`);
   // contracts/embedder-api.md / docs/architecture.md §7: `list<u8>` lifts as a
@@ -79,7 +82,9 @@ function assertTickValue(actual: unknown, where: string): void {
     const inner = outer[i];
     assert(
       inner instanceof Uint8Array,
-      `${where}: inner[${i}] should lift as Uint8Array, got ${Deno.inspect(inner)}`,
+      `${where}: inner[${i}] should lift as Uint8Array, got ${
+        Deno.inspect(inner)
+      }`,
     );
     assertEquals(
       Array.from(inner).join(","),

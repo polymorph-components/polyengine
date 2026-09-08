@@ -25,7 +25,11 @@ Deno.test("two concurrent suspended activations of the same instance are legal a
   const p2 = runPromising(2);
   const p3 = runPromising(3);
 
-  assertEquals(pending.length, 3, "OBSERVED: engine permits N concurrent suspensions on one instance");
+  assertEquals(
+    pending.length,
+    3,
+    "OBSERVED: engine permits N concurrent suspensions on one instance",
+  );
 
   // Resolve out of order to rule out any hidden FIFO/queueing assumption.
   const byX = new Map(pending.map((p) => [p.x, p]));

@@ -5,12 +5,12 @@
 import { assertEq } from "./support/asserts.ts";
 import {
   loadEnvelope,
-  resourceIndexOfDefined,
-  TranslateError,
   loadPlan,
   loadValType,
   PlanError,
+  resourceIndexOfDefined,
   SUPPORTED_FORMAT_VERSION,
+  TranslateError,
 } from "../src/plan/mod.ts";
 import type { WirePlan, WireValType } from "../src/plan/mod.ts";
 import { ResourceTypeInfo } from "../src/cabi/mod.ts";
@@ -29,7 +29,11 @@ function assertPlanError(fn: () => unknown, includes: string) {
 function minimalPlan(overrides: Partial<WirePlan> = {}): WirePlan {
   return {
     formatVersion: SUPPORTED_FORMAT_VERSION,
-    producer: { shimVersion: "0", wasmtimeEnviron: "49.0.0-dev+4675ee1", features: [] },
+    producer: {
+      shimVersion: "0",
+      wasmtimeEnviron: "49.0.0-dev+4675ee1",
+      features: [],
+    },
     component: { sha256: "0".repeat(64), len: 0 },
     modules: [],
     initializers: [],
@@ -55,7 +59,8 @@ Deno.test("loader: formatVersion is validated and fails fast", () => {
     "formatVersion 0",
   );
   assertPlanError(
-    () => loadPlan(minimalPlan({ formatVersion: SUPPORTED_FORMAT_VERSION + 1 })),
+    () =>
+      loadPlan(minimalPlan({ formatVersion: SUPPORTED_FORMAT_VERSION + 1 })),
     `formatVersion ${SUPPORTED_FORMAT_VERSION + 1}`,
   );
 });
@@ -145,7 +150,10 @@ Deno.test("loader: nested structural types convert recursively", () => {
           kind: "list",
           element: {
             kind: "record",
-            fields: [{ label: "x", type: { kind: "option", type: { kind: "f64" } } }],
+            fields: [{
+              label: "x",
+              type: { kind: "option", type: { kind: "f64" } },
+            }],
           },
         },
       },
@@ -171,7 +179,6 @@ Deno.test("loader: nested structural types convert recursively", () => {
     ],
   });
 });
-
 
 // --- structured translation verdicts (contracts v0.2 proposal) -------------
 
@@ -488,7 +495,9 @@ Deno.test("loader: malformed export entry (missing required field per kind) is a
   assertPlanError(
     () =>
       loadPlan(minimalPlan({
-        exports: [{ kind: "type", name: "t", type: { kind: "resource" } } as never],
+        exports: [
+          { kind: "type", name: "t", type: { kind: "resource" } } as never,
+        ],
       })),
     ".resource must be a number",
   );
@@ -542,7 +551,10 @@ Deno.test("loader: tampered cache scenario — negative modules[0].offset is ref
   const wire = minimalPlan({
     modules: [{ kind: "embedded", offset: -100, len: 92 }],
   });
-  assertPlanError(() => loadPlan(wire), ".offset must be a non-negative safe integer");
+  assertPlanError(
+    () => loadPlan(wire),
+    ".offset must be a non-negative safe integer",
+  );
 });
 
 Deno.test("loader: well-formed modules/exports/imports load unaffected", () => {

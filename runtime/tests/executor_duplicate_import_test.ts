@@ -29,17 +29,48 @@ import type { WirePlan } from "../src/plan/format.ts";
  * either slot — see task/mod.ts).
  */
 const DUP_IMPORT_MODULE = new Uint8Array([
-  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // \0asm, version 1
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00, // \0asm, version 1
   // import section: 2 entries, each "env"."g" (mut i32 global)
-  0x02, 0x13, 0x02,
-  0x03, 0x65, 0x6e, 0x76, 0x01, 0x67, 0x03, 0x7f, 0x01,
-  0x03, 0x65, 0x6e, 0x76, 0x01, 0x67, 0x03, 0x7f, 0x01,
+  0x02,
+  0x13,
+  0x02,
+  0x03,
+  0x65,
+  0x6e,
+  0x76,
+  0x01,
+  0x67,
+  0x03,
+  0x7f,
+  0x01,
+  0x03,
+  0x65,
+  0x6e,
+  0x76,
+  0x01,
+  0x67,
+  0x03,
+  0x7f,
+  0x01,
 ]);
 
-function planFor(args: WirePlan["initializers"][0] & { op: "instantiate-module" }): WirePlan {
+function planFor(
+  args: WirePlan["initializers"][0] & { op: "instantiate-module" },
+): WirePlan {
   return {
     formatVersion: SUPPORTED_FORMAT_VERSION,
-    producer: { shimVersion: "test", wasmtimeEnviron: "49.0.0-dev+4675ee1", features: [] },
+    producer: {
+      shimVersion: "test",
+      wasmtimeEnviron: "49.0.0-dev+4675ee1",
+      features: [],
+    },
     component: { sha256: "0".repeat(64), len: DUP_IMPORT_MODULE.length },
     modules: [{ kind: "embedded", offset: 0, len: DUP_IMPORT_MODULE.length }],
     initializers: [args],
@@ -107,6 +138,9 @@ Deno.test("executor: duplicate (module,field) core imports resolving to DIFFEREN
   const msg = String(caught);
   assertEq(msg.includes("env"), true, `message names the module: ${msg}`);
   assertEq(msg.includes("g"), true, `message names the field: ${msg}`);
-  assertEq(msg.includes("0") && msg.includes("1"), true,
-    `message names the conflicting arg indices: ${msg}`);
+  assertEq(
+    msg.includes("0") && msg.includes("1"),
+    true,
+    `message names the conflicting arg indices: ${msg}`,
+  );
 });

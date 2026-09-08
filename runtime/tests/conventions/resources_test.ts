@@ -17,7 +17,8 @@ import { Cell, Gauge, MathProvider } from "./probe.ts";
 const resReady = await haveFixture(testdata("imported-resource"));
 
 Deno.test({
-  name: "conventions/d: a plain class IS the resource; own out, borrow in, dtor on drop",
+  name:
+    "conventions/d: a plain class IS the resource; own out, borrow in, dtor on drop",
   ignore: !resReady,
   fn: async () => {
     await transcript("d-host-resource-plain-class", async (t) => {
@@ -46,8 +47,10 @@ Deno.test({
       t.note("effects", { events, disposed: Cell.disposed });
 
       // `make-and-keep` leaves the handle ALIVE in the guest: no dispose yet.
-      const h = await t.attempt("make-and-keep", () =>
-        c.exports.makeAndKeep(9)) as number;
+      const h = await t.attempt(
+        "make-and-keep",
+        () => c.exports.makeAndKeep(9),
+      ) as number;
       t.note("before-guest-drop", { disposed: Cell.disposed });
       // …and `drop-handle` runs the destructor, right there.
       await t.attempt("drop-handle", () => c.exports.dropHandle(h));
@@ -87,7 +90,8 @@ Deno.test({
 const importsReady = await haveFixture(testdata("imports"));
 
 Deno.test({
-  name: "conventions/d: suspending mark — a class instance is a legal interface provider",
+  name:
+    "conventions/d: suspending mark — a class instance is a legal interface provider",
   ignore: !importsReady,
   fn: async () => {
     await transcript("d-interface-provider-class", async (t) => {

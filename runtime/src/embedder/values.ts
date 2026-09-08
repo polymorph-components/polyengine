@@ -341,7 +341,9 @@ export function toHost(
       // kind is "err" (cabi/types.ts `despecialize`).
       const kind = label === "error" ? "err" : "ok";
       const ct = label === "error" ? t.error : t.ok;
-      return ct === null ? { kind } : { kind, value: toHost(payload, ct, o, scope) };
+      return ct === null
+        ? { kind }
+        : { kind, value: toHost(payload, ct, o, scope) };
     }
     case "flags": {
       checkNoCollisions(t, t.labels, `${o.where}: flags`);
@@ -452,7 +454,9 @@ export function fromHost(
       if (v instanceof ErrorContext) {
         return v.internal as unknown as ComponentValue;
       }
-      if (v instanceof InternalErrorContext) return v as unknown as ComponentValue;
+      if (v instanceof InternalErrorContext) {
+        return v as unknown as ComponentValue;
+      }
       // realm boundary (contracts/embedder-api.md §"Error-context is message-valued";
       // issue #131; definitions.py — an error-context's state is exactly
       // its debug message): a branded carrier of a string `message`, from
@@ -536,7 +540,9 @@ export function fromHost(
       }
       if (c.type === null) return { kind, value: null };
       if (!has) {
-        throw new TypeError(`${o.where}: variant case '${kind}' needs a 'value'`);
+        throw new TypeError(
+          `${o.where}: variant case '${kind}' needs a 'value'`,
+        );
       }
       return { kind, value: fromHost(value, c.type, o) };
     }

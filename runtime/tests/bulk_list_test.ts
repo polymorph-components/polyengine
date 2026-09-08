@@ -93,7 +93,12 @@ Deno.test("bulk lists: 64-bit kinds are bigint-shaped and wrap mod 2^64", () => 
 Deno.test("bulk lists: bool normalizes by truthiness, lifts nonzero as true", () => {
   // store(): `Number(Boolean(v))` accepted ANY value — pin that.
   const { bytes, lifted } = storeAndReadBack(
-    [true, false, 2 as unknown as ComponentValue, "" as unknown as ComponentValue],
+    [
+      true,
+      false,
+      2 as unknown as ComponentValue,
+      "" as unknown as ComponentValue,
+    ],
     listOf("bool"),
   );
   assertEq([...bytes], [1, 0, 1, 0], "stored bytes normalized");
@@ -113,7 +118,10 @@ Deno.test("bulk lists: bool normalizes by truthiness, lifts nonzero as true", ()
 Deno.test("bulk lists: floats round-trip, f32 narrows like setFloat32", () => {
   const f64 = storeAndReadBack([0.5, -0, 1e308, 5e-324], listOf("f64"));
   assertEq(f64.lifted, [0.5, -0, 1e308, 5e-324], "f64 exact");
-  const f32 = storeAndReadBack([0.5, 1.1, -3.4028234663852886e38], listOf("f32"));
+  const f32 = storeAndReadBack(
+    [0.5, 1.1, -3.4028234663852886e38],
+    listOf("f32"),
+  );
   assertEq(
     f32.lifted,
     [0.5, Math.fround(1.1), -3.4028234663852886e38],

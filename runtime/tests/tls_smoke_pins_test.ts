@@ -22,8 +22,8 @@ import {
   fmtValType,
   ResourceTypeInfo,
   Table,
-  valTypeEqual,
   type ValType,
+  valTypeEqual,
 } from "../src/cabi/mod.ts";
 import { sameElemType } from "../src/task/streams.ts";
 import { loadPlan } from "../src/plan/mod.ts";
@@ -103,7 +103,11 @@ Deno.test("pin: sameElemType survives resource-bearing (cyclic) element types", 
     kind: "future",
     element: { kind: "result", ok: null, error: { kind: "own", rt: otherRt } },
   };
-  assertEq(sameElemType(t, different), false, "distinct rt -> unequal, no throw");
+  assertEq(
+    sameElemType(t, different),
+    false,
+    "distinct rt -> unequal, no throw",
+  );
 });
 
 Deno.test("pin: fmtValType is cycle-safe and structural", () => {
@@ -182,7 +186,11 @@ Deno.test("pin: transfer-borrow works inside a FACT [async-start] window", () =>
   const dst = dstInst.handles.get(out) as ResourceHandle;
   assertEq(dst.own, false);
   assertEq(dst.rep, 17);
-  assertEq(dst.borrowScope === taskScope, true, "drop decrements the callee task");
+  assertEq(
+    dst.borrowScope === taskScope,
+    true,
+    "drop decrements the callee task",
+  );
 
   lenders.releaseLenders();
   assertEq(src.numLends, 0, "deliver-resolve releases the lender");

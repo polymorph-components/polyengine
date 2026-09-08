@@ -15,22 +15,18 @@ import { ComponentInstanceState, Store } from "../task/mod.ts";
 import {
   anySuspendingImport,
   assertModeConsistent,
-  type SuspendingImport,
   chooseMode,
   isAbortable,
   isDeferCancel,
   isSuspending,
   planNeedsSuspension,
+  type SuspendingImport,
   suspendingImport,
+  type SuspensionMode,
   trampolineCanBlock,
   trampolineNeedsSuspension,
-  type SuspensionMode,
 } from "../jspi/mod.ts";
-import {
-  loadPlan,
-  PlanError,
-  resourceIndexOfDefined,
-} from "../plan/loader.ts";
+import { loadPlan, PlanError, resourceIndexOfDefined } from "../plan/loader.ts";
 import { PendingCapability } from "../task/mod.ts";
 import type {
   WireCanonicalOptions,
@@ -42,7 +38,6 @@ import type {
 } from "../plan/format.ts";
 import type { LoadedPlan, LoadedType } from "../plan/loader.ts";
 import {
-  SYNC_ENTRY,
   type CoreFn,
   createDtorEntry,
   createLiftedFunction,
@@ -51,13 +46,14 @@ import {
   LiveMemory,
   newStats,
   type ResolvedOptions,
+  SYNC_ENTRY,
 } from "./boundary.ts";
 import {
   createTrampoline,
   createUnsafeIntrinsic,
-  type PreparedCall,
-  type HostTrapState,
   type FactStartScope,
+  type HostTrapState,
+  type PreparedCall,
   type SyncCallScope,
   TranscodeMemory,
 } from "../intrinsics/mod.ts";
@@ -668,9 +664,9 @@ class Executor {
               );
             }
             seenAt.set(key, { index: i, value });
-            (importObject[imp.module] ??=
-              {} as WebAssembly.ModuleImports)[imp.name] =
-                value as WebAssembly.ImportValue;
+            (importObject[imp.module] ??= {} as WebAssembly.ModuleImports)[
+              imp.name
+            ] = value as WebAssembly.ImportValue;
           });
           // Scoped strictly to the import list above: a CoreDef resolved by
           // any other initializer (extract-*, resource dtors) names no core
@@ -938,22 +934,22 @@ class Executor {
           (value as unknown as Record<PropertyKey, unknown>)[
             SYNC_ENTRY
           ] = createLiftedFunction({
-              name: `${path} (sync entry)`,
-              ft,
-              opts,
-              core,
-              stats: this.stats,
-              suspensionMode: "plain",
-              trapState: this.trapState,
-              syncCallStack: this.syncCallStack,
-              allInstances: () => this.componentInstances.values(),
-              // sync() arm 2: a synchronous caller cannot be deferred by the
-              // hop-quiescence gate, so it refuses (SyncEntryBusy) instead.
-              // This deliberately changes constructor behaviour: the
-              // constructor sync entry previously bypassed the gate
-              // entirely, a latent lift-corruption window.
-              refuseOnEntryHops: true,
-            });
+            name: `${path} (sync entry)`,
+            ft,
+            opts,
+            core,
+            stats: this.stats,
+            suspensionMode: "plain",
+            trapState: this.trapState,
+            syncCallStack: this.syncCallStack,
+            allInstances: () => this.componentInstances.values(),
+            // sync() arm 2: a synchronous caller cannot be deferred by the
+            // hop-quiescence gate, so it refuses (SyncEntryBusy) instead.
+            // This deliberately changes constructor behaviour: the
+            // constructor sync entry previously bypassed the gate
+            // entirely, a latent lift-corruption window.
+            refuseOnEntryHops: true,
+          });
         }
         return { kind: "value", value };
       }
@@ -1371,9 +1367,9 @@ class Executor {
     for (const segment of path) {
       if (value === null || typeof value !== "object") {
         throw new PlanError(
-          `host import '${label}': '${
-            [name, ...walked].join("/")
-          }' is ${describe(value)}, expected an object to read ` +
+          `host import '${label}': '${[name, ...walked].join("/")}' is ${
+            describe(value)
+          }, expected an object to read ` +
             `'${segment}' from`,
         );
       }

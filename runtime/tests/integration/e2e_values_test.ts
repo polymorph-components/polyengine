@@ -44,9 +44,11 @@ type EchoFn = (v: ComponentValue) => ComponentValue;
 const echo = (name: string): EchoFn => {
   const fn = component.exports[name] as EchoFn | undefined;
   if (typeof fn !== "function") {
-    throw new Error(`export ${name} missing; have: ${
-      Object.keys(component.exports).join(", ")
-    }`);
+    throw new Error(
+      `export ${name} missing; have: ${
+        Object.keys(component.exports).join(", ")
+      }`,
+    );
   }
   return fn;
 };

@@ -2,7 +2,11 @@
 // network fetch — matches runtime/tests/support/asserts.ts style but scoped
 // here since the jspi tests are structurally standalone).
 
-export function assertEquals(actual: unknown, expected: unknown, msg?: string): void {
+export function assertEquals(
+  actual: unknown,
+  expected: unknown,
+  msg?: string,
+): void {
   const ok = actual === expected ||
     (typeof actual === "number" && typeof expected === "number" &&
       Number.isNaN(actual) && Number.isNaN(expected));

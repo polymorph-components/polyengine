@@ -159,8 +159,7 @@ Deno.test({
 });
 
 Deno.test({
-  name:
-    "sync() arm 2: a SYNC_ENTRY call during a hop window refuses with " +
+  name: "sync() arm 2: a SYNC_ENTRY call during a hop window refuses with " +
     "SyncEntryBusy, non-poisoningly",
   ignore: shimWasm === null || !isSupported(),
   fn: async () => {
@@ -199,7 +198,10 @@ Deno.test({
 
     // Non-poisoning, both surfaces: the instance is enterable again once the
     // hop has settled.
-    assertTickValue(await (tick() as Promise<unknown>), "default entry after refusal");
+    assertTickValue(
+      await (tick() as Promise<unknown>),
+      "default entry after refusal",
+    );
     assertEquals(clobberSync(), 1, "sync entry after refusal");
     assertTickValue(tickSync(), "sync entry after refusal (tick)");
   },

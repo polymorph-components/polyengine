@@ -14,7 +14,12 @@
 // Deliberately does NOT store component bytes — see core.ts's
 // "PERSISTED-ARTIFACT-SET DECISION" docs for why that's sound, not a gap.
 
-import type { ArtifactCache, CacheKey, CachedArtifacts, CacheMeta } from "./core.ts";
+import type {
+  ArtifactCache,
+  CachedArtifacts,
+  CacheKey,
+  CacheMeta,
+} from "./core.ts";
 import { CACHE_LAYOUT_VERSION, keyHex } from "./core.ts";
 import type { WirePlan } from "../plan/format.ts";
 import { loadPlan, PlanError } from "../plan/loader.ts";
@@ -139,7 +144,10 @@ class DirCache implements ArtifactCache {
         features: key.features,
       };
       await Deno.writeTextFile(`${tmp}/meta.json`, JSON.stringify(meta));
-      await Deno.writeTextFile(`${tmp}/plan.json`, JSON.stringify(artifacts.plan));
+      await Deno.writeTextFile(
+        `${tmp}/plan.json`,
+        JSON.stringify(artifacts.plan),
+      );
       for (const [file, bytes] of artifacts.adapters) {
         const name = safeRelName(file);
         await Deno.writeFile(`${tmp}/adapters/${name}`, bytes);

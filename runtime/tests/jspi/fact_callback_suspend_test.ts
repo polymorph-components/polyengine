@@ -57,8 +57,7 @@ const componentWasm = await Deno.readFile(
 );
 
 Deno.test({
-  name:
-    "fact callee: a callback re-entry that blocks synchronously suspends " +
+  name: "fact callee: a callback re-entry that blocks synchronously suspends " +
     "(promising-wrapped), it does not raise SuspendError",
   ignore: shimWasm === null,
   fn: async () => {

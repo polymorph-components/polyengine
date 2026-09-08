@@ -20,8 +20,15 @@ import {
   runtimeCopies,
 } from "@polyengine/protocol";
 import { COPY_URL, RUNTIME_VERSION } from "../../src/embedder/mod.ts";
-import { lowerFutureSource, lowerStreamSource } from "../../src/embedder/streams.ts";
-import { initWrapper, takeRep, wrapperState } from "../../src/embedder/resources.ts";
+import {
+  lowerFutureSource,
+  lowerStreamSource,
+} from "../../src/embedder/streams.ts";
+import {
+  initWrapper,
+  takeRep,
+  wrapperState,
+} from "../../src/embedder/resources.ts";
 import { GuestResource } from "../../src/embedder/mod.ts";
 import { fromHost } from "../../src/embedder/values.ts";
 
@@ -32,7 +39,10 @@ const CODEC = {
 };
 
 /** A value carrying a brand but minted by nobody this copy knows. */
-function foreign(brandKey: string, props: Record<string, unknown> = {}): object {
+function foreign(
+  brandKey: string,
+  props: Record<string, unknown> = {},
+): object {
   class Foreign {}
   Object.defineProperty(Foreign.prototype, Symbol.for(brandKey), {
     value: true,
@@ -68,7 +78,9 @@ Deno.test("module identity: a foreign Stream is refused at lowering, not pumped 
   // The silent path module identity bans: without the brand check this object would fall
   // through to producer adaptation.
   const src = foreign("polyengine.stream/1", {
-    [Symbol.asyncIterator]: () => ({ next: () => Promise.resolve({ done: true }) }),
+    [Symbol.asyncIterator]: () => ({
+      next: () => Promise.resolve({ done: true }),
+    }),
   });
   const e = caught(() => lowerStreamSource(src as never, CODEC as never));
   assertTrue(e instanceof TypeError, `TypeError, got ${e}`);
@@ -86,7 +98,10 @@ Deno.test("module identity: a foreign Future is refused, not silently adopted as
   assertTrue(e instanceof TypeError, `TypeError, got ${e}`);
   const m = String((e as Error).message);
   assertTrue(m.includes("DIFFERENT polyengine runtime copy"), m);
-  assertTrue(m.includes("Promise.resolve(f)"), "names the by-value remediation");
+  assertTrue(
+    m.includes("Promise.resolve(f)"),
+    "names the by-value remediation",
+  );
 });
 
 Deno.test("module identity: a foreign error-context is named cross-copy, not 'expected an ErrorContext' (realm boundary: only without a string message)", () => {
@@ -97,7 +112,11 @@ Deno.test("module identity: a foreign error-context is named cross-copy, not 'ex
   // which is a genuinely foreign stateful handle, not a message carrier.
   const v = foreign("polyengine.errorContext/1", { message: 42 });
   const e = caught(() =>
-    fromHost(v, { kind: "error-context" } as never, { where: "export 'f'" } as never)
+    fromHost(
+      v,
+      { kind: "error-context" } as never,
+      { where: "export 'f'" } as never,
+    )
   );
   const m = String((e as Error).message);
   assertTrue(m.includes("DIFFERENT polyengine runtime copy"), m);
@@ -106,7 +125,11 @@ Deno.test("module identity: a foreign error-context is named cross-copy, not 'ex
 
 Deno.test("module identity: an unbranded value at a handle site keeps its original diagnosis", () => {
   const e = caught(() =>
-    fromHost({}, { kind: "error-context" } as never, { where: "export 'f'" } as never)
+    fromHost(
+      {},
+      { kind: "error-context" } as never,
+      { where: "export 'f'" } as never,
+    )
   );
   assertTrue(String((e as Error).message).includes("expected an ErrorContext"));
 });
@@ -115,7 +138,9 @@ Deno.test("module identity: a foreign resource wrapper is named cross-copy, not 
   // Same brand KEY, a foreign copy's state object (whose SHAPE we must never
   // read — the module identity table pins only the key).
   const w = new GuestResource();
-  (w as unknown as Record<symbol, unknown>)[Symbol.for("polyengine.resourceState/1")] = {
+  (w as unknown as Record<symbol, unknown>)[
+    Symbol.for("polyengine.resourceState/1")
+  ] = {
     copyUrl: "file:///some/other/copy/mod.ts",
     rep: 7,
     valid: true,
@@ -161,12 +186,17 @@ Deno.test("module identity: the census is empty for a single-copy graph and name
   try {
     const c = copyCensus();
     assertTrue(c.startsWith("2 polyengine copies loaded: "), c);
-    assertTrue(c.includes(COPY_URL) && c.includes("file:///fake/second/copy.mjs"), c);
+    assertTrue(
+      c.includes(COPY_URL) && c.includes("file:///fake/second/copy.mjs"),
+      c,
+    );
     // And the cross-copy messages pick it up.
     const e = caught(() =>
       lowerStreamSource(foreign("polyengine.stream/1") as never, CODEC as never)
     );
-    assertTrue(String((e as Error).message).includes("file:///fake/second/copy.mjs"));
+    assertTrue(
+      String((e as Error).message).includes("file:///fake/second/copy.mjs"),
+    );
   } finally {
     // Leave the census clean for the rest of the suite.
     const copies = (globalThis as unknown as Record<symbol, unknown[]>)[

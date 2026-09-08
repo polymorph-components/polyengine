@@ -24,7 +24,9 @@ Deno.test("runtime/src imports no node: specifiers (platform purity)", async () 
     const text = await Deno.readTextFile(file);
     // Import/export specifiers only — comments mentioning node: APIs are
     // fine (several document the M3A-1 history deliberately).
-    for (const m of text.matchAll(/(?:from|import)\s*\(?\s*["'](node:[^"']+)["']/g)) {
+    for (
+      const m of text.matchAll(/(?:from|import)\s*\(?\s*["'](node:[^"']+)["']/g)
+    ) {
       offenders.push(`${file.pathname}: ${m[1]}`);
     }
   }

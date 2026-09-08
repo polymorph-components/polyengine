@@ -22,11 +22,7 @@ import {
   type ValType,
   type VariantValue,
 } from "./types.ts";
-import {
-  lowerErrorContext,
-  lowerFuture,
-  lowerStream,
-} from "./async_values.ts";
+import { lowerErrorContext, lowerFuture, lowerStream } from "./async_values.ts";
 
 export function store(
   cx: LiftLowerContext,

@@ -41,7 +41,8 @@ const WEB = {
 };
 
 Deno.test({
-  name: "platform class: happy path — native URLSearchParams/TextDecoder with no wrapper",
+  name:
+    "platform class: happy path — native URLSearchParams/TextDecoder with no wrapper",
   ignore: !ready,
   fn: async () => {
     const c = await instantiateFixture(FIXTURE, WEB);
@@ -64,7 +65,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "platform class: option-limit — a missing key surfaces null, which fails (not none)",
+  name:
+    "platform class: option-limit — a missing key surfaces null, which fails (not none)",
   ignore: !ready,
   fn: async () => {
     // `URLSearchParams.prototype.get` returns `null` for a missing key. The
@@ -92,7 +94,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "platform class: getter limit — `size` is a property, not a method, and traps",
+  name:
+    "platform class: getter limit — `size` is a property, not a method, and traps",
   ignore: !ready,
   fn: async () => {
     // `URLSearchParams.prototype.size` is an accessor (getter), so
@@ -110,7 +113,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "platform class: a native platform exception traps, even from a result-typed import",
+  name:
+    "platform class: a native platform exception traps, even from a result-typed import",
   ignore: !ready,
   fn: async () => {
     // `fatal: true` + invalid UTF-8 makes native TextDecoder.prototype.decode
@@ -123,7 +127,11 @@ Deno.test({
     const e = await caught(() =>
       c.exports.probeDecode(true, new Uint8Array([0xff]))
     );
-    assertEq(isTrap(e), true, `expected a Trap (native throw is unbranded), got ${e}`);
+    assertEq(
+      isTrap(e),
+      true,
+      `expected a Trap (native throw is unbranded), got ${e}`,
+    );
     assertEq(
       e instanceof ComponentException,
       false,
@@ -133,7 +141,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "platform class: the one-line wrapper recipe turns a native throw into a WIT err",
+  name:
+    "platform class: the one-line wrapper recipe turns a native throw into a WIT err",
   ignore: !ready,
   fn: async () => {
     // Contrast pin for the previous test: wrapping just the fallible method
@@ -158,7 +167,11 @@ Deno.test({
     const e = await caught(() =>
       c.exports.probeDecode(true, new Uint8Array([0xff]))
     );
-    assertEq(e instanceof ComponentException, true, `expected ComponentException, got ${e}`);
+    assertEq(
+      e instanceof ComponentException,
+      true,
+      `expected ComponentException, got ${e}`,
+    );
     const payload = (e as ComponentException).payload;
     assertEq(
       typeof payload === "string" && payload.length > 0,

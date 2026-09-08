@@ -39,7 +39,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/c: a lifted stream<u8> chunks as Uint8Array — async iteration",
+  name:
+    "conventions/c: a lifted stream<u8> chunks as Uint8Array — async iteration",
   ignore: !passReady,
   fn: async () => {
     await transcript("c-lift-stream-u8-iterate", async (t) => {
@@ -126,7 +127,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/c: awaiting a DROPPED-without-value future rejects DroppedError",
+  name:
+    "conventions/c: awaiting a DROPPED-without-value future rejects DroppedError",
   ignore: !futureUserReady,
   fn: async () => {
     await transcript("c-lift-future-dropped", async (t) => {

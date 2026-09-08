@@ -20,7 +20,6 @@ export enum EventCode {
 /** definitions.py `EventTuple` = `(EventCode, int, int)`. */
 export type EventTuple = [code: EventCode, p1: number, p2: number];
 
-
 /**
  * definitions.py `class Waitable` (line 767).
  *
@@ -85,7 +84,10 @@ export class Waitable {
 
   /** definitions.py `Waitable.drop` (line 805). */
   drop(): void {
-    assert_(!this.hasPendingEvent(), "dropping a waitable with a pending event");
+    assert_(
+      !this.hasPendingEvent(),
+      "dropping a waitable with a pending event",
+    );
     assert_(!this.hasSyncWaiter, "dropping a waitable with a sync waiter");
     this.join(null);
   }

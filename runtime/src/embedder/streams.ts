@@ -33,16 +33,16 @@ import {
   type DirectDestination,
   type DirectSource,
   type DirectVerdict,
-  type ErrorContext as ProtocolErrorContext,
   ERROR_CONTEXT,
-  type Future as ProtocolFuture,
+  type ErrorContext as ProtocolErrorContext,
   FUTURE,
+  type Future as ProtocolFuture,
   hasBrand,
   isStreamProducerError,
   STREAM,
   type Stream as ProtocolStream,
-  StreamProducerError,
   STREAM_WRITER,
+  StreamProducerError,
   type StreamWriter as ProtocolStreamWriter,
 } from "@polyengine/protocol";
 import { describeCrossCopy } from "./copy.ts";
@@ -165,7 +165,11 @@ export function isU8Element(element: ValType | null): boolean {
 // (§"The host-ABI surface and its version"); `exec/host_streams.ts` keeps its
 // own structurally-identical copies for the low-level seam, so both layers
 // agree without either importing the other.
-export type { DirectDestination, DirectSource, DirectVerdict } from "@polyengine/protocol";
+export type {
+  DirectDestination,
+  DirectSource,
+  DirectVerdict,
+} from "@polyengine/protocol";
 
 /**
  * direct-access byte edge (#128): the direct-access byte edges are `stream<u8>` only. A

@@ -47,8 +47,14 @@ function fixture() {
     stats: newStats(),
     trapState: { pending: undefined },
   } as unknown as TrampolineContext;
-  const enter = createTrampoline({ kind: "enter-sync-call", index: 0 } as never, ctx);
-  const exit = createTrampoline({ kind: "exit-sync-call", index: 0 } as never, ctx);
+  const enter = createTrampoline(
+    { kind: "enter-sync-call", index: 0 } as never,
+    ctx,
+  );
+  const exit = createTrampoline(
+    { kind: "exit-sync-call", index: 0 } as never,
+    ctx,
+  );
   const inst = (i: number) => (ctx as TrampolineContext).componentInstance(i);
   return { ctx, enter, exit, inst, syncCallStack };
 }

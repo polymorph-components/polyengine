@@ -33,7 +33,8 @@ function assert(cond: boolean, msg: string): asserts cond {
 }
 
 Deno.test({
-  name: "direct-access byte edge e2e: StreamWriter.writeDirect feeds a real guest",
+  name:
+    "direct-access byte edge e2e: StreamWriter.writeDirect feeds a real guest",
   ignore: !ready,
   fn: async () => {
     // `take: async func(input: stream<u8>, count: u32) -> u64` reads `count`
@@ -130,7 +131,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "direct-access byte edge: a non-u8 element type is refused on both direct forms",
+  name:
+    "direct-access byte edge: a non-u8 element type is refused on both direct forms",
   ignore: !ready,
   fn: async () => {
     // `pass-through-text` is `stream<string>`: the writer parks until that

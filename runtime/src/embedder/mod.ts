@@ -39,14 +39,19 @@ export {
   type ComponentArtifacts,
   type EmbedderInstance,
   type EmbedderOptions,
-  type InstantiateSource,
-  type UntranslatedArtifacts,
   instantiate,
   instantiateEmbedder,
+  type InstantiateSource,
   resolveArtifacts,
+  type UntranslatedArtifacts,
 } from "./instantiate.ts";
 
-export { type FuncSummary, type ImportLeaf, type PlanLike, requiredImports } from "./imports.ts";
+export {
+  type FuncSummary,
+  type ImportLeaf,
+  type PlanLike,
+  requiredImports,
+} from "./imports.ts";
 
 // `NameCollisionError` is the one error class that stays here: it's raised
 // while building an instantiation facade, before any handle/value exists —
@@ -62,9 +67,15 @@ export { type ElemCodec } from "./streams.ts";
 // concrete `Stream`/`StreamWriter` classes are no longer exported. Handle
 // TYPES are spelled against `@polyengine/protocol`'s structural interfaces.
 import { Stream as InternalStream } from "./streams.ts";
-import type { Stream as ProtocolStream, StreamWriter as ProtocolStreamWriter } from "@polyengine/protocol";
+import type {
+  Stream as ProtocolStream,
+  StreamWriter as ProtocolStreamWriter,
+} from "@polyengine/protocol";
 
-export function createStream<T>(): { stream: ProtocolStream<T>; writer: ProtocolStreamWriter<T> } {
+export function createStream<T>(): {
+  stream: ProtocolStream<T>;
+  writer: ProtocolStreamWriter<T>;
+} {
   return InternalStream.create<T>();
 }
 

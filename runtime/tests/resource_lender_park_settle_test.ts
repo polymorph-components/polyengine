@@ -37,7 +37,11 @@ import {
 } from "../src/intrinsics/fact_calls.ts";
 import type { FactStartScope } from "../src/intrinsics/mod.ts";
 import { newStats } from "../src/exec/boundary.ts";
-import { ComponentInstanceState, Store, withActivation } from "../src/task/mod.ts";
+import {
+  ComponentInstanceState,
+  Store,
+  withActivation,
+} from "../src/task/mod.ts";
 import type { SuspensionPoint } from "../src/jspi/mod.ts";
 import {
   canonResourceDrop,
@@ -109,7 +113,8 @@ function mkHarness(): Harness {
     handleIndex,
     point() {
       return store.waiting.find(
-        (w) => typeof (w as { resume?: unknown }).resume === "function" &&
+        (w) =>
+          typeof (w as { resume?: unknown }).resume === "function" &&
           typeof (w as { abandon?: unknown }).abandon === "function",
       ) as SuspensionPoint<unknown> | undefined;
     },
@@ -130,7 +135,10 @@ function mkHarness(): Harness {
         // deno-lint-ignore no-explicit-any
         ? createSyncStartCall({ callback: null }, ctx as any)
         // deno-lint-ignore no-explicit-any
-        : createAsyncStartCall({ callback: null, postReturn: null }, ctx as any);
+        : createAsyncStartCall(
+          { callback: null, postReturn: null },
+          ctx as any,
+        );
 
       prep(
         start,
@@ -142,10 +150,13 @@ function mkHarness(): Harness {
         0,
         PREPARE_ASYNC_NO_RESULT,
       );
-      return withActivation(callerAmbient, () =>
-        kind === "sync"
-          ? startCall(calleeBody, 0)
-          : startCall(calleeBody, 0, 0, START_FLAG_ASYNC_CALLEE));
+      return withActivation(
+        callerAmbient,
+        () =>
+          kind === "sync"
+            ? startCall(calleeBody, 0)
+            : startCall(calleeBody, 0, 0, START_FLAG_ASYNC_CALLEE),
+      );
     },
   };
 }
@@ -156,7 +167,8 @@ function mkHarness(): Harness {
  * (a callee that merely returned without resolving would trap "task finished
  * all threads without resolving" instead).
  */
-const neverResolves = (() => new Promise(() => {})) as unknown as () => CoreValue;
+const neverResolves = (() => new Promise(() => {})) as unknown as () =>
+  CoreValue;
 
 Deno.test("#102: sync-start-call park releases lenders when abandoned (no produce)", async () => {
   const h = mkHarness();
@@ -213,7 +225,10 @@ Deno.test("#102: sync-start-call park releases lenders when produce throws", asy
   const h = mkHarness();
   const parked = h.run("sync", neverResolves);
   assert(parked instanceof Promise, "the caller's activation parked");
-  const settled = parked.then(() => "resolved", (e) => `rejected: ${(e as Error).message}`);
+  const settled = parked.then(
+    () => "resolved",
+    (e) => `rejected: ${(e as Error).message}`,
+  );
   const point = h.point();
   assert(point !== undefined, "the suspension point is registered as waiting");
 
@@ -237,7 +252,10 @@ Deno.test("#102: a cancelled resume cannot reach these non-cancellable parks", a
   const h = mkHarness();
   const parked = h.run("sync", neverResolves);
   assert(parked instanceof Promise, "the caller's activation parked");
-  const settled = parked.then(() => "resolved", (e) => `rejected: ${(e as Error).message}`);
+  const settled = parked.then(
+    () => "resolved",
+    (e) => `rejected: ${(e as Error).message}`,
+  );
   const point = h.point();
   assert(point !== undefined, "the suspension point is registered as waiting");
 
@@ -272,7 +290,10 @@ Deno.test("#102: async-start-call determinacy park releases subtask lenders when
     // eager path is `resource_lender_unwind_test.ts`'s territory).
     return;
   }
-  const settled = parked.then(() => "resolved", (e) => `rejected: ${(e as Error).message}`);
+  const settled = parked.then(
+    () => "resolved",
+    (e) => `rejected: ${(e as Error).message}`,
+  );
   const point = h.point();
   assert(point !== undefined, "the caller parked on the determinacy wait");
   assertEq(h.handle.numLends, 1);

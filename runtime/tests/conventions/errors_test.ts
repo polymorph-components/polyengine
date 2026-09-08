@@ -28,7 +28,8 @@ const HOST_PAYLOAD = "runtime/tests/embedder/host-result-payload.wasm";
 const valuesReady = await haveFixture(guest("values"));
 
 Deno.test({
-  name: "conventions/e: a guest err-result lifts as ComponentException(payload)",
+  name:
+    "conventions/e: a guest err-result lifts as ComponentException(payload)",
   ignore: !valuesReady,
   fn: async () => {
     await transcript("e-guest-err-lifts", async (t) => {
@@ -36,7 +37,10 @@ Deno.test({
       // `echo-result: func(v: result<u32,string>) -> result<u32,string>`.
       // As a VALUE (parameter position) a result is plain `{kind, value}`
       // data that never throws; in RESULT position the same value throws.
-      await t.attempt("ok", () => c.exports.echoResult({ kind: "ok", value: 5 }));
+      await t.attempt(
+        "ok",
+        () => c.exports.echoResult({ kind: "ok", value: 5 }),
+      );
       await t.attempt(
         "err",
         () => c.exports.echoResult({ kind: "err", value: "boom" }),
@@ -48,7 +52,8 @@ Deno.test({
 const emptyReady = await haveFixture(HOST_RESULT);
 
 Deno.test({
-  name: "conventions/e: host ComponentException -> guest err (payloadless side)",
+  name:
+    "conventions/e: host ComponentException -> guest err (payloadless side)",
   ignore: !emptyReady,
   fn: async () => {
     await transcript("e-host-throw-empty", async (t) => {
@@ -99,7 +104,8 @@ Deno.test({
 const payloadReady = await haveFixture(HOST_PAYLOAD);
 
 Deno.test({
-  name: "conventions/e: host ComponentException payload lowers into the err case",
+  name:
+    "conventions/e: host ComponentException payload lowers into the err case",
   ignore: !payloadReady,
   fn: async () => {
     await transcript("e-host-throw-payload", async (t) => {
@@ -134,7 +140,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/e: predicates recognize a hand-rolled exception, either copy",
+  name:
+    "conventions/e: predicates recognize a hand-rolled exception, either copy",
   fn: async () => {
     await transcript("e-brand-recognition", async (t) => {
       // No engine involved: the vocabulary claim itself. A hand-rolled brand
@@ -157,7 +164,8 @@ Deno.test({
 const passReady = await haveFixture(guest("stream-pass"));
 
 Deno.test({
-  name: "conventions/e: a peer TRAP surfaces as PeerTrappedError, not clean EOS",
+  name:
+    "conventions/e: a peer TRAP surfaces as PeerTrappedError, not clean EOS",
   ignore: !passReady,
   fn: async () => {
     await transcript("e-peer-trapped", async (t) => {

@@ -328,21 +328,21 @@ function storeStringToUtf8(
       assert_(worstCaseSize <= REALLOC_I32_MAX);
       ptr = cx.reallocate(ptr, srcCodeUnits, 1, worstCaseSize);
       trapIfRangeExceedsMemory(
-    mem,
-    ptr,
-    worstCaseSize,
-    REALLOC_OOB,
-  );
+        mem,
+        ptr,
+        worstCaseSize,
+        REALLOC_OOB,
+      );
       const encoded = utf8Encoder.encode(src); // USVString: replaces lone surrogates
       writeBytes(mem, ptr + i, encoded.subarray(i));
       if (worstCaseSize > encoded.length) {
         ptr = cx.reallocate(ptr, worstCaseSize, 1, encoded.length);
         trapIfRangeExceedsMemory(
-    mem,
-    ptr,
-    encoded.length,
-    REALLOC_OOB,
-  );
+          mem,
+          ptr,
+          encoded.length,
+          REALLOC_OOB,
+        );
       }
       return [ptr, BigInt(encoded.length)];
     }
@@ -380,11 +380,11 @@ function storeStringToLatin1OrUtf16(
       ptr = cx.reallocate(ptr, srcCodeUnits, 2, worstCaseSize);
       trapIf(ptr !== alignTo(ptr, 2), REALLOC_MISALIGNED);
       trapIfRangeExceedsMemory(
-    mem,
-    ptr,
-    worstCaseSize,
-    REALLOC_OOB,
-  );
+        mem,
+        ptr,
+        worstCaseSize,
+        REALLOC_OOB,
+      );
       for (let j = dstByteLength - 1; j >= 0; j--) {
         mem.bytes[ptr + 2 * j] = mem.bytes[ptr + j];
         mem.bytes[ptr + 2 * j + 1] = 0;
@@ -399,11 +399,11 @@ function storeStringToLatin1OrUtf16(
         ptr = cx.reallocate(ptr, worstCaseSize, 2, encoded.length);
         trapIf(ptr !== alignTo(ptr, 2), REALLOC_MISALIGNED);
         trapIfRangeExceedsMemory(
-    mem,
-    ptr,
-    encoded.length,
-    REALLOC_OOB,
-  );
+          mem,
+          ptr,
+          encoded.length,
+          REALLOC_OOB,
+        );
       }
       const taggedCodeUnits = BigInt(encoded.length / 2) |
         utf16TagBig(mem.ptrType());
@@ -414,11 +414,11 @@ function storeStringToLatin1OrUtf16(
     ptr = cx.reallocate(ptr, srcCodeUnits, 2, dstByteLength);
     trapIf(ptr !== alignTo(ptr, 2), REALLOC_MISALIGNED);
     trapIfRangeExceedsMemory(
-    mem,
-    ptr,
-    dstByteLength,
-    REALLOC_OOB,
-  );
+      mem,
+      ptr,
+      dstByteLength,
+      REALLOC_OOB,
+    );
   }
   return [ptr, BigInt(dstByteLength)];
 }

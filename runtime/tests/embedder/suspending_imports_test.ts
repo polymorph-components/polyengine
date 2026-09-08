@@ -28,8 +28,8 @@ import {
 import { suspending } from "@polyengine/protocol";
 import {
   anySuspendingImport,
-  isSuspending,
   isSupported,
+  isSuspending,
 } from "../../src/jspi/mod.ts";
 
 const ready = (await haveFixture(testdata("imports"))) && isSupported();
@@ -41,7 +41,8 @@ function later<T>(value: T): Promise<T> {
 }
 
 Deno.test({
-  name: "suspending(): a marked sync-typed import parks the frame and resumes with the value",
+  name:
+    "suspending(): a marked sync-typed import parks the frame and resumes with the value",
   ignore: !ready,
   fn: async () => {
     const logged: number[] = [];
@@ -61,7 +62,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "suspending(): resume-time result lowering drives guest realloc (string result)",
+  name:
+    "suspending(): resume-time result lowering drives guest realloc (string result)",
   ignore: !ready,
   fn: async () => {
     // greet: string -> string. Lowering the settled result re-enters the
@@ -80,7 +82,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "suspending(): a marked import returning synchronously stays on the value path",
+  name:
+    "suspending(): a marked import returning synchronously stays on the value path",
   ignore: !ready,
   fn: async () => {
     // Marking declares that the import MAY park, not that it must: a plain
@@ -98,7 +101,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "unmarked sync import returning a Promise still refuses, naming suspending()",
+  name:
+    "unmarked sync import returning a Promise still refuses, naming suspending()",
   ignore: !ready,
   fn: async () => {
     // Fail-on-pre-fix shape, upgraded message: without the marker there is
@@ -122,7 +126,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "explicit jspi:false forces plain mode; a marked import's Promise still refuses",
+  name:
+    "explicit jspi:false forces plain mode; a marked import's Promise still refuses",
   ignore: !ready,
   fn: async () => {
     // The embedder's explicit override outranks marker evidence (chooseMode:
@@ -144,7 +149,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "suspending(): a rejected host promise surfaces as the export call's failure",
+  name:
+    "suspending(): a rejected host promise surfaces as the export call's failure",
   ignore: !ready,
   fn: async () => {
     // A rejection at resume time routes through the suspension point's fail
@@ -176,7 +182,8 @@ const fallibleReady =
   isSupported();
 
 Deno.test({
-  name: "suspending(): a ComponentException rejection over a park becomes the guest's err case, not a trap",
+  name:
+    "suspending(): a ComponentException rejection over a park becomes the guest's err case, not a trap",
   ignore: !fallibleReady,
   fn: async () => {
     // The branded-throw contract survives the suspension: #wrapImportFn
@@ -208,7 +215,8 @@ const startReady =
   (await haveFixture(testdata("imports"))) && isSupported();
 
 Deno.test({
-  name: "suspending(): a marked import reached from a start function traps (pin (c)), even returning synchronously",
+  name:
+    "suspending(): a marked import reached from a start function traps (pin (c)), even returning synchronously",
   ignore: !startReady,
   fn: async () => {
     // THE documented cost of marking (suspending.ts doc): a Suspending
@@ -258,7 +266,8 @@ Deno.test("suspending(): marker mechanics (brand, identity, record scan)", () =>
 // ---------------------------------------------------------------------------
 
 Deno.test({
-  name: "suspending mark: @suspending on a provider-class method parks, with `this` bound to the provider",
+  name:
+    "suspending mark: @suspending on a provider-class method parks, with `this` bound to the provider",
   ignore: !ready,
   fn: async () => {
     // Two pins in one: the stage-3 decorator marks the prototype method the
@@ -288,7 +297,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "suspending mark: receiver binding alone — an unmarked stateful class provider works synchronously",
+  name:
+    "suspending mark: receiver binding alone — an unmarked stateful class provider works synchronously",
   ignore: !ready,
   fn: async () => {
     // The receiver fix is independent of parking: no marks, no Promises,
@@ -315,7 +325,8 @@ const methodReady =
     null && isSupported();
 
 Deno.test({
-  name: "suspending mark: @suspending on a host-resource METHOD parks the frame (the pollable.block shape)",
+  name:
+    "suspending mark: @suspending on a host-resource METHOD parks the frame (the pollable.block shape)",
   ignore: !methodReady,
   fn: async () => {
     // The load-bearing scope extension: `[method]gauge.read` is the same
@@ -349,10 +360,13 @@ Deno.test({
 Deno.test("suspending mark: the decorator refuses non-method positions at class-definition time", () => {
   let raised: unknown;
   try {
+    // Untyped alias: the decorator's own type refuses accessor positions,
+    // and the runtime refusal under test is the one that fires anyway.
+    // deno-lint-ignore no-explicit-any
+    const untypedSuspending = suspending as any;
     // deno-lint-ignore no-unused-vars
     class Bad {
-      // deno-lint-ignore no-explicit-any
-      @(suspending as any)
+      @untypedSuspending
       get x(): number {
         return 1;
       }

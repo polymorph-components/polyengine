@@ -16,7 +16,11 @@
 
 import { assertEq } from "./support/asserts.ts";
 import { createWaitableSetWait } from "../src/intrinsics/async_builtins.ts";
-import { createLiftedFunction, newStats, type ResolvedOptions } from "../src/exec/boundary.ts";
+import {
+  createLiftedFunction,
+  newStats,
+  type ResolvedOptions,
+} from "../src/exec/boundary.ts";
 import { entryRefusal } from "../src/task/scheduler.ts";
 import {
   ComponentInstanceState,

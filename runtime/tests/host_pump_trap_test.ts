@@ -16,11 +16,7 @@
 
 import { assertEq } from "./support/asserts.ts";
 import { hostStreamFor } from "../src/exec/mod.ts";
-import {
-  ReadableStreamEnd,
-  SharedStreamImpl,
-  Store,
-} from "../src/task/mod.ts";
+import { ReadableStreamEnd, SharedStreamImpl, Store } from "../src/task/mod.ts";
 import { Trap } from "../src/cabi/trap.ts";
 import type { ComponentValue, ValType } from "../src/cabi/types.ts";
 
@@ -98,9 +94,11 @@ Deno.test({
     // A ready thread of an unrelated instance (no stream ends) that traps the
     // moment the host op's `pump()` ticks the store.
     const trap = new Trap("boom");
-    store.startWaiting(new FakeThread(() => {
-      throw trap;
-    }, fakeInst()));
+    store.startWaiting(
+      new FakeThread(() => {
+        throw trap;
+      }, fakeInst()),
+    );
 
     const first = host.writable.write([1]);
     let firstErr: unknown = undefined;
@@ -143,9 +141,11 @@ Deno.test({
     const { host } = hostEndOn<number>(store, U8);
 
     const trap = new Trap("boom");
-    store.startWaiting(new FakeThread(() => {
-      throw trap;
-    }, fakeInst()));
+    store.startWaiting(
+      new FakeThread(() => {
+        throw trap;
+      }, fakeInst()),
+    );
 
     const first = host.readable.read(8);
     let settled = false;
@@ -192,9 +192,11 @@ Deno.test({
     // `pump()` — so the executor's throw hits an already-settled promise.
     const guestEnd = new ReadableStreamEnd(shared);
     const trap = new Trap("boom");
-    store.startWaiting(new FakeThread(() => {
-      throw trap;
-    }, fakeInst([guestEnd])));
+    store.startWaiting(
+      new FakeThread(() => {
+        throw trap;
+      }, fakeInst([guestEnd])),
+    );
 
     const p = host.writable.write([1]);
     let rejected: unknown = undefined;

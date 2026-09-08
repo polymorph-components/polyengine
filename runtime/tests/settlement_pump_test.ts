@@ -30,8 +30,7 @@ function assert(cond: boolean, msg: string): asserts cond {
 
 /** The slice of `ComponentInstance` that `Store.tick` touches. */
 function fakeInst() {
-  return {
-  };
+  return {};
 }
 
 /** A stand-in guest thread: `Store.tick` resumes it whenever `ready()`. */
@@ -62,7 +61,11 @@ class FakeThread {
  * (boundary.ts: delete from `pendingHostCalls`, deliver, and here "deliver"
  * readies the guest — never a tick).
  */
-function hostImport(store: Store, settle: Promise<unknown>, onSettle: () => void): void {
+function hostImport(
+  store: Store,
+  settle: Promise<unknown>,
+  onSettle: () => void,
+): void {
   const p: Promise<void> = settle.then(() => {
     store.pendingHostCalls.delete(p);
     onSettle();
@@ -110,7 +113,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "T-2: a self-re-arming host call sustains progress (keep-alive ticker shape)",
+  name:
+    "T-2: a self-re-arming host call sustains progress (keep-alive ticker shape)",
   fn: async () => {
     const store = new Store();
     const ROUNDS = 5;
@@ -126,7 +130,11 @@ Deno.test({
         done();
         return;
       }
-      hostImport(store, new Promise((r) => setTimeout(r, 1)), () => guest.wake());
+      hostImport(
+        store,
+        new Promise((r) => setTimeout(r, 1)),
+        () => guest.wake(),
+      );
     });
     store.startWaiting(guest);
 
@@ -141,7 +149,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "T-3: activity arms alone never arm the pump — no ticks, no trap, no spin",
+  name:
+    "T-3: activity arms alone never arm the pump — no ticks, no trap, no spin",
   fn: async () => {
     const store = new Store();
 
@@ -176,7 +185,9 @@ Deno.test({
 
     // Modelled on the async arm's rejection continuation (boundary.ts): the
     // site parks the failure; the pump must neither swallow nor spin on it.
-    const p: Promise<void> = new Promise((_, rj) => setTimeout(() => rj(boom), 5))
+    const p: Promise<void> = new Promise((_, rj) =>
+      setTimeout(() => rj(boom), 5)
+    )
       .then(undefined, (e) => {
         store.pendingHostCalls.delete(p);
         store.hostFailure = e;

@@ -1,16 +1,16 @@
 # runtime — TS core runtime
 
-Platform-neutral TypeScript runtime core (docs/architecture.md §4.3). Two layers exist
-today:
+Platform-neutral TypeScript runtime core (docs/architecture.md §4.3). Two layers
+exist today:
 
 1. the **canonical-ABI v1 value interpreter** (`src/cabi/`) with the
-   **definitions.py test ports** (`tests/`): docs/architecture.md §11 row 2, feeding §7
-   (canonical-ABI decisions) and §8 (the descriptor-IR interpreter);
-2. the **plan executor on the task-model skeleton** (`src/plan/`,
-   `src/task/`, `src/exec/`, `src/intrinsics/`, `src/shim/`): loads the
-   translator shim's plan v0 (contracts/plan-format.md), instantiates and
-   links the component, and routes every lifted-export call through
-   Task/Thread structures (degenerate sync path, docs/architecture.md §6).
+   **definitions.py test ports** (`tests/`): docs/architecture.md §11 row 2,
+   feeding §7 (canonical-ABI decisions) and §8 (the descriptor-IR interpreter);
+2. the **plan executor on the task-model skeleton** (`src/plan/`, `src/task/`,
+   `src/exec/`, `src/intrinsics/`, `src/shim/`): loads the translator shim's
+   plan v0 (contracts/plan-format.md), instantiates and links the component, and
+   routes every lifted-export call through Task/Thread structures (degenerate
+   sync path, docs/architecture.md §6).
 
 ## Layout
 
@@ -46,8 +46,9 @@ tests/integration/ full-pipeline e2e: shim wasm32 under Deno -> plan ->
 ```
 
 Run tests: `deno task test` (from `runtime/`; it is `deno test
---allow-read=..` — the integration tests read build artifacts from the repo).
-Type-check: `deno task check`.
+--allow-read=..`
+— the integration tests read build artifacts from the repo). Type-check:
+`deno task check`.
 
 Regenerate fixtures: `deno task gen-fixtures` (needs `python3`; imports
 `third_party/component-model/design/mvp/canonical-abi/definitions.py`
@@ -66,7 +67,7 @@ needed when the submodule's definitions.py changes.
 | NaN canonicalization (deterministic profile)                                                                       | `test_nan32/64`                                                       | `nan_test.ts`                                                                              |
 | char validation (surrogates, > 0x10FFFF trap)                                                                      | `test_pairs(CharType...)`                                             | `flat_test.ts`                                                                             |
 | strings: full utf8/utf16/latin1+utf16 matrix, both address types, byte-exact incl. realloc traffic                 | `test_string` matrix                                                  | `string_test.ts` (fixture-driven: 168 lift + 150 lower byte-exact checks + 504 roundtrips) |
-| USVString lone-surrogate replacement (docs/architecture.md §7)                                                                  | n/a in Python (strings always well-formed)                            | `string_test.ts` (TS-authored)                                                             |
+| USVString lone-surrogate replacement (docs/architecture.md §7)                                                     | n/a in Python (strings always well-formed)                            | `string_test.ts` (TS-authored)                                                             |
 | lists/records/variants/flags/map over heap memory, misalignment traps, i64 memories                                | `test_heap`                                                           | `heap_test.ts` (35 cases)                                                                  |
 | lift/lower_flat_values spilling (17 params, retp out-param, alignment traps)                                       | reached via `test_roundtrips`/`canon_lower` upstream                  | `values_test.ts` (TS-authored)                                                             |
 | handle Table (slab, free list LIFO, traps), resource.new/rep/drop, own transfer, borrow lend counting              | `test_handles` (pure parts)                                           | `handles_test.ts`                                                                          |
@@ -80,9 +81,9 @@ through `Store`/`Task`/`Thread`: cross-component realloc, the full
 cancellation, `thread.*`/`context.*` built-ins, and the
 error-context/stream/future _value types_ (their layout/flatten is implemented;
 their lift/lower throws `NotImplemented`). Each has an ignored placeholder in
-`tests/deferred_test.ts` with the reason. Per docs/architecture.md §6 the scheduler is the
-core deliverable and gets built as the runtime's spine — these ports become its
-acceptance tests, not the other way round.
+`tests/deferred_test.ts` with the reason. Per docs/architecture.md §6 the
+scheduler is the core deliverable and gets built as the runtime's spine — these
+ports become its acceptance tests, not the other way round.
 
 ## Decisions forced by JS semantics (not already settled by docs/architecture.md §7)
 
@@ -118,23 +119,24 @@ distinctions); flagged for plan review:
 7. **Variant/record/flags value shapes** mirror definitions.py's semantics
    (variants as `{kind, value}` objects — contracts/descriptor-ir.md §"Host
    value shapes" — despecialized tuple records, label→bool maps); `list<u8>` is
-   `Uint8Array` per docs/architecture.md §7. Final host-facing representations for bindgen
-   remain open (below).
+   `Uint8Array` per docs/architecture.md §7. Final host-facing representations
+   for bindgen remain open (below).
 
-Also plan-relevant: docs/architecture.md §7 defers **latin1+utf16** "until a test forces it"
-— the ported definitions.py string matrix forces it, so the v1 interpreter now
-implements it fully (both directions). If we prefer to keep the runtime surface
-minimal, the store path can be re-deferred by ignoring the fixture subset again.
+Also plan-relevant: docs/architecture.md §7 defers **latin1+utf16** "until a
+test forces it" — the ported definitions.py string matrix forces it, so the v1
+interpreter now implements it fully (both directions). If we prefer to keep the
+runtime surface minimal, the store path can be re-deferred by ignoring the
+fixture subset again.
 
 ## Open questions (types.ts is provisional)
 
 - Wire format of the descriptor IR: `types.ts` is the in-memory sketch; the
-  translator shim (docs/architecture.md §4.2) will define the serialized form and likely
-  intern labels/types by index.
-- Host-facing value representations for bindings (docs/architecture.md §9): tuples as arrays?
-  variants as `{ tag, val }`? `option<T>` as `T | undefined` with a
-  `Some`/`None` escape hatch for nesting? The interpreter's despecialized shapes
-  are faithful to the reference but not ergonomic.
+  translator shim (docs/architecture.md §4.2) will define the serialized form
+  and likely intern labels/types by index.
+- Host-facing value representations for bindings (docs/architecture.md §9):
+  tuples as arrays? variants as `{ tag, val }`? `option<T>` as `T | undefined`
+  with a `Some`/`None` escape hatch for nesting? The interpreter's despecialized
+  shapes are faithful to the reference but not ergonomic.
 - Whether host-provided `char`/integer values get validated (trap) or asserted
   at the boundary — definitions.py asserts (guest-side values are trusted by
   construction); a host API needs a decision.
@@ -144,10 +146,10 @@ minimal, the store path can be re-deferred by ignoring the fixture subset again.
 ## Upstream discrepancies found (definitions.py vs CanonicalABI.md)
 
 - `canon_backpressure_set` existed in definitions.py but CanonicalABI.md
-  documents only `backpressure.inc`/`backpressure.dec`; the repo's own
-  `diff.py` flagged it. Vestigial back-compat shim — resolved upstream
-  independently (CM PR #690 removed it; findings tracker CM-2). The stale
-  `$async?` immediate on `resource.drop` (CanonicalABI.md ~line 4013,
-  noted in docs/architecture.md §7) is still open.
+  documents only `backpressure.inc`/`backpressure.dec`; the repo's own `diff.py`
+  flagged it. Vestigial back-compat shim — resolved upstream independently (CM
+  PR #690 removed it; findings tracker CM-2). The stale `$async?` immediate on
+  `resource.drop` (CanonicalABI.md ~line 4013, noted in docs/architecture.md §7)
+  is still open.
 - `python3 run_tests.py` passes upstream unmodified (Python 3.13.7), so no
   reference-snapshot copy was needed.

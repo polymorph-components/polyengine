@@ -57,11 +57,13 @@ export function ctxThreadId(t: unknown): string {
 }
 function trace(msg: string, thread: unknown): void {
   const a = ambientDebug();
-  console.error(`[ctx] ${ctxThreadId(thread)} ${msg} storage=${
-    JSON.stringify((thread as CurrentThreadLike).storage)
-  } | stack=[${a.stack.map(ctxThreadId).join(",")}] claims=[${
-    a.claims.map(ctxThreadId).join(",")
-  }]`);
+  console.error(
+    `[ctx] ${ctxThreadId(thread)} ${msg} storage=${
+      JSON.stringify((thread as CurrentThreadLike).storage)
+    } | stack=[${a.stack.map(ctxThreadId).join(",")}] claims=[${
+      a.claims.map(ctxThreadId).join(",")
+    }]`,
+  );
 }
 
 /** definitions.py `canon_context_set` (line 2358). */

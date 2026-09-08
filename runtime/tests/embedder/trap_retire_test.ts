@@ -24,7 +24,8 @@ const FIXTURE = guest("stream-pass");
 const ready = await haveFixture(FIXTURE);
 
 Deno.test({
-  name: "trap retire: a write parked on a trapped consumer rejects with PeerTrappedError",
+  name:
+    "trap retire: a write parked on a trapped consumer rejects with PeerTrappedError",
   ignore: !ready,
   fn: async () => {
     const c = await instantiateFixture(FIXTURE, { sink: () => 0n });
@@ -62,7 +63,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "trap retire: reads from a stream whose writer trapped reject, data first",
+  name:
+    "trap retire: reads from a stream whose writer trapped reject, data first",
   ignore: !ready,
   fn: async () => {
     // `open-then-trap` writes n bytes from a background task, then traps:
@@ -102,7 +104,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "trap retire: a future whose writer trapped rejects PeerTrappedError, not DroppedError",
+  name:
+    "trap retire: a future whose writer trapped rejects PeerTrappedError, not DroppedError",
   ignore: !ready,
   fn: async () => {
     // The guest parks on the gate stream, so the call resolves and the host
@@ -125,7 +128,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "trap retire: a trapping import drops its lifted stream args (E2 shape)",
+  name:
+    "trap retire: a trapping import drops its lifted stream args (E2 shape)",
   ignore: !ready,
   fn: async () => {
     // The guest hands the stream to `sink`, which throws unbranded (a host
@@ -151,7 +155,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "clean paths stay unbranded: writer close is end-of-stream, not an error",
+  name:
+    "clean paths stay unbranded: writer close is end-of-stream, not an error",
   ignore: !ready,
   fn: async () => {
     const c = await instantiateFixture(FIXTURE, { sink: () => 0n });
@@ -175,7 +180,8 @@ Deno.test({
 // ---------------------------------------------------------------------------
 
 Deno.test({
-  name: "host ends: a second same-direction op throws instead of self-rendezvousing",
+  name:
+    "host ends: a second same-direction op throws instead of self-rendezvousing",
   ignore: false,
   fn: async () => {
     const hs = hostStream<number>({ kind: "u8" });
@@ -195,7 +201,11 @@ Deno.test({
 
     // Reading while a write is parked stays legal (different ends): it is
     // the rendezvous itself.
-    assertEq([...(await hs.readable.read(8)) as unknown as Uint8Array], [1, 2, 3]);
+    assertEq([...(await hs.readable.read(8)) as unknown as Uint8Array], [
+      1,
+      2,
+      3,
+    ]);
     assertEq(await w1, 3);
 
     const r1 = hs.readable.read(8); // parks (no writer)

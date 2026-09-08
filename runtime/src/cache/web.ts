@@ -10,7 +10,12 @@
 // so we can't mirror dirCache's file-per-adapter layout; one blob per entry
 // is the natural shape here).
 
-import type { ArtifactCache, CacheKey, CachedArtifacts, CacheMeta } from "./core.ts";
+import type {
+  ArtifactCache,
+  CachedArtifacts,
+  CacheKey,
+  CacheMeta,
+} from "./core.ts";
 import { CACHE_LAYOUT_VERSION, keyHex } from "./core.ts";
 import type { WirePlan } from "../plan/format.ts";
 import { loadPlan } from "../plan/loader.ts";
@@ -135,7 +140,11 @@ class WebCache implements ArtifactCache {
     for (const [file, bytes] of artifacts.adapters) {
       adaptersB64[file] = toBase64(bytes);
     }
-    const entry: StoredEntry = { meta, plan: artifacts.plan, adapters: adaptersB64 };
+    const entry: StoredEntry = {
+      meta,
+      plan: artifacts.plan,
+      adapters: adaptersB64,
+    };
     const body = JSON.stringify(entry);
     await cache.put(
       entryUrl(hex),

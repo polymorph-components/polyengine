@@ -4,12 +4,12 @@
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 import { DroppedError, StreamProducerError } from "@polyengine/protocol";
-import {
-  Future,
-  Stream,
-} from "../../src/embedder/streams.ts";
+import { Future, Stream } from "../../src/embedder/streams.ts";
 import { hostStream, hostStreamFor } from "../../src/exec/mod.ts";
-import { LiftLowerContext, mkCanonicalOptions } from "../../src/cabi/context.ts";
+import {
+  LiftLowerContext,
+  mkCanonicalOptions,
+} from "../../src/cabi/context.ts";
 import { Table } from "../../src/cabi/handles.ts";
 import { liftStream } from "../../src/cabi/async_values.ts";
 import { ReadableStreamEnd, SharedStreamImpl } from "../../src/task/mod.ts";
@@ -104,7 +104,11 @@ Deno.test({
     const c = await instantiateFixture(guest("stream-echo"));
     const { stream: input, writer } = Stream.create<number>();
     const out = await c.exports.echoDoubled(input);
-    assertEq(out instanceof Stream, true, "lifted stream<T> is a Stream handle");
+    assertEq(
+      out instanceof Stream,
+      true,
+      "lifted stream<T> is a Stream handle",
+    );
 
     const feed = (async () => {
       await writer.writeAll([1, 2, 3]);
@@ -165,7 +169,11 @@ Deno.test({
     await new Promise((r) => setTimeout(r, 0));
     f.drop();
     const e = await caught(() => Promise.resolve(f));
-    assertEq(e instanceof DroppedError, true, `expected DroppedError, got ${e}`);
+    assertEq(
+      e instanceof DroppedError,
+      true,
+      `expected DroppedError, got ${e}`,
+    );
     assertEq(String(e).includes("dropped"), true, `${e}`);
   },
 });
@@ -326,7 +334,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "futures: a rejecting Promise producer reports its cause, not a bare drop",
+  name:
+    "futures: a rejecting Promise producer reports its cause, not a bare drop",
   ignore: !ready,
   fn: async () => {
     // `future<T>` has no error channel of its own, so the guest can only ever

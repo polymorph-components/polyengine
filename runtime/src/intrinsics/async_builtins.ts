@@ -48,8 +48,8 @@ import type { Cancelled } from "../task/mod.ts";
 import { assert_, trap, trapIf } from "../cabi/trap.ts";
 import {
   CoreValueIter,
-  LiftLowerContext,
   liftFlatValues,
+  LiftLowerContext,
   MAX_FLAT_PARAMS,
   store as storeValue,
 } from "../cabi/mod.ts";
@@ -287,7 +287,10 @@ export function createWaitableSetWait(
     // signed (F3, R2). Normalize at the entry boundary.
     si = (si ?? 0) >>> 0;
     ptr = (ptr ?? 0) >>> 0;
-    trapIf(!inst.mayLeave, "waitable-set.wait: cannot leave component instance");
+    trapIf(
+      !inst.mayLeave,
+      "waitable-set.wait: cannot leave component instance",
+    );
     const wset = requireWaitableSet(inst, si, "waitable-set.wait");
     const task = currentTask() as Task;
     let event: EventTuple;
@@ -363,7 +366,10 @@ export function createWaitableSetPoll(
   return (si?: number, ptr?: number) => {
     si = (si ?? 0) >>> 0;
     ptr = (ptr ?? 0) >>> 0;
-    trapIf(!inst.mayLeave, "waitable-set.poll: cannot leave component instance");
+    trapIf(
+      !inst.mayLeave,
+      "waitable-set.poll: cannot leave component instance",
+    );
     const wset = requireWaitableSet(inst, si, "waitable-set.poll");
     const event = wset.poll(currentTask(), cancellable);
     return unpackEvent(opts, inst, ptr, event);
@@ -375,7 +381,10 @@ export function createWaitableSetDrop(inst: ComponentInstanceState): CoreFn {
   return (i?: number) => {
     // Guest-supplied index is u32; core wasm delivers i32 args signed (F3, R2).
     i = (i ?? 0) >>> 0;
-    trapIf(!inst.mayLeave, "waitable-set.drop: cannot leave component instance");
+    trapIf(
+      !inst.mayLeave,
+      "waitable-set.drop: cannot leave component instance",
+    );
     const wset = inst.handles.remove(i);
     trapIf(
       !(wset instanceof WaitableSet),

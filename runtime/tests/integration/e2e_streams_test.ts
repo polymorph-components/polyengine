@@ -58,7 +58,10 @@ Deno.test({
     const pending = (c.exports["sum-stream"] as (v: unknown) => unknown)(
       s.value,
     );
-    assert(pending instanceof Promise, "a parked async export returns a Promise");
+    assert(
+      pending instanceof Promise,
+      "a parked async export returns a Promise",
+    );
     assertEq(await s.writable.writeAll([1, 2, 3, 4]), 4);
     s.writable.drop(); // end-of-stream: the guest's read loop terminates
     assertEq(await pending, 10n);
@@ -71,10 +74,11 @@ Deno.test({
   fn: async () => {
     const c = await instantiate("async-probe");
     const f = hostFuture<number>(U32);
-    const pending = (c.exports["future-add"] as (a: unknown, b: number) => unknown)(
-      f.value,
-      5,
-    );
+    const pending =
+      (c.exports["future-add"] as (a: unknown, b: number) => unknown)(
+        f.value,
+        5,
+      );
     await f.write(37);
     assertEq(await pending, 42);
   },
@@ -89,9 +93,10 @@ Deno.test({
     // must be able to read the output while still feeding the input.
     const c = await instantiate("stream-echo");
     const input = hostStream<number>(U32);
-    const returned = await (c.exports["echo-doubled"] as (v: unknown) => unknown)(
-      input.value,
-    );
+    const returned =
+      await (c.exports["echo-doubled"] as (v: unknown) => unknown)(
+        input.value,
+      );
     const output = hostStreamFor<number>(returned as never);
     const feed = (async () => {
       await input.writable.writeAll([1, 2, 3]);
@@ -122,9 +127,10 @@ Deno.test({
 
     // Guest as producer: `make-future` hands back a future it resolves later.
     const c2 = await instantiate("future-user");
-    const returned = await (c2.exports["make-future"] as (x: number) => unknown)(
-      7,
-    );
+    const returned =
+      await (c2.exports["make-future"] as (x: number) => unknown)(
+        7,
+      );
     assertEq(await hostFutureFor<number>(returned as never).read(), 8);
   },
 });

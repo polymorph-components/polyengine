@@ -42,13 +42,18 @@
 // results to become Promises where cabi needs a number synchronously.
 
 import { assert_ } from "../cabi/trap.ts";
-import { type SuspendingImport, isSupported, makePromising, makeSuspending } from "./mechanics.ts";
 import {
-  withActivation,
+  isSupported,
+  makePromising,
+  makeSuspending,
+  type SuspendingImport,
+} from "./mechanics.ts";
+import {
   claimActivationAmbient,
   dbgId,
   maybeCurrentThread,
   releaseActivationAmbient,
+  withActivation,
 } from "../task/mod.ts";
 import type { Cancelled, SchedulableThread, Store } from "../task/mod.ts";
 
@@ -201,7 +206,9 @@ export function enterWasm<T extends (...a: never[]) => unknown>(
 ): T {
   if (mode === "plain") return fn;
   assert_(isSupported(), "jspi mode selected on an engine without JSPI");
-  return makePromising(fn as unknown as (...a: unknown[]) => unknown) as unknown as T;
+  return makePromising(
+    fn as unknown as (...a: unknown[]) => unknown,
+  ) as unknown as T;
 }
 
 /**
@@ -283,7 +290,10 @@ const SENTINEL_TICK = Promise.resolve();
 
 /** Wrap a suspending import's thenable so the eventual resumption chunk is
  * preceded contiguously by its attribution sentinel. */
-function attributeContinuation<T>(owner: unknown, r: PromiseLike<T>): Promise<T> {
+function attributeContinuation<T>(
+  owner: unknown,
+  r: PromiseLike<T>,
+): Promise<T> {
   return Promise.resolve(r).then(
     (v) => {
       sentinelFor(owner);
@@ -306,7 +316,8 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
     // The activation calling us — read while its bracket (or its hop claim)
     // is still the ambient.
     const owner = maybeCurrentThread() ?? null;
-    const invoke = () => (fn as unknown as (...a: unknown[]) => unknown)(...args);
+    const invoke = () =>
+      (fn as unknown as (...a: unknown[]) => unknown)(...args);
     let r: unknown;
     try {
       // Bracket our own JS frame with the caller. Without this, a built-in
@@ -336,7 +347,9 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
       return r;
     }
     if (SP_TRACE) {
-      console.error(`[sp] hop-suspend owner=${dbgId(owner)} promise=${dbgId(r)}`);
+      console.error(
+        `[sp] hop-suspend owner=${dbgId(owner)} promise=${dbgId(r)}`,
+      );
     }
     return attributeContinuation(owner, r as PromiseLike<unknown>);
   };
@@ -468,7 +481,11 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
     this.#store = store;
     this.owner = owner ?? maybeCurrentThread() ?? task?.implicitThread ?? null;
     if (SP_TRACE) {
-      console.error(`[sp] mint ${dbgId(this)} owner=${dbgId(this.owner)} task=${dbgId(this.task)}\n${(new Error().stack ?? "").split("\n").slice(2, 5).join("\n")}`);
+      console.error(
+        `[sp] mint ${dbgId(this)} owner=${dbgId(this.owner)} task=${
+          dbgId(this.task)
+        }\n${(new Error().stack ?? "").split("\n").slice(2, 5).join("\n")}`,
+      );
     }
     this.promise = new Promise<T>((res, rej) => {
       this.#settle = res;
@@ -518,7 +535,11 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
       "cancelled resume of a non-cancellable suspension point",
     );
     if (SP_TRACE) {
-      console.error(`[sp] resume ${dbgId(this)} owner=${dbgId(this.owner)}\n${(new Error().stack ?? "").split("\n").slice(2, 5).join("\n")}`);
+      console.error(
+        `[sp] resume ${dbgId(this)} owner=${dbgId(this.owner)}\n${
+          (new Error().stack ?? "").split("\n").slice(2, 5).join("\n")
+        }`,
+      );
     }
     this.#done = true;
     // AFTER the block (definitions.py `Thread.wait_until` line 372, ported to
@@ -572,7 +593,9 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
       // gone with the single-slot claim (#158 mechanism B), but the entry must
       // still be retired here or the store stays gated on a finished window.
       this.#store.consumePendingIfRunning();
-      if (maybeCurrentThread() === undefined) claimActivationAmbient(this.owner);
+      if (maybeCurrentThread() === undefined) {
+        claimActivationAmbient(this.owner);
+      }
       this.#store.addPendingResumption(this.task?.implicitThread ?? null);
       this.#fail(e);
       return;

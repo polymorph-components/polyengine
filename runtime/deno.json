@@ -13,6 +13,13 @@
     "check": "deno check src tests",
     "gen-fixtures": "python3 tests/fixtures/generate.py"
   },
+  "fmt": {
+    "exclude": [
+      "tests/bindgen/generated/",
+      "tests/bindgen/fixtures/",
+      "tests/fixtures/"
+    ]
+  },
   "publish": {
     "exclude": [
       "tests/"

@@ -134,12 +134,14 @@ export function loadPtr(mem: MemInst, ptr: number): number | bigint {
 // bulk_lists.ts intentionally wraps instead — see that file's header for why.
 
 function bigintFitsIn64(v: bigint, signed: boolean): boolean {
-  return signed
-    ? v >= -(2n ** 63n) && v < 2n ** 63n
-    : v >= 0n && v < 2n ** 64n;
+  return signed ? v >= -(2n ** 63n) && v < 2n ** 63n : v >= 0n && v < 2n ** 64n;
 }
 
-function numberFitsInWidth(v: number, nbytes: 1 | 2 | 4, signed: boolean): boolean {
+function numberFitsInWidth(
+  v: number,
+  nbytes: 1 | 2 | 4,
+  signed: boolean,
+): boolean {
   const bits = nbytes * 8;
   if (signed) {
     const min = -(2 ** (bits - 1));

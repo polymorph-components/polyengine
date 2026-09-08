@@ -48,7 +48,8 @@ function ticketSource(count: number): AsyncIterable<Ticket> {
 }
 
 Deno.test({
-  name: "resource streams: own<R> elements arrive live; each guest drop runs the dtor",
+  name:
+    "resource streams: own<R> elements arrive live; each guest drop runs the dtor",
   ignore: !have,
   async fn() {
     reset();
@@ -68,7 +69,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "resource streams: un-taken elements are released when the reader drops",
+  name:
+    "resource streams: un-taken elements are released when the reader drops",
   ignore: !have,
   async fn() {
     reset();

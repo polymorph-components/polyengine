@@ -57,7 +57,11 @@ Deno.test({
     store.startWaiting(sp as any);
 
     let finished = false;
-    const driving = driveStoreAsync(store, () => finished, "export 'abandoned'");
+    const driving = driveStoreAsync(
+      store,
+      () => finished,
+      "export 'abandoned'",
+    );
     let outcome: { ok: true } | { err: unknown } | undefined;
     driving.then(() => (outcome = { ok: true }), (e) => (outcome = { err: e }));
 

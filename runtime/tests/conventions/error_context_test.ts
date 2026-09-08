@@ -24,7 +24,8 @@ const FIXTURE = local("error-context-relay");
 const ready = await haveFixture(FIXTURE);
 
 Deno.test({
-  name: "conventions/g: a lifted error-context is branded and carries its message",
+  name:
+    "conventions/g: a lifted error-context is branded and carries its message",
   ignore: !ready,
   fn: async () => {
     await transcript("g-error-context-lift", async (t) => {
@@ -98,7 +99,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/g: isErrorContext accepts a hand-rolled carrier, rejects a husk",
+  name:
+    "conventions/g: isErrorContext accepts a hand-rolled carrier, rejects a husk",
   fn: async () => {
     await transcript("g-error-context-predicate", async (t) => {
       // The vocabulary claim on its own: recognition is brand + string

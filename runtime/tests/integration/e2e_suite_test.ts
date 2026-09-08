@@ -459,7 +459,9 @@ Deno.test({
       const base = new URL(`harness/generated/${dir}/`, root);
       for (const [file, commands] of await commandsOf(dir)) {
         for (const cmd of commands) {
-          if (cmd.type !== "assert_invalid" && cmd.type !== "assert_malformed") {
+          if (
+            cmd.type !== "assert_invalid" && cmd.type !== "assert_malformed"
+          ) {
             continue;
           }
           if (cmd.module_type !== "binary") continue;

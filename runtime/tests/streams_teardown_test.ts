@@ -293,7 +293,11 @@ Deno.test("#84(b): a JSPI-blocked future reader's suspension rejects with the tr
   // frame via `blockCurrentActivation`, which hands back a Promise.
   const syncOpts = { ...f.ctx.options(), async: false };
   const syncCtx = { ...f.ctx, options: () => syncOpts };
-  const read = createFutureRead({ futureTable: 0, options: 0 }, syncCtx, f.reader);
+  const read = createFutureRead(
+    { futureTable: 0, options: 0 },
+    syncCtx,
+    f.reader,
+  );
   const parked = f.run(() => read(f.ri, 0)) as unknown as Promise<number>;
   assertEq(f.readEnd.state, CopyState.COPYING);
   assertEq(f.readEnd.hasSyncWaiter, true);
@@ -411,7 +415,11 @@ Deno.test("#90: dropping a lowered, never-written host future traps its parked r
   const ri = lowerInto(host, reader);
   const readEnd = reader.handles.get(ri) as ReadableFutureEnd;
   const opts = { ...f.ctx.options(), instance: reader };
-  const ctx = { ...f.ctx, componentInstance: () => reader, options: () => opts };
+  const ctx = {
+    ...f.ctx,
+    componentInstance: () => reader,
+    options: () => opts,
+  };
   const read = createFutureRead({ futureTable: 0, options: 0 }, ctx, reader);
   const task = new Task(ASYNC_FT, CALLBACK_OPTS, reader, () => [], () => {});
   const thread = new Thread(task, (function* () {})());
@@ -471,8 +479,11 @@ Deno.test("#90: write-then-drop is unchanged", async () => {
   // The guest reader takes the value.
   const shared = host.value as unknown as SharedFutureImpl;
   let taken: CopyResult | null = null;
-  shared.read({ guest: 1 }, new HostBuffer(null, null, 1) as never, (r) =>
-    taken = r);
+  shared.read(
+    { guest: 1 },
+    new HostBuffer(null, null, 1) as never,
+    (r) => taken = r,
+  );
   await w;
   assertEq(taken, CopyResult.COMPLETED);
   host.drop();

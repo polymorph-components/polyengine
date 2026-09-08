@@ -25,7 +25,12 @@ import { trapIf } from "../cabi/trap.ts";
 import { assert_ } from "../cabi/trap.ts";
 import type { ResourceTypeInfo } from "../cabi/types.ts";
 import type { ComponentInstanceState } from "../task/mod.ts";
-import { dbgId, entryRefusal, maybeCurrentThread, maybeCurrentTask } from "../task/mod.ts";
+import {
+  dbgId,
+  entryRefusal,
+  maybeCurrentTask,
+  maybeCurrentThread,
+} from "../task/mod.ts";
 import type { WireTrampoline } from "../plan/format.ts";
 import type { CoreFn, ExecutionStats } from "../exec/boundary.ts";
 import { UnsupportedFeatureError } from "./errors.ts";
@@ -52,15 +57,18 @@ import {
   type PreparedCall,
 } from "./fact_calls.ts";
 import {
+  type AsyncTransferContext,
   createErrorContextDebugMessage,
   createErrorContextDrop,
   createErrorContextNew,
+  createErrorContextTransfer,
   createFutureCancelRead,
   createFutureCancelWrite,
   createFutureDropReadable,
   createFutureDropWritable,
   createFutureNew,
   createFutureRead,
+  createFutureTransfer,
   createFutureWrite,
   createStreamCancelRead,
   createStreamCancelWrite,
@@ -68,18 +76,15 @@ import {
   createStreamDropWritable,
   createStreamNew,
   createStreamRead,
+  createStreamTransfer,
   createStreamWrite,
   type StreamTrampolineContext,
-  type AsyncTransferContext,
-  createStreamTransfer,
-  createFutureTransfer,
-  createErrorContextTransfer,
 } from "./stream_builtins.ts";
 import {
   createTranscoder,
+  TRANSCODE_OPS,
   type TranscodeMemory,
   type TranscodeOp,
-  TRANSCODE_OPS,
 } from "./transcode.ts";
 
 export * from "./transcode.ts";
@@ -149,7 +154,10 @@ const TRAP_UNCAUGHT_EXCEPTION = 49;
 export { UnsupportedFeatureError } from "./errors.ts";
 
 /** Capability at which each trampoline kind stops instantiate-failing. */
-const TRAMPOLINE_CAPABILITY: Record<string, "core" | "resources" | "task-core"> = {
+const TRAMPOLINE_CAPABILITY: Record<
+  string,
+  "core" | "resources" | "task-core"
+> = {
   "lower-import": "core",
   "trap": "core",
   "enter-sync-call": "core",
@@ -299,7 +307,9 @@ export interface TrampolineContext {
    * `prepare-call` passes as `task_return_type`, or `null` when the plan
    * carries no mapping for it (see `LoadedPlan.resultTupleTypes`).
    */
-  resultTypesForTuple(tupleIndex: number): import("../cabi/types.ts").ValType[] | null;
+  resultTypesForTuple(
+    tupleIndex: number,
+  ): import("../cabi/types.ts").ValType[] | null;
   /** Build the lowered-import body for `lowered` (LoweredIndex). */
   loweredImport(decl: {
     lowered: number;
@@ -390,7 +400,9 @@ function syncScopes(ctx: TrampolineContext, site = "?"): any[] {
   const scopes = thread?.syncCallStack ?? ctx.syncCallStack;
   if (SCOPE_TRACE) {
     console.error(
-      `[scope] ${site} act=${thread ? dbgId(thread) : "NONE(->ctx fallback)"} ` +
+      `[scope] ${site} act=${
+        thread ? dbgId(thread) : "NONE(->ctx fallback)"
+      } ` +
         `depth=${scopes.length}`,
     );
   }
@@ -661,7 +673,10 @@ function createTrampolineBody(
       );
     case "async-start-call":
       return createAsyncStartCall(
-        decl as unknown as { callback: number | null; postReturn: number | null },
+        decl as unknown as {
+          callback: number | null;
+          postReturn: number | null;
+        },
         ctx as unknown as FactCallContext,
       );
 
@@ -679,33 +694,89 @@ function createTrampolineBody(
         declaredInstance(decl, ctx),
       );
     case "stream-read":
-      return createStreamRead(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createStreamRead(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "stream-write":
-      return createStreamWrite(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createStreamWrite(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "future-read":
-      return createFutureRead(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createFutureRead(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "future-write":
-      return createFutureWrite(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createFutureWrite(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "stream-cancel-read":
-      return createStreamCancelRead(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createStreamCancelRead(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "stream-cancel-write":
-      return createStreamCancelWrite(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createStreamCancelWrite(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "future-cancel-read":
-      return createFutureCancelRead(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createFutureCancelRead(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "future-cancel-write":
-      return createFutureCancelWrite(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createFutureCancelWrite(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "stream-drop-readable":
-      return createStreamDropReadable(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createStreamDropReadable(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "stream-drop-writable":
-      return createStreamDropWritable(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createStreamDropWritable(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "future-drop-readable":
-      return createFutureDropReadable(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createFutureDropReadable(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "future-drop-writable":
-      return createFutureDropWritable(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createFutureDropWritable(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "error-context-new":
-      return createErrorContextNew(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createErrorContextNew(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "error-context-debug-message":
-      return createErrorContextDebugMessage(decl as never, sctx(ctx), declaredInstance(decl, ctx));
+      return createErrorContextDebugMessage(
+        decl as never,
+        sctx(ctx),
+        declaredInstance(decl, ctx),
+      );
     case "error-context-drop":
       return createErrorContextDrop(declaredInstance(decl, ctx));
     case "stream-transfer":
@@ -739,7 +810,6 @@ function createTrampolineBody(
       );
   }
 }
-
 
 // ---------------------------------------------------------------------------
 // Resource transfer (FACT `resource.transfer-own` / `transfer-borrow`)

@@ -209,11 +209,13 @@ function requireLive(w: object, what: string): WrapperState {
   const s = wrapperState(w);
   if (s === undefined) {
     if (isForeignWrapper(w)) {
-      throw new InvalidHandleError(`${what}: ${describeCrossCopy(
-        "this resource handle",
-        "Resource wrappers hold a rep in the minting copy's tables; there " +
-          "is no by-value form — call through the copy that created it.",
-      )}`);
+      throw new InvalidHandleError(`${what}: ${
+        describeCrossCopy(
+          "this resource handle",
+          "Resource wrappers hold a rep in the minting copy's tables; there " +
+            "is no by-value form — call through the copy that created it.",
+        )
+      }`);
     }
     throw new InvalidHandleError(`${what}: not a resource handle`);
   }
@@ -435,9 +437,7 @@ export function buildGuestResourceClass(
       // callable bare.
       markSyncCallable(
         methodFn,
-        payload.kind === "free"
-          ? { kind: "method", fn: payload.fn }
-          : payload, // kind "async": pass the brand through unchanged
+        payload.kind === "free" ? { kind: "method", fn: payload.fn } : payload, // kind "async": pass the brand through unchanged
       );
     }
     Object.defineProperty(cls.prototype, js, {

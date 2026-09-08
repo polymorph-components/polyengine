@@ -33,8 +33,8 @@ Deno.test("POLYENGINE_SCHED_SEED is readable and engaged by the scheduler", () =
     raw = Deno.env.get("POLYENGINE_SCHED_SEED");
   } catch (err) {
     throw new Error(
-      "Deno.env.get(\"POLYENGINE_SCHED_SEED\") threw a permission error " +
-        "(NotCapable). This means the runtime \"test\" task in " +
+      'Deno.env.get("POLYENGINE_SCHED_SEED") threw a permission error ' +
+        '(NotCapable). This means the runtime "test" task in ' +
         "runtime/deno.json lost --allow-env=POLYENGINE_SCHED_SEED. " +
         "readSeed() (src/task/scheduler.ts) deliberately swallows this " +
         "error and falls back to FIFO in production — which means every " +

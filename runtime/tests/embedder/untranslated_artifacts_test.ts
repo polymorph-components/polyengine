@@ -23,17 +23,22 @@ const IMPORTS = {
 };
 
 Deno.test({
-  name: "module wiring: instantiate({ componentBytes, translator: bytes }) translates internally",
+  name:
+    "module wiring: instantiate({ componentBytes, translator: bytes }) translates internally",
   ignore: !ready,
   fn: async () => {
     const componentBytes = (await readArtifact(testdata("imports")))!;
-    const c = await instantiate({ componentBytes, translator: shimWasm! }, IMPORTS);
+    const c = await instantiate(
+      { componentBytes, translator: shimWasm! },
+      IMPORTS,
+    );
     assertEq(await c.exports.run(2, 40), 42);
   },
 });
 
 Deno.test({
-  name: "module wiring: a shared Translator instance serves several instantiations",
+  name:
+    "module wiring: a shared Translator instance serves several instantiations",
   ignore: !ready,
   fn: async () => {
     const translator = await Translator.create(shimWasm!);

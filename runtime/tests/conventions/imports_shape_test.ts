@@ -74,7 +74,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/a: suspending mark — an interface member's receiver is its provider",
+  name:
+    "conventions/a: suspending mark — an interface member's receiver is its provider",
   ignore: !importsReady,
   fn: async () => {
     await transcript("a-interface-receiver", async (t) => {

@@ -75,7 +75,9 @@ export async function computeWorldDigest(
   plan: WirePlan,
 ): Promise<WorldDigestResult> {
   const resourceNames = buildResourceNameMap(plan);
-  const imports = plan.imports.map((imp) => canonImport(plan, imp, resourceNames));
+  const imports = plan.imports.map((imp) =>
+    canonImport(plan, imp, resourceNames)
+  );
   const exports = plan.exports
     .map((exp) => canonExportItem(plan, exp, resourceNames))
     .filter((c): c is Canon => c !== null);
@@ -117,7 +119,9 @@ function buildResourceNameMap(plan: WirePlan): Map<number, string> {
   // ABI-compatible with — worse than an unresolved-index throw. Refuse
   // conservatively whenever the plan declares any imported resources, full
   // stop, regardless of how many named (exported) resources exist.
-  if (plan.importedResources !== undefined && plan.importedResources.length > 0) {
+  if (
+    plan.importedResources !== undefined && plan.importedResources.length > 0
+  ) {
     throw new DigestError(
       `digest: plan declares ${plan.importedResources.length} imported ` +
         `resource(s); resolving which own/borrow occurrences reference an ` +
@@ -191,7 +195,9 @@ function canonImport(
   // from a flat list. Revisit when a corpus component actually imports
   // something (flagged in the track report for §9's degraded-mode
   // question).
-  const name = imp.path.length > 0 ? [...imp.path, imp.name].join("/") : imp.name;
+  const name = imp.path.length > 0
+    ? [...imp.path, imp.name].join("/")
+    : imp.name;
   if (imp.kind === "func" && imp.type !== undefined) {
     return {
       kind: "func",
@@ -269,7 +275,10 @@ function canonFuncType(
   };
 }
 
-function canonValType(t: WireValType, resourceNames: Map<number, string>): Canon {
+function canonValType(
+  t: WireValType,
+  resourceNames: Map<number, string>,
+): Canon {
   switch (t.kind) {
     case "bool":
     case "s8":
@@ -354,12 +363,16 @@ function canonValType(t: WireValType, resourceNames: Map<number, string>): Canon
     case "stream":
       return {
         kind: "stream",
-        element: t.element === null ? null : canonValType(t.element, resourceNames),
+        element: t.element === null
+          ? null
+          : canonValType(t.element, resourceNames),
       };
     case "future":
       return {
         kind: "future",
-        element: t.element === null ? null : canonValType(t.element, resourceNames),
+        element: t.element === null
+          ? null
+          : canonValType(t.element, resourceNames),
       };
     default: {
       const exhaustive: never = t;

@@ -21,12 +21,12 @@ import {
   type Cancelled,
   CANCELLED_TRUE,
   chooseCandidate,
-  isInstancePoisoned,
-  Store,
   dbgId,
+  isInstancePoisoned,
   NeedsJspi,
   notifyInstancePoisoned,
   PendingCapability,
+  Store,
 } from "./scheduler.ts";
 import { Thread } from "./thread.ts";
 import { Waitable, WaitableSet } from "./waitable.ts";
@@ -91,7 +91,6 @@ export class ComponentInstanceState implements ComponentInstanceLike {
   set mayLeave(v: boolean) {
     this.flags.value = v ? 1 : 0;
   }
-
 }
 
 /** definitions.py `Task.State` (line 445). */

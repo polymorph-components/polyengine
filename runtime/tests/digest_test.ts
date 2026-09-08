@@ -75,7 +75,9 @@ async function expectDigestError(
     }
     if (!e.message.includes(messageIncludes)) {
       throw new Error(
-        `expected DigestError message to include ${JSON.stringify(messageIncludes)}, got: ${e.message}`,
+        `expected DigestError message to include ${
+          JSON.stringify(messageIncludes)
+        }, got: ${e.message}`,
       );
     }
   }
@@ -95,9 +97,12 @@ async function readEnvelope(name: string) {
 // Rust side — the two implementations were developed against the same
 // fixture corpus and must never be "fixed" independently of one another).
 const EXPECTED = {
-  hello: "sha256:04ae5eb2633ff22f5af8c5e9234c18d089e80a99e04b0946929f0a2e3f5ad7c9",
-  values: "sha256:e0791536cb4b9731057b82831150611eed64f22d665130a02f247d3227e2e4a7",
-  resources: "sha256:d72d1754bca4332fb3a5e21526872d28c0914f54253979e3bc8ab8e1e083b4d4",
+  hello:
+    "sha256:04ae5eb2633ff22f5af8c5e9234c18d089e80a99e04b0946929f0a2e3f5ad7c9",
+  values:
+    "sha256:e0791536cb4b9731057b82831150611eed64f22d665130a02f247d3227e2e4a7",
+  resources:
+    "sha256:d72d1754bca4332fb3a5e21526872d28c0914f54253979e3bc8ab8e1e083b4d4",
 };
 
 for (const world of ["hello", "values", "resources"] as const) {

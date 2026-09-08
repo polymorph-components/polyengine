@@ -23,8 +23,8 @@ import {
 } from "../src/exec/boundary.ts";
 import {
   ComponentInstanceState,
-  pushCurrentThread,
   popCurrentThread,
+  pushCurrentThread,
   Store,
   Task,
   type TaskOptions,
@@ -120,7 +120,9 @@ Deno.test(
     // uncaught exception, and not delivered to the guest through the
     // subtask's SUBTASK event.
     assertEq(store.hostFailure !== undefined, true);
-    const msg = String((store.hostFailure as { message?: string })?.message ?? store.hostFailure);
+    const msg = String(
+      (store.hostFailure as { message?: string })?.message ?? store.hostFailure,
+    );
     assertEq(msg.includes("realloc required but not provided"), true);
     // Consumed: the subtask never resolved, and the driving loop is the one
     // responsible for rethrowing `store.hostFailure` — pinning that plumbing
