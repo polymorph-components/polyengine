@@ -1690,6 +1690,12 @@ export function createLiftedFunction(input: {
 
     let resolved: ComponentValue[] | null = null;
     let resolvedSeen = false;
+    /**
+     * One-shot: set only by `backgroundCompletion` below, fired here when the
+     * task resolves. See there for why the resolve callback — not thread
+     * drain — is the host's answer event (polyengine#313).
+     */
+    let onResolvedHook: (() => void) | null = null;
     const task = new Task(
       ft,
       taskOpts,
@@ -1699,6 +1705,11 @@ export function createLiftedFunction(input: {
         resolved = result;
         resolvedSeen = true;
         stats.tasksResolved++;
+        if (onResolvedHook !== null) {
+          const f = onResolvedHook;
+          onResolvedHook = null;
+          f();
+        }
       },
     );
 
@@ -1884,14 +1895,24 @@ export function createLiftedFunction(input: {
      * may have moved on since (polyengine#310).
      *
      * Resolution rides `finishHostEntry` unchanged — it already holds
-     * `completed`/`resultsToHost` — fired from `Task.onFinished`, i.e. the
-     * moment this task's last thread unregisters. That point is safe for the
-     * `done` predicate's task-scoped clauses: `resolvedSeen` is guaranteed
-     * (`unregisterThread`'s own `trapIf(state !== "resolved")` fires first
-     * otherwise), and this task's threads are gone from `store.awaiting`, so
-     * `midWasmCall()` is false by construction. `hopParked()` plays no part:
-     * a hop is the obligation of the driver that put it in flight (#280),
-     * never of a Promise waiting on another task.
+     * `completed`/`resultsToHost` — fired from THE TASK'S RESOLVE CALLBACK,
+     * i.e. `task.return` (polyengine#313). That is the reference's own answer
+     * event: definitions.py delivers a task's result to its caller through
+     * `on_resolve`, called from `Task.return_`, and run_tests.py's
+     * `lift_and_run` keeps ticking the store afterwards for OTHER work, not to
+     * produce the result. wasmtime's `call_concurrent` is the same shape.
+     *
+     * It used to fire on the task's LAST thread unregistering, which is not an
+     * event a callback-ABI task need ever reach: a guest that keeps spawned
+     * futures alive for the instance's life (wit-bindgen `spawn_local` — an
+     * event loop, a driver, an accept loop) leaves `task.threads` non-empty
+     * forever, so a lift that went idle before `task.return` and was later
+     * woken by another driver had its results captured and its host Promise
+     * left hanging. Nor does the answer need deferring to "no wasm call in
+     * flight": `driveDone`'s `midWasmCall`/`hopParked` clauses keep a DRIVER
+     * driving under a suspended activation, and on this path there is no lift
+     * driver left to stop — whichever driver is running when `task.return`
+     * happens keeps driving the store.
      *
      * Rejection has two sources: `finishHostEntry` itself throwing, and the
      * instance being poisoned by a later driver that ran this task into a
@@ -1904,10 +1925,11 @@ export function createLiftedFunction(input: {
      */
     const backgroundCompletion = (): Promise<unknown> =>
       new Promise((resolve, reject) => {
-        // Degenerate case: the task is already over (its threads unregistered
-        // during the drive) and only a foreign hop kept `done` false. Nothing
-        // will fire `onFinished`, so settle now.
-        if (task.threads.length === 0) {
+        // Already resolved, and only a driver-liveness clause of `driveDone`
+        // (a foreign hop, this task's own suspended thread, `driveAsync`'s
+        // idle probe) kept the verdict off `"done"`. The answer is in hand:
+        // settle now, nothing further will fire.
+        if (resolvedSeen) {
           try {
             resolve(finishHostEntry());
           } catch (e) {
@@ -1916,13 +1938,17 @@ export function createLiftedFunction(input: {
           return;
         }
         const onPoison = (cause: unknown): void => {
-          task.onFinished = null;
+          onResolvedHook = null;
           reject(cause);
         };
         registerPendingLift(inst, onPoison);
-        task.onFinished = () => {
+        onResolvedHook = () => {
           unregisterPendingLift(inst, onPoison);
           try {
+            // Safe synchronously inside the resolve callback: pure over
+            // already-lifted `ComponentValue`s (`canon_task_return` lifted
+            // them into `resolved`; `resultsToHost` reshapes). Host `.then`
+            // handlers run on a microtask regardless.
             resolve(finishHostEntry());
           } catch (e) {
             reject(e);
@@ -2028,10 +2054,12 @@ export function createLiftedFunction(input: {
      * then the settlement pump (servicing a settled host call belonging to
      * another task) resumed a background activation that transiently
      * hop-parked, so `hopParked()` read true in the continuation and the lift
-     * took `backgroundCompletion()` — which waits for the task's LAST thread
-     * to unregister, i.e. never, for a task holding long-lived spawned
-     * futures. The verdict cannot rot that way: `"done"` means the driver
-     * saw the task finished, which stays true.
+     * took `backgroundCompletion()` — a wait on an event that had already
+     * happened for this task (today a harmless detour; when the misroute was
+     * traced, `backgroundCompletion` waited for the task's LAST thread to
+     * unregister, i.e. never, for a task holding long-lived spawned futures).
+     * The verdict cannot rot that way: `"done"` means the driver saw the task
+     * finished, which stays true.
      */
     const finish = (verdict: DriveExit): unknown =>
       verdict === "idle" ? backgroundCompletion() : finishHostEntry();
