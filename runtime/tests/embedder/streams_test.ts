@@ -3,9 +3,13 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
-import { DroppedError, StreamProducerError } from "@polyengine/protocol";
+import {
+  DroppedError,
+  PeerTrappedError,
+  StreamProducerError,
+} from "@polyengine/protocol";
 import { Future, Stream } from "../../src/embedder/streams.ts";
-import { hostStream, hostStreamFor } from "../../src/exec/mod.ts";
+import { hostFuture, hostStream, hostStreamFor } from "../../src/exec/mod.ts";
 import {
   LiftLowerContext,
   mkCanonicalOptions,
@@ -411,9 +415,71 @@ Deno.test({
 const dummyCodec = {
   element: null,
   toHost: (v: unknown) => v as number,
-  fromHost: (v: number) => v as unknown,
+  fromHost: (v: number) => v,
   where: "test future",
 };
+
+const disposalFixture = "runtime/tests/embedder/future-disposal.wasm";
+const disposalReady = await haveFixture(disposalFixture);
+const turn = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+for (const jspi of [undefined, false, true]) {
+  for (const deferred of [false, true]) {
+    Deno.test({
+      name: `public future disposal: jspi=${jspi}, deferred=${deferred}`,
+      ignore: !disposalReady,
+      async fn() {
+        for (const method of ["drop", Symbol.dispose] as const) {
+          const c = await instantiateFixture(disposalFixture, {}, { jspi });
+          const f = c.exports.run() as Future<number>;
+          if (!deferred) await turn();
+          assertEq(f[method](), undefined);
+          assertEq(f[method](), undefined);
+          await turn(); // Deno rejects any unhandled derived disposal promise.
+          const error = await caught(() => Promise.resolve(f));
+          assertEq(error instanceof PeerTrappedError, true, String(error));
+          assertEq(await caught(() => Promise.resolve(f)), error);
+        }
+      },
+    });
+  }
+  Deno.test({
+    name: `public future cancellation: jspi=${jspi}`,
+    ignore: !disposalReady,
+    async fn() {
+      const c = await instantiateFixture(disposalFixture, {}, { jspi });
+      const f = c.exports.idle() as Future<number>;
+      const reading = caught(() => Promise.resolve(f));
+      await turn();
+      assertEq(f.cancel(), undefined);
+      assertEq(f.cancel(), undefined);
+      const error = await reading;
+      assertEq(error instanceof DroppedError, true);
+      assertEq(String(error).includes("cancelled"), true);
+      f.drop();
+    },
+  });
+}
+
+Deno.test("future cancel boundary: injected raw failure stays silent, bound and deferred", async () => {
+  for (const deferred of [false, true]) {
+    const h = hostFuture<number>(null);
+    let calls = 0;
+    h.cancel = () => {
+      calls++;
+      throw new Error("injected cancel failure");
+    };
+    const f = deferred
+      ? Future.deferred(Promise.resolve(h.value), dummyCodec)
+      : Future.fromHostFuture(h, dummyCodec);
+    assertEq(f.cancel(), undefined);
+    await turn();
+    assertEq(calls, 1);
+    assertEq(f.cancel(), undefined);
+    assertEq(calls, 2);
+    f.drop();
+  }
+});
 
 Deno.test({
   name:

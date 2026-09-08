@@ -136,7 +136,11 @@ class DirCache implements ArtifactCache {
       );
       for (const [file, bytes] of artifacts.adapters) {
         const name = safeRelName(file);
-        await Deno.writeFile(`${tmp}/adapters/${name}`, bytes);
+        const path = `${tmp}/adapters/${name}`;
+        await Deno.mkdir(path.slice(0, path.lastIndexOf("/")), {
+          recursive: true,
+        });
+        await Deno.writeFile(path, bytes);
       }
 
       await rmIfExists(dir);

@@ -473,14 +473,10 @@ already converted to misses need not produce a callback. Component
 validation failures still propagate. Correctly populated entries can be
 read from a read-only cache, with a translator available for misses.
 
-**Current directory-cache limitation:** `put` preserves adapter names such
-as `adapters/0.wasm` beneath its own `adapters/` directory but does not
-create the additional nested directory. Normal adapter-bearing writes
-therefore fail and `translateCached` returns fresh artifacts without
-populating that entry. Adapter-free writes are not implicated, and
-correctly laid-out entries can still be read. Verify actual
-`fromCache: true` results after prewarming; successful translation alone
-does not establish that the cache was populated.
+The directory backend preserves validated adapter paths beneath its
+`adapters/` directory and creates their parent directories when writing.
+Verify actual `fromCache: true` results after prewarming: successful
+translation alone does not establish that cache writes succeeded.
 
 **Engine code caches.** These are independent, opportunistic platform
 optimizations; correctness and artifact caching do not depend on them.

@@ -1169,8 +1169,8 @@ export function hostStreamFor<T>(value: ComponentValue): HostStream<T> {
 }
 
 export interface HostFuture<T> {
-  /** Deliver the future's single value. */
-  write(value: T): Promise<void>;
+  /** Deliver one value; optional internal output tracks source consumption, even on failure. */
+  write(value: T, info?: { progress: number }): Promise<void>;
   /** Await the future's single value. */
   read(): Promise<T | undefined>;
   /**
@@ -1270,7 +1270,8 @@ function mkFuture<T>(
     activity.notify();
   };
   const self: HostFuture<T> = {
-    write(v: T): Promise<void> {
+    write(v: T, info?: { progress: number }): Promise<void> {
+      if (info !== undefined) info.progress = 0;
       // One operation per direction; opposite ends may rendezvous after a
       // guest round trip. This is a busy guard, not a delivered-value guard.
       if (parked.write) {
@@ -1286,12 +1287,14 @@ function mkFuture<T>(
         parked.write = true;
         try {
           shared.write(writeInst, buf as never, (result: CopyResult) => {
+            if (info !== undefined) info.progress = buf.progress;
             settle("write", result);
             resolve();
           });
           activity.notify();
           activity.pump();
         } catch (e) {
+          if (info !== undefined) info.progress = buf.progress;
           reject(e);
           withdraw("write", buf);
         }

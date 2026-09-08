@@ -192,12 +192,9 @@ provider, not through other grants or a compromised host.
 **Prefer a pre-warmed, read-only cache for fixed deployments.** Translate
 in a trusted build step and deny the production process write access to
 the cache and application artifacts. **Verify actual hits after warming:**
-the current `dirCache.put` does not create the nested directory required
-by normal `adapters/<index>.wasm` names. Those adapter-bearing writes fail,
-but `translateCached` still returns a successful fresh translation.
-Adapter-free writes are unaffected by this limitation, and correctly
-laid-out entries can still be read. Check `fromCache: true` before relying
-on prewarming; this documentation does not resolve the backend limitation.
+`translateCached` returns successful fresh artifacts even if a cache write
+fails. Check `fromCache: true` before relying on prewarming, and use
+`onCacheError` to observe write failures.
 
 The intended permission split is:
 
