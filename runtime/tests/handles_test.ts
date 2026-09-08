@@ -15,6 +15,7 @@ import {
   lowerBorrow,
   lowerOwn,
   type ResourceHandle,
+  ResourceTableInfo,
   ResourceTypeInfo,
   type SubtaskBorrowScope,
   Table,
@@ -68,9 +69,11 @@ Deno.test("Table: traps on empty/out-of-range indices", () => {
 Deno.test("resource.new / resource.rep / resource.drop with dtor", () => {
   const inst = mkInst();
   let dtorValue: number | null = null;
-  const rt = new ResourceTypeInfo(inst, (rep) => {
-    dtorValue = rep;
-  });
+  const rt = new ResourceTableInfo(
+    new ResourceTypeInfo(inst, (rep) => {
+      dtorValue = rep;
+    }),
+  );
 
   const h1 = canonResourceNew(inst, rt, 42);
   const h2 = canonResourceNew(inst, rt, 43);
@@ -89,8 +92,8 @@ Deno.test("resource.new / resource.rep / resource.drop with dtor", () => {
 
 Deno.test("resource type identity is enforced", () => {
   const inst = mkInst();
-  const rtA = new ResourceTypeInfo(inst);
-  const rtB = new ResourceTypeInfo(inst);
+  const rtA = new ResourceTableInfo(new ResourceTypeInfo(inst));
+  const rtB = new ResourceTableInfo(rtA.resource);
   const h = canonResourceNew(inst, rtA, 1);
   assertTrap(() => canonResourceRep(inst, rtB, h), "rep with wrong rt");
   assertTrap(() => canonResourceDrop(inst, rtB, h), "drop with wrong rt");
@@ -98,7 +101,7 @@ Deno.test("resource type identity is enforced", () => {
 
 Deno.test("may_leave gates resource.new and resource.drop", () => {
   const inst = mkInst();
-  const rt = new ResourceTypeInfo(inst);
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(inst));
   const h = canonResourceNew(inst, rt, 5);
   inst.mayLeave = false;
   assertTrap(() => canonResourceNew(inst, rt, 6));
@@ -109,7 +112,7 @@ Deno.test("may_leave gates resource.new and resource.drop", () => {
 
 Deno.test("own lift/lower: transfer moves the handle out of the table", () => {
   const inst = mkInst();
-  const rt = new ResourceTypeInfo(inst);
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(inst));
   const cx = new LiftLowerContext(mkOpts(), inst);
   const ownT = { kind: "own", rt } as const;
 
@@ -122,8 +125,8 @@ Deno.test("own lift/lower: transfer moves the handle out of the table", () => {
 
 Deno.test("own lift traps: wrong type, borrowed handle, lent-out handle", () => {
   const inst = mkInst();
-  const rt = new ResourceTypeInfo(inst);
-  const rt2 = new ResourceTypeInfo(inst);
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(inst));
+  const rt2 = new ResourceTableInfo(rt.resource);
   const cx = new LiftLowerContext(mkOpts(), inst);
 
   // NB: like the reference, lift_own removes the handle *before* the type
@@ -135,6 +138,11 @@ Deno.test("own lift traps: wrong type, borrowed handle, lent-out handle", () => 
   i = lowerOwn(cx, 42, { kind: "own", rt });
   const subtask = new MockSubtask();
   const cxBorrow = new LiftLowerContext(mkOpts(), inst, subtask);
+  assertTrap(
+    () => liftBorrow(cxBorrow, i, { kind: "borrow", rt: rt2 }),
+    "local borrow identity",
+  );
+  assertEq((inst.handles.get(i) as ResourceHandle).numLends, 0);
   liftBorrow(cxBorrow, i, { kind: "borrow", rt });
   assertTrap(() => liftOwn(cx, i, { kind: "own", rt }), "num_lends != 0");
   subtask.deliverResolve();
@@ -145,7 +153,7 @@ Deno.test("own lift traps: wrong type, borrowed handle, lent-out handle", () => 
   // a borrow handle cannot be lifted as own
   const task: TaskBorrowScope = { numBorrows: 0 };
   const otherImpl = mkInst();
-  const rtOther = new ResourceTypeInfo(otherImpl);
+  const rtOther = new ResourceTableInfo(new ResourceTypeInfo(otherImpl));
   const cxLowerBorrow = new LiftLowerContext(mkOpts(), inst, task);
   const bi = lowerBorrow(cxLowerBorrow, 7, { kind: "borrow", rt: rtOther });
   assertTrap(
@@ -156,7 +164,7 @@ Deno.test("own lift traps: wrong type, borrowed handle, lent-out handle", () => 
 
 Deno.test("borrow lift counts lends; drop of lent handle traps", () => {
   const inst = mkInst();
-  const rt = new ResourceTypeInfo(inst);
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(inst));
   const subtask = new MockSubtask();
   const cx = new LiftLowerContext(mkOpts(), inst, subtask);
 
@@ -177,7 +185,7 @@ Deno.test("borrow lift counts lends; drop of lent handle traps", () => {
 
 Deno.test("borrow lower: self-instance passthrough vs cross-instance handle", () => {
   const implInst = mkInst();
-  const rt = new ResourceTypeInfo(implInst);
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(implInst));
   const task: TaskBorrowScope = { numBorrows: 0 };
 
   // lowering into the implementing instance passes the rep through

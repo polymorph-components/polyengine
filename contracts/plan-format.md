@@ -265,8 +265,11 @@ Notes on specific entries:
   resource type can be reachable through several distinct table indices — e.g. a
   type export pointing at table 1 while the functions' handles use table 0, both
   resolving to the same `ResourceIndex` via `resourceTables[n].resource`.
-  Consumers keying per-resource state must key by the resolved `ResourceIndex`,
-  treating table indices as aliases.
+  Implementation/destructor state is keyed by the resolved `ResourceIndex`.
+  Guest handle checks must retain the table index: two abstract types inside one
+  nested instance may resolve to the same origin without being interchangeable
+  there. `TypeResourceTableIndex` is not reconstructible from the pair
+  `(ResourceIndex, instance)`; preserve the emitted table entries.
 - **Module exports**: the executor surfaces the export as the platform's
   compiled-module value — `WebAssembly.Module` in the JS runtime — reusing the
   compilation the instantiation path already performs. Module exports are

@@ -13,7 +13,7 @@ import {
   TranslateError,
 } from "../src/plan/mod.ts";
 import type { WirePlan, WireValType } from "../src/plan/mod.ts";
-import { ResourceTypeInfo } from "../src/cabi/mod.ts";
+import { ResourceTableInfo } from "../src/cabi/mod.ts";
 
 function assertPlanError(fn: () => unknown, includes: string) {
   try {
@@ -123,9 +123,9 @@ Deno.test("loader: own/borrow resolve resource-table tokens by identity", () => 
   if (own.kind !== "value" || borrow.kind !== "value") {
     throw new Error("expected value entries");
   }
-  const ownRt = (own.type as { rt: ResourceTypeInfo }).rt;
-  const borrowRt = (borrow.type as { rt: ResourceTypeInfo }).rt;
-  assertEq(ownRt instanceof ResourceTypeInfo, true);
+  const ownRt = (own.type as { rt: ResourceTableInfo }).rt;
+  const borrowRt = (borrow.type as { rt: ResourceTableInfo }).rt;
+  assertEq(ownRt instanceof ResourceTableInfo, true);
   assertEq(ownRt === borrowRt, true, "same table -> same identity token");
   assertEq(ownRt === loaded.resourceTokens[0], true);
 

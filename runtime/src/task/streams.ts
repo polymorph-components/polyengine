@@ -20,11 +20,10 @@ import type { ComponentValue, ValType } from "../cabi/types.ts";
 import { Waitable } from "./waitable.ts";
 import { isInstancePoisoned, setOnInstancePoisoned } from "./scheduler.ts";
 
-/** Structural element-type equality, retaining nominal resource identity.
+/** Cross-boundary structural equality, comparing resource origins, not local tables.
  * `null` denotes the zero-width payload. */
 export function sameElemType(a: ValType | null, b: ValType | null): boolean {
-  if (a === null || b === null) return a === b;
-  return valTypeEqual(a, b);
+  return valTypeEqual(a, b, "underlying");
 }
 
 /** definitions.py `Buffer.MAX_LENGTH`. */
@@ -719,7 +718,11 @@ export class SharedFutureImpl implements SharedBase {
 export abstract class CopyEnd extends Waitable {
   state: CopyState = CopyState.IDLE;
 
-  constructor(readonly shared: SharedBase) {
+  constructor(
+    readonly shared: SharedBase,
+    // Standalone ends inherit their shared descriptor; guest sites stamp locals.
+    readonly elem: ValType | null = shared.t,
+  ) {
     super();
   }
 

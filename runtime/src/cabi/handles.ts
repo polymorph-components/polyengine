@@ -17,7 +17,12 @@ import type {
   SubtaskBorrowScope,
   TaskBorrowScope,
 } from "./context.ts";
-import type { BorrowType, OwnType, ResourceTypeInfo } from "./types.ts";
+import type {
+  BorrowType,
+  OwnType,
+  ResourceTableInfo,
+  ResourceTypeInfo,
+} from "./types.ts";
 
 export class Table<T> {
   static readonly MAX_LENGTH = 2 ** 28 - 1;
@@ -65,7 +70,7 @@ export class ResourceHandle {
   numLends = 0;
 
   constructor(
-    public rt: ResourceTypeInfo,
+    public rt: ResourceTableInfo,
     public rep: number,
     public own: boolean,
     public borrowScope: TaskBorrowScope | null = null,
@@ -133,7 +138,7 @@ export function lowerBorrow(
     scope !== null && typeof scope.numBorrows === "number",
     "lowering a borrow requires a task borrow scope",
   );
-  if (cx.inst !== null && cx.inst === (t.rt.impl as unknown)) {
+  if (cx.inst !== null && cx.inst === (t.rt.resource.impl as unknown)) {
     return rep;
   }
   const h = new ResourceHandle(t.rt, rep, false, scope);
@@ -148,7 +153,7 @@ export function lowerBorrow(
 
 export function canonResourceNew(
   inst: ComponentInstanceLike,
-  rt: ResourceTypeInfo,
+  rt: ResourceTableInfo,
   rep: number,
 ): number {
   trapIf(!inst.mayLeave, "may_leave violation");
@@ -221,7 +226,7 @@ export function callDtorGated(
 
 export function canonResourceDrop(
   inst: ComponentInstanceLike,
-  rt: ResourceTypeInfo,
+  rt: ResourceTableInfo,
   i: number,
 ): void {
   trapIf(!inst.mayLeave, "may_leave violation");
@@ -233,7 +238,7 @@ export function canonResourceDrop(
     if (rh.own) {
       assert_(rh.borrowScope === null);
       // Enter a fresh synchronous dtor task, not the dropping task's ambient.
-      callDtorGated(rt, rh.rep, inst);
+      callDtorGated(rt.resource, rh.rep, inst);
     } else {
       assert_(rh.borrowScope !== null);
       rh.borrowScope!.numBorrows -= 1;
@@ -243,7 +248,7 @@ export function canonResourceDrop(
 
 export function canonResourceRep(
   inst: ComponentInstanceLike,
-  rt: ResourceTypeInfo,
+  rt: ResourceTableInfo,
   i: number,
 ): number {
   const h = inst.handles.get(i);

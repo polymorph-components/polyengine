@@ -23,6 +23,7 @@ import { errorContextTrapMessage } from "../cabi/async_values.ts";
 import { LiftLowerContext } from "../cabi/context.ts";
 import { loadStringFromRange, storeString } from "../cabi/strings.ts";
 import type { ValType } from "../cabi/types.ts";
+import { valTypeEqual } from "../cabi/types.ts";
 import {
   abandonReasonOf,
   BUFFER_MAX_LENGTH,
@@ -97,8 +98,8 @@ export function createStreamNew(
   return () => {
     trapIf(!inst.mayLeave, "stream.new: cannot leave component instance");
     const shared = new SharedStreamImpl(ctx.streamElem(decl.streamTable));
-    const ri = inst.handles.add(new ReadableStreamEnd(shared));
-    const wi = inst.handles.add(new WritableStreamEnd(shared));
+    const ri = inst.handles.add(new ReadableStreamEnd(shared, shared.t));
+    const wi = inst.handles.add(new WritableStreamEnd(shared, shared.t));
     return packEnds(ri, wi);
   };
 }
@@ -111,8 +112,8 @@ export function createFutureNew(
   return () => {
     trapIf(!inst.mayLeave, "future.new: cannot leave component instance");
     const shared = new SharedFutureImpl(ctx.futureElem(decl.futureTable));
-    const ri = inst.handles.add(new ReadableFutureEnd(shared));
-    const wi = inst.handles.add(new WritableFutureEnd(shared));
+    const ri = inst.handles.add(new ReadableFutureEnd(shared, shared.t));
+    const wi = inst.handles.add(new WritableFutureEnd(shared, shared.t));
     return packEnds(ri, wi);
   };
 }
@@ -147,7 +148,7 @@ function streamCopy(input: {
   const e = inst.handles.get(i);
   trapIf(!(e instanceof EndT), "stream copy: wrong end type for this handle");
   const end = e as ReadableStreamEnd | WritableStreamEnd;
-  trapIf(!sameElem(end.shared.t, elem), "stream copy: element type mismatch");
+  trapIf(!valTypeEqual(end.elem, elem), "stream copy: element type mismatch");
   // wasmtime distinguishes the two non-IDLE states in its message, and the
   // suite asserts the exact text: DONE means the other end has gone away (or
   // this end's single-shot operation already finished), COPYING means the
@@ -231,7 +232,7 @@ function futureCopy(input: {
   const e = inst.handles.get(i);
   trapIf(!(e instanceof EndT), "future copy: wrong end type for this handle");
   const end = e as ReadableFutureEnd | WritableFutureEnd;
-  trapIf(!sameElem(end.shared.t, elem), "future copy: element type mismatch");
+  trapIf(!valTypeEqual(end.elem, elem), "future copy: element type mismatch");
   // Writable DONE covers either a completed write or a dropped readable end.
   trapIf(
     end.state === CopyState.DONE,
@@ -411,7 +412,7 @@ function cancelCopy(input: {
   const e = inst.handles.get(i);
   trapIf(!(e instanceof EndT), `${what}: wrong end type for this handle`);
   const end = e as CopyEnd;
-  trapIf(!sameElem(end.shared.t, elem), `${what}: element type mismatch`);
+  trapIf(!valTypeEqual(end.elem, elem), `${what}: element type mismatch`);
   trapIf(
     end.state !== CopyState.COPYING || end.hasSyncWaiter,
     `${what}: end is not in a cancellable copy`,
@@ -465,7 +466,7 @@ function dropEnd(
   removeHandleWithUnwind(inst, hi, (e) => {
     trapIf(!(e instanceof EndT), `${what}: wrong end type for this handle`);
     const end = e as CopyEnd;
-    trapIf(!sameElem(end.shared.t, elem), `${what}: element type mismatch`);
+    trapIf(!valTypeEqual(end.elem, elem), `${what}: element type mismatch`);
     end.drop();
   });
 }
@@ -815,7 +816,7 @@ function transferAsyncEnd(input: {
     );
     const end = e as CopyEnd;
     trapIf(
-      !sameElem(end.shared.t, srcElem),
+      !valTypeEqual(end.elem, srcElem),
       `${what}: source element mismatch`,
     );
     trapIf(
@@ -839,8 +840,11 @@ function transferAsyncEnd(input: {
       end.inWaitableSet(),
       `cannot lift ${what} while it's in a waitable set`,
     );
-    const Ctor = EndT as unknown as new (shared: unknown) => CopyEnd;
-    return dstInst.handles.add(new Ctor(end.shared));
+    const Ctor = EndT as unknown as new (
+      shared: unknown,
+      elem: ValType | null,
+    ) => CopyEnd;
+    return dstInst.handles.add(new Ctor(end.shared, dstElem));
   });
 }
 

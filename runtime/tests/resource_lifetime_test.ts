@@ -10,6 +10,7 @@
 import {
   canonResourceDrop,
   canonResourceNew,
+  ResourceTableInfo,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";
 import {
@@ -97,9 +98,11 @@ Deno.test("#85/#173: dropping a cross-instance own while the impl is LIVE succee
   // mid-execution is valid and the dtor simply runs.
   const { caller, impl } = mkPair();
   let ran = 0;
-  const rt = new ResourceTypeInfo(impl, () => {
-    ran += 1;
-  });
+  const rt = new ResourceTableInfo(
+    new ResourceTypeInfo(impl, () => {
+      ran += 1;
+    }),
+  );
   const h = canonResourceNew(caller, rt, 42);
 
   void impl;
@@ -109,7 +112,7 @@ Deno.test("#85/#173: dropping a cross-instance own while the impl is LIVE succee
 
 Deno.test("#85/#173: a dtor-less drop into a live impl succeeds too", () => {
   const { caller, impl } = mkPair();
-  const rt = new ResourceTypeInfo(impl, null);
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(impl, null));
   const h = canonResourceNew(caller, rt, 7);
   void impl;
   canonResourceDrop(caller, rt, h);
@@ -119,7 +122,7 @@ Deno.test("#85: a POISONED impl still refuses the drop", () => {
   // The surviving refusal: polyengine's per-instance corpse divergence.
   withPoisonSpy(() => {
     const { caller, impl } = mkPair();
-    const rt = new ResourceTypeInfo(impl, () => {});
+    const rt = new ResourceTableInfo(new ResourceTypeInfo(impl, () => {}));
     const h = canonResourceNew(caller, rt, 43);
     notifyInstancePoisoned(impl, new Error("earlier boom"));
     assertTrap(
@@ -135,9 +138,11 @@ Deno.test("#85: a same-instance drop is admissible even against its own marker",
   withPoisonSpy(() => {
     const { caller } = mkPair();
     let ran = 0;
-    const rt = new ResourceTypeInfo(caller, () => {
-      ran += 1;
-    });
+    const rt = new ResourceTableInfo(
+      new ResourceTypeInfo(caller, () => {
+        ran += 1;
+      }),
+    );
     const h = canonResourceNew(caller, rt, 5);
     notifyInstancePoisoned(caller, new Error("earlier boom"));
     canonResourceDrop(caller, rt, h);
@@ -149,9 +154,11 @@ Deno.test("#85: a trapping dtor poisons the impl instance and retires its ends",
   withPoisonSpy((seen) => {
     const { caller, impl } = mkPair();
     const boom = new Error("dtor trap");
-    const rt = new ResourceTypeInfo(impl, () => {
-      throw boom;
-    });
+    const rt = new ResourceTableInfo(
+      new ResourceTypeInfo(impl, () => {
+        throw boom;
+      }),
+    );
     const h = canonResourceNew(caller, rt, 3);
     let caught: unknown;
     try {
@@ -172,9 +179,11 @@ Deno.test("#85: a trapping dtor poisons the impl instance and retires its ends",
 Deno.test("#85: a guest-initiated dtor that does not finish synchronously traps", () => {
   withPoisonSpy((seen) => {
     const { caller, impl } = mkPair();
-    const rt = new ResourceTypeInfo(
-      impl,
-      (() => Promise.resolve()) as unknown as (rep: number) => void,
+    const rt = new ResourceTableInfo(
+      new ResourceTypeInfo(
+        impl,
+        (() => Promise.resolve()) as unknown as (rep: number) => void,
+      ),
     );
     const h = canonResourceNew(caller, rt, 9);
     assertTrap(

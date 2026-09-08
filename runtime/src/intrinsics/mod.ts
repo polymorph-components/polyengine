@@ -12,7 +12,7 @@ import { ResourceHandle } from "../cabi/handles.ts";
 import { removeHandleWithUnwind } from "../task/scheduler.ts";
 import { trapIf } from "../cabi/trap.ts";
 import { assert_ } from "../cabi/trap.ts";
-import type { ResourceTypeInfo } from "../cabi/types.ts";
+import type { ResourceTableInfo } from "../cabi/types.ts";
 import type { ComponentInstanceState } from "../task/mod.ts";
 import {
   dbgId,
@@ -209,7 +209,7 @@ export interface FactStartScope {
 /** Executor services a trampoline body needs (provided by executor.ts). */
 export interface TrampolineContext {
   componentInstance(index: number): ComponentInstanceState;
-  resourceToken(index: number): ResourceTypeInfo;
+  resourceToken(index: number): ResourceTableInfo;
   /**
    * The component instance that *owns* resource table `index`
    * (`TypeResourceTable::Concrete.instance`), i.e. whose handle table the
@@ -788,7 +788,9 @@ function transferBorrow(
   // definitions.py `lower_borrow`: `if inst is t.rt.impl: return rep` — a
   // component that implements the resource is handed the rep directly and
   // gets no handle (and therefore no `num_borrows` obligation).
-  if (dstRt.impl !== null && (dstRt.impl as unknown) === dst) return rh.rep;
+  if (
+    dstRt.resource.impl !== null && (dstRt.resource.impl as unknown) === dst
+  ) return rh.rep;
   const borrowScope = fact !== undefined ? fact.taskScope : scope!;
   borrowScope.numBorrows += 1;
   return dst.handles.add(new ResourceHandle(dstRt, rh.rep, false, borrowScope));

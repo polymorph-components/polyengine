@@ -499,7 +499,7 @@ class Executor {
         }
         // A type-only import may have no concrete table at all; that is fine,
         // there is simply no runtime state to bind.
-        const token = this.loaded.resourceTokens[tableIndex];
+        const token = this.loaded.resourceTokens[tableIndex].resource;
         token.impl = null;
         token.dtor = dtor === undefined ? null : (rep: number) => dtor(rep);
       });
@@ -674,7 +674,7 @@ class Executor {
           const resourceIndex = resourceIndexOfDefined(this.loaded, init.index);
           this.wire.resourceTables.forEach((table, tableIndex) => {
             if (table.kind === "concrete" && table.resource === resourceIndex) {
-              const token = this.loaded.resourceTokens[tableIndex];
+              const token = this.loaded.resourceTokens[tableIndex].resource;
               token.impl = inst;
               token.dtor = dtor;
               // Canonical lifted destructor: createDtorEntry supplies its

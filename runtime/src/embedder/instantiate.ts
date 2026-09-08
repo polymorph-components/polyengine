@@ -276,11 +276,11 @@ class Facade {
     this.#resolver = new ImportResolver(providers);
     this.loaded = loadPlan(artifacts.plan);
     // Resolve identity before core start functions can call imports. Concrete
-    // tables naming one ResourceIndex share a token; table indices are aliases
+    // tables naming one ResourceIndex share an origin, not local handle identity
     // (plan-format.md "Type exports index into `resourceTables`").
     artifacts.plan.resourceTables.forEach((table, i) => {
       if (table.kind !== "concrete") return;
-      const token = this.loaded.resourceTokens[i];
+      const token = this.loaded.resourceTokens[i]?.resource;
       if (token !== undefined) this.#tokenIndex.set(token, table.resource);
     });
     this.leaves = requiredImports(this.loaded);
@@ -407,28 +407,28 @@ class Facade {
     const self = this;
     return {
       liftOwn(rep, t) {
-        const b = self.#binding(t.rt);
+        const b = self.#binding(t.rt.resource);
         // Host-implemented R: "the host's own instance back; the guest's
         // handle is gone; no dispose call" (contract 2x4 table).
         if (b.kind === "host") return b.registry.release(rep);
-        return makeWrapper(self.#guestClass(b), rep, t.rt, true);
+        return makeWrapper(self.#guestClass(b), rep, t.rt.resource, true);
       },
       liftBorrow(rep, t, scope) {
-        const b = self.#binding(t.rt);
+        const b = self.#binding(t.rt.resource);
         // Host-implemented R: "the host's own instance; borrow scoping is
         // guest-side bookkeeping" — the mapping is kept.
         if (b.kind === "host") return b.registry.lookup(rep);
-        const w = makeWrapper(self.#guestClass(b), rep, t.rt, false);
+        const w = makeWrapper(self.#guestClass(b), rep, t.rt.resource, false);
         scope.add(() => invalidateWrapper(w));
         return w;
       },
       lowerOwn(v, t) {
-        const b = self.#binding(t.rt);
+        const b = self.#binding(t.rt.resource);
         if (b.kind === "host") return b.registry.repFor(v);
-        return takeRep(v, t.rt, true, `own<${b.name}>`);
+        return takeRep(v, t.rt.resource, true, `own<${b.name}>`);
       },
       lowerBorrow(v, t) {
-        const b = self.#binding(t.rt);
+        const b = self.#binding(t.rt.resource);
         if (b.kind === "host") {
           // Each overlapping call retains the rep; the final borrow release
           // removes only temporary mappings, never a guest-owned registration.
@@ -439,7 +439,7 @@ class Facade {
         }
         // Retain the rep until this call ends; explicit/GC drop must not
         // destroy it while borrowed (lift_borrow -> Subtask.add_lender).
-        const rep = takeRep(v, t.rt, false, `borrow<${b.name}>`);
+        const rep = takeRep(v, t.rt.resource, false, `borrow<${b.name}>`);
         const release = lendWrapper(v as object);
         if (self.#lowerScope === null) {
           // No enclosing lowering scope (a raw/one-off lowering): the lend
@@ -456,12 +456,12 @@ class Facade {
         // host-implemented R runs the instance's [Symbol.dispose] through
         // the registry; guest-implemented R runs the guest dtor via the
         // gated path (a host-initiated drop, `caller = None`).
-        const b = self.#binding(t.rt);
+        const b = self.#binding(t.rt.resource);
         if (b.kind === "host") {
           b.registry.dtor(rep);
           return;
         }
-        hostDtorCall(t.rt, rep);
+        hostDtorCall(t.rt.resource, rep);
       },
     };
   }
@@ -865,7 +865,7 @@ class Facade {
         // from the resource TABLE it points at (the wire field is a table
         // index, like `own`/`borrow`).
         if (exp.type.kind === "resource") {
-          const token = this.loaded.resourceTokens[exp.type.resource];
+          const token = this.loaded.resourceTokens[exp.type.resource]?.resource;
           if (token !== undefined && this.#tokenIndex.has(token)) {
             const index = this.#tokenIndex.get(token)!;
             const held = this.#bindings.get(index);
@@ -1274,7 +1274,7 @@ function rtOf(
   name: string,
 ): void {
   if (t === undefined) return;
-  if (t.kind === "own" || t.kind === "borrow") into.set(name, t.rt);
+  if (t.kind === "own" || t.kind === "borrow") into.set(name, t.rt.resource);
 }
 
 function label(leaf: ImportLeaf): string {

@@ -11,7 +11,7 @@ import { copyCensus, ERROR_CONTEXT, hasBrand } from "@polyengine/protocol";
 import { assert_, trapIf } from "./trap.ts";
 import type { LiftLowerContext } from "./context.ts";
 import type { ValType } from "./types.ts";
-import { contains, fmtValType } from "./types.ts";
+import { contains, fmtValType, valTypeEqual } from "./types.ts";
 import {
   CopyState,
   ErrorContext,
@@ -74,11 +74,12 @@ function liftAsyncValue(
     trapIf(!(e instanceof EndT), `${what} lift: handle is not a ${what} end`);
     const end = e as {
       shared: SharedBase;
+      elem: ValType | null;
       state: CopyState;
       inWaitableSet(): boolean;
     };
     trapIf(
-      !sameElemType(end.shared.t, elem),
+      !valTypeEqual(end.elem, elem),
       `${what} lift: element type mismatch`,
     );
     trapIf(
@@ -163,7 +164,7 @@ export function lowerStream(
   (v as { boundStore?: unknown }).boundStore ??=
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);
-  return inst!.handles.add(new ReadableStreamEnd(v));
+  return inst!.handles.add(new ReadableStreamEnd(v, declared));
 }
 
 /** definitions.py `lower_future`. */
@@ -190,7 +191,7 @@ export function lowerFuture(
   (v as { boundStore?: unknown }).boundStore ??=
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);
-  return inst!.handles.add(new ReadableFutureEnd(v));
+  return inst!.handles.add(new ReadableFutureEnd(v, declared));
 }
 
 /** definitions.py `lift_error_context`. Does not remove the handle. */
