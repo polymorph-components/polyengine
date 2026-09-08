@@ -54,6 +54,7 @@ import {
   canonResourceDrop,
   canonResourceNew,
   ResourceHandle,
+  ResourceTableInfo,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
@@ -274,7 +275,7 @@ function mkImportWorld(input: {
   suspendable: boolean;
 }) {
   const w = mkWorld();
-  const rt = new ResourceTypeInfo(w.inst, () => {});
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(w.inst, () => {}));
   const handleIndex = canonResourceNew(w.inst, rt, 77);
   const handle = w.inst.handles.get(handleIndex) as ResourceHandle;
   const ft: FuncType = {

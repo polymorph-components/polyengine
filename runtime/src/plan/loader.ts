@@ -7,11 +7,12 @@
 //   - func params `{label, type}[]` (wire) -> unlabeled `ValType[]`
 //     (types.ts drops ABI-irrelevant names; labels are preserved separately
 //     for bindgen/digest use)
-//   - own/borrow `resource: <table index>` (wire) -> `ResourceTypeInfo`
-//     identity tokens shared by concrete tables naming one resource
+//   - own/borrow `resource: <table index>` (wire) -> `ResourceTableInfo`
+//     local identity tokens; only their underlying resource origin is shared
 
 import {
   type FuncType,
+  ResourceTableInfo,
   ResourceTypeInfo,
   type ValType,
 } from "../cabi/types.ts";
@@ -83,11 +84,11 @@ export interface LoadedPlan {
   /** Converted types table, index-aligned with `wire.types`. */
   types: LoadedType[];
   /**
-   * Index-aligned with wire.resourceTables. Concrete tables naming the same
-   * ResourceIndex share a token; abstract tables get distinct tokens.
-   * The executor fills implementation/destructor state during instantiation.
+   * Index-aligned with wire.resourceTables, with distinct local table tokens.
+   * Concrete tables naming one ResourceIndex share only their underlying resource.
+   * The executor fills that origin's implementation/destructor state.
    */
-  resourceTokens: ResourceTypeInfo[];
+  resourceTokens: ResourceTableInfo[];
   /**
    * Number of imported resource types. `ResourceIndex =
    * numImportedResources + DefinedResourceIndex`
@@ -183,18 +184,19 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
     }
   }
 
-  // Nominal identity is per ResourceIndex, not table index. Alias concrete
-  // tables so resource-bearing type comparisons agree across component hops.
-  // Abstract tables have no ResourceIndex and retain per-table tokens.
+  // Preserve both identities: shared origin metadata per ResourceIndex, but
+  // a distinct local identity per table, even for equal resource/instance pairs.
   const tokenByResource = new Map<number, ResourceTypeInfo>();
   const resourceTokens = wire.resourceTables.map((table) => {
-    if (table.kind !== "concrete") return new ResourceTypeInfo(null, null);
+    if (table.kind !== "concrete") {
+      return new ResourceTableInfo(new ResourceTypeInfo(null, null));
+    }
     let token = tokenByResource.get(table.resource);
     if (token === undefined) {
       token = new ResourceTypeInfo(null, null);
       tokenByResource.set(table.resource, token);
     }
-    return token;
+    return new ResourceTableInfo(token);
   });
   const types = wire.types.map((t, i) =>
     loadTypeDecl(t, resourceTokens, `types[${i}]`)
@@ -701,7 +703,7 @@ function validateTypeExport(t: unknown, where: string): void {
 
 function loadTypeDecl(
   t: WireTypeDecl,
-  resourceTokens: ResourceTypeInfo[],
+  resourceTokens: ResourceTableInfo[],
   where: string,
 ): LoadedType {
   if (t.kind === "func") {
@@ -729,7 +731,7 @@ function loadTypeDecl(
 /** @internal */
 export function loadValType(
   t: WireValType,
-  resourceTokens: ResourceTypeInfo[],
+  resourceTokens: ResourceTableInfo[],
   where: string,
 ): ValType {
   switch (t.kind) {

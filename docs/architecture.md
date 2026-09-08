@@ -356,6 +356,15 @@ failure is reported through the host-failure channel, not swallowed.
 Backstop-versus-teardown policy remains tracked in
 [#10](https://github.com/polymorph-components/polyengine/issues/10).
 
+Resource origin and guest-local handle type are separate identities. The plan's
+`ResourceIndex` identifies shared implementation/destructor metadata;
+`TypeResourceTableIndex` preserves the importing component's abstract type.
+Distinct tables can have the same origin and component instance. Guest handle
+access compares the local type; transfers validate the source and tag the
+destination. Host wrappers and cross-component payload compatibility retain
+underlying origin identity. Both identities are scoped to an instantiation of
+the plan; see [descriptor IR](../contracts/descriptor-ir.md#resource-type-identity).
+
 **Destructors.** `canon_resource_drop` lifts a core `[rep] -> []`
 destructor with synchronous canonical options. The destructor may not
 Component-Model-block, though the spec permits spawning an explicit

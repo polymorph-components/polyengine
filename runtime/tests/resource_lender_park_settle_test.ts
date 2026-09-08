@@ -47,6 +47,7 @@ import {
   canonResourceDrop,
   canonResourceNew,
   ResourceHandle,
+  ResourceTableInfo,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";
 import type { CoreValue, ValType } from "../src/cabi/types.ts";
@@ -64,7 +65,7 @@ interface Harness {
   caller: ComponentInstanceState;
   callee: ComponentInstanceState;
   handle: ResourceHandle;
-  rt: ResourceTypeInfo;
+  rt: ResourceTableInfo;
   handleIndex: number;
   /** Run one prepare + start-call in jspi mode; returns what it returned. */
   run(kind: "sync" | "async", calleeBody: () => CoreValue): unknown;
@@ -76,7 +77,7 @@ function mkHarness(): Harness {
   const store = new Store();
   const caller = new ComponentInstanceState(0, store);
   const callee = new ComponentInstanceState(1, store);
-  const rt = new ResourceTypeInfo(caller, () => {});
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(caller, () => {}));
   const handleIndex = canonResourceNew(caller, rt, 77);
   const handle = caller.handles.get(handleIndex) as ResourceHandle;
 

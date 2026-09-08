@@ -98,9 +98,22 @@ fixtures.
 
 ## Resource-type identity
 
-The shim emits `resource` indices into the plan's `resourceTables`; the runtime
-builds identity tokens (`ResourceTypeInfo`) at plan-load time. **Tokens must be
-fresh per instantiation** (the executor re-runs plan loading per instantiate),
-so resource-type identity never leaks across instances. Within one
-instantiation, concrete tables naming the same resource share a token; table
-indices are aliases, not distinct types.
+The shim emits `resource` indices into the plan's `resourceTables`. Preserve two
+identities when loading these descriptors:
+
+- **Underlying resource identity**, keyed by concrete `ResourceIndex`, owns
+  implementation/destructor metadata in `ResourceTypeInfo`. Legitimate
+  cross-component aliases and host resource wrappers compare this identity.
+- **Local handle type identity**, keyed by `TypeResourceTableIndex`, governs
+  guest handle access through `ResourceTableInfo`, which references its
+  underlying resource. Distinct abstract imports can share an underlying
+  resource and a component instance while retaining different local identities.
+
+Both are scoped to a runtime instantiation of the plan, not just its reusable
+JSON object. Guest-defined identities are fresh on every instantiation.
+Transferring a handle validates the source local type and tags the destination
+handle with its destination local type; it does not change the resource origin.
+Stream/future endpoints likewise retain their local element descriptors for
+guest access checks, while rendezvous compatibility uses underlying identities.
+Sharing origin metadata must not erase the child's abstract type distinctions
+(pinned Explainer, type imports and substitution).

@@ -39,7 +39,7 @@ export interface InstanceLike {
 
 /**
  * definitions.py `ResourceType`: identity + implementing instance + optional
- * destructor. Compared by object identity everywhere.
+ * destructor. Shared origin identity across component-local resource tables.
  *
  * `dtorHost` is the host-initiated drop entry, wired by exec/executor.ts or
  * lazily by `hostDtorCall` in exec/boundary.ts. It lifts the dtor with a fresh
@@ -56,6 +56,11 @@ export class ResourceTypeInfo {
     public dtor: ((rep: number) => void) | null = null,
     public dtorHost: ((rep: number) => unknown) | null = null,
   ) {}
+}
+
+/** Component-local handle identity; distinct wire tables never share a wrapper. */
+export class ResourceTableInfo {
+  constructor(readonly resource: ResourceTypeInfo) {}
 }
 
 // ---------------------------------------------------------------------------
@@ -133,11 +138,11 @@ export interface FlagsType {
 }
 export interface OwnType {
   kind: "own";
-  rt: ResourceTypeInfo;
+  rt: ResourceTableInfo;
 }
 export interface BorrowType {
   kind: "borrow";
-  rt: ResourceTypeInfo;
+  rt: ResourceTableInfo;
 }
 export interface StreamType {
   kind: "stream";
@@ -418,34 +423,41 @@ export function contains(
 // ---------------------------------------------------------------------------
 
 /**
- * Structural equality except for resource types, which compare by token
- * identity. Do not serialize or recurse into ResourceTypeInfo: its instance
+ * Structural equality with local resource-table identity by default. Shared
+ * async payload compatibility explicitly selects underlying origin identity.
+ * Do not serialize or recurse into ResourceTypeInfo: its instance
  * points back to live handle tables and can form cycles.
  */
 export function valTypesEqual(a: ValType[], b: ValType[]): boolean {
   return a.length === b.length && a.every((t, i) => valTypeEqual(t, b[i]));
 }
 
-export function valTypeEqual(a: ValType, b: ValType): boolean {
+export function valTypeEqual(
+  a: ValType | null,
+  b: ValType | null,
+  identity: "local" | "underlying" = "local",
+): boolean {
   if (a === b) return true;
+  if (a === null || b === null) return false;
   if (a.kind !== b.kind) return false;
   switch (a.kind) {
     case "list": {
       const bb = b as typeof a;
-      return a.length === bb.length && valTypeEqual(a.element, bb.element);
+      return a.length === bb.length &&
+        valTypeEqual(a.element, bb.element, identity);
     }
     case "record": {
       const bb = b as typeof a;
       return a.fields.length === bb.fields.length &&
         a.fields.every((f, i) =>
           f.label === bb.fields[i].label &&
-          valTypeEqual(f.type, bb.fields[i].type)
+          valTypeEqual(f.type, bb.fields[i].type, identity)
         );
     }
     case "tuple": {
       const bb = b as typeof a;
       return a.elements.length === bb.elements.length &&
-        a.elements.every((e, i) => valTypeEqual(e, bb.elements[i]));
+        a.elements.every((e, i) => valTypeEqual(e, bb.elements[i], identity));
     }
     case "variant": {
       const bb = b as typeof a;
@@ -456,7 +468,7 @@ export function valTypeEqual(a: ValType, b: ValType): boolean {
           if (c.type === null || other.type === null) {
             return c.type === other.type;
           }
-          return valTypeEqual(c.type, other.type);
+          return valTypeEqual(c.type, other.type, identity);
         });
     }
     case "enum":
@@ -467,30 +479,33 @@ export function valTypeEqual(a: ValType, b: ValType): boolean {
     }
     case "option": {
       const bb = b as typeof a;
-      return valTypeEqual(a.type, bb.type);
+      return valTypeEqual(a.type, bb.type, identity);
     }
     case "result": {
       const bb = b as typeof a;
       if ((a.ok === null) !== (bb.ok === null)) return false;
       if ((a.error === null) !== (bb.error === null)) return false;
-      return (a.ok === null || valTypeEqual(a.ok, bb.ok!)) &&
-        (a.error === null || valTypeEqual(a.error, bb.error!));
+      return (a.ok === null || valTypeEqual(a.ok, bb.ok!, identity)) &&
+        (a.error === null || valTypeEqual(a.error, bb.error!, identity));
     }
     case "map": {
       const bb = b as typeof a;
-      return valTypeEqual(a.key, bb.key) && valTypeEqual(a.value, bb.value);
+      return valTypeEqual(a.key, bb.key, identity) &&
+        valTypeEqual(a.value, bb.value, identity);
     }
     case "own":
     case "borrow": {
       const bb = b as typeof a;
-      // Object-identity type (documented invariant): reference equality only.
-      return a.rt === bb.rt;
+      return identity === "local"
+        ? a.rt === bb.rt
+        : a.rt.resource === bb.rt.resource;
     }
     case "stream":
     case "future": {
       const bb = b as typeof a;
       if ((a.element === null) !== (bb.element === null)) return false;
-      return a.element === null || valTypeEqual(a.element, bb.element!);
+      return a.element === null ||
+        valTypeEqual(a.element, bb.element!, identity);
     }
     case "error-context":
       return true;

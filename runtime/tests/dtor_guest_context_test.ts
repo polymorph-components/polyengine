@@ -3,6 +3,7 @@
 import {
   canonResourceDrop,
   canonResourceNew,
+  ResourceTableInfo,
   ResourceTypeInfo,
   Trap,
 } from "../src/cabi/mod.ts";
@@ -47,17 +48,19 @@ Deno.test("guest dtor isolates task, both context slots, and post-return attribu
   const caller = new ComponentInstanceState(0, store);
   const impl = new ComponentInstanceState(1, store);
   let outer: Thread;
-  const rt = new ResourceTypeInfo(impl, (rep) => {
-    assertEq(rep, 7);
-    assertEq(currentTask().inst === impl, true);
-    assertEq(currentTask().ft.async, false);
-    assertEq(currentTask().opts.async_, false);
-    const thread = currentThread<Thread>();
-    assertEq(thread === outer, false);
-    assertEq(thread.storage, [0, 0]);
-    thread.storage[0] = 99;
-    thread.storage[1] = 100;
-  });
+  const rt = new ResourceTableInfo(
+    new ResourceTypeInfo(impl, (rep) => {
+      assertEq(rep, 7);
+      assertEq(currentTask().inst === impl, true);
+      assertEq(currentTask().ft.async, false);
+      assertEq(currentTask().opts.async_, false);
+      const thread = currentThread<Thread>();
+      assertEq(thread === outer, false);
+      assertEq(thread.storage, [0, 0]);
+      thread.storage[0] = 99;
+      thread.storage[1] = 100;
+    }),
+  );
   const failure = new Trap("post-return trap");
   const opts = options(caller);
   opts.postReturn = () => () => {
@@ -193,14 +196,18 @@ Deno.test("async caller cannot give guest dtor async completion or a host-wide d
     core: () => {
       const outer = currentThread<Thread>();
       store.waiting.push(sibling as never);
-      const quick = new ResourceTypeInfo(impl, () => {
-        assertEq(currentTask().ft.async, false);
-        assertEq(currentTask().opts.async_, false);
-      });
+      const quick = new ResourceTableInfo(
+        new ResourceTypeInfo(impl, () => {
+          assertEq(currentTask().ft.async, false);
+          assertEq(currentTask().opts.async_, false);
+        }),
+      );
       canonResourceDrop(caller, quick, canonResourceNew(caller, quick, 0));
       assertEq(ranSibling, false);
       store.waiting.pop();
-      const slow = new ResourceTypeInfo(impl, () => Promise.resolve());
+      const slow = new ResourceTableInfo(
+        new ResourceTypeInfo(impl, () => Promise.resolve()),
+      );
       let caught: unknown;
       try {
         canonResourceDrop(caller, slow, canonResourceNew(caller, slow, 0));

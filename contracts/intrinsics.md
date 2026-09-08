@@ -51,6 +51,12 @@ directly. `modules[].intrinsics` records import names and resolved categories.
 - **Resource borrows:** transfer registers a lender on the current call scope,
   including re-lending an already borrowed handle and same-instance rep fast
   paths. A lend prevents own transfer or drop until its scope ends.
+- **Resource handle types:** validate against the source resource-table
+  identity, then create the destination handle with its destination table
+  identity. Tables may share resource origin and destructor metadata without
+  being interchangeable inside the guest. Stream/future operations check their
+  endpoint's local element type; boundary transfers compare underlying origins
+  and retag the endpoint for the receiving component.
 - **Unwind:** a failed call releases the lenders it registered, including
   non-poisoning capability failures. The host boundary restores `may_leave`
   according to entry identity: it excludes the host entry's own instance and

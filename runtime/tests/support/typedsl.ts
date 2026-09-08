@@ -2,8 +2,8 @@
 // Keep in lockstep with generate.py::build_type.
 
 import {
-  type ResourceTypeInfo,
-  ResourceTypeInfo as ResourceTypeInfoClass,
+  ResourceTableInfo,
+  ResourceTypeInfo,
   type ValType,
 } from "../../src/cabi/mod.ts";
 
@@ -25,8 +25,8 @@ const PRIMS = new Set([
 
 // Shared dummy resource type: fixtures only exercise layout/flatten of
 // own/borrow, which ignore the resource identity.
-export const dummyResourceType: ResourceTypeInfo = new ResourceTypeInfoClass(
-  null,
+export const dummyResourceType = new ResourceTableInfo(
+  new ResourceTypeInfo(null),
 );
 
 // deno-lint-ignore no-explicit-any

@@ -10,9 +10,9 @@
 //           evaluated diagnostic strings.
 //   Pin 2 — one `ResourceTypeInfo` per component-wide ResourceIndex, aliased
 //           across resource tables (plan-format.md "Type exports index into
-//           `resourceTables`" note). Per-
-//           table tokens made FACT stream/future transfers trap "destination
-//           element mismatch" in wac-composed components.
+//           `resourceTables`" note). Local table tokens remain distinct; treating
+//           them as origin identity made FACT stream/future transfers trap
+//           "destination element mismatch" in wac-composed components.
 //   Pin 3 — `resource.transfer-borrow` inside a FACT `[async-start]` window
 //           (prepare/start protocol, no enter/exit-sync-call bracket):
 //           borrow bookkeeping attaches to the callee task + caller lender
@@ -20,6 +20,7 @@
 
 import {
   fmtValType,
+  ResourceTableInfo,
   ResourceTypeInfo,
   Table,
   type ValType,
@@ -68,10 +69,10 @@ function minimalPlan(overrides: Partial<WirePlan> = {}): WirePlan {
 /** A resource type whose identity token cycles back to a table that holds a
  * value referencing the type — the real shape: `rt.impl.handles` holds ends
  * whose `.shared.t` contains the own type. `JSON.stringify` throws on it. */
-function cyclicResourceType(): { rt: ResourceTypeInfo; t: ValType } {
+function cyclicResourceType(): { rt: ResourceTableInfo; t: ValType } {
   const handles = new Table<unknown>();
   const impl = { handles, mayLeave: true };
-  const rt = new ResourceTypeInfo(impl, null);
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(impl, null));
   const t: ValType = {
     kind: "future",
     element: { kind: "result", ok: null, error: { kind: "own", rt } },
@@ -98,7 +99,26 @@ Deno.test("pin: sameElemType survives resource-bearing (cyclic) element types", 
   assertEq(sameElemType(t, same), true, "same rt -> equal");
   assertEq(valTypeEqual(t, same), true);
 
-  const otherRt = new ResourceTypeInfo(null, null);
+  const alias: ValType = {
+    kind: "future",
+    element: {
+      kind: "result",
+      ok: null,
+      error: { kind: "own", rt: new ResourceTableInfo(rt.resource) },
+    },
+  };
+  assertEq(
+    sameElemType(t, alias),
+    true,
+    "shared origin survives component hops",
+  );
+  assertEq(
+    valTypeEqual(t, alias),
+    false,
+    "local abstract types remain distinct",
+  );
+
+  const otherRt = new ResourceTableInfo(new ResourceTypeInfo(null, null));
   const different: ValType = {
     kind: "future",
     element: { kind: "result", ok: null, error: { kind: "own", rt: otherRt } },
@@ -118,23 +138,36 @@ Deno.test("pin: fmtValType is cycle-safe and structural", () => {
 
 // --- Pin 2 ------------------------------------------------------------------
 
-Deno.test("pin: tables naming one ResourceIndex share one identity token", () => {
+Deno.test("pin: tables naming one ResourceIndex share origin, not local identity", () => {
   const loaded = loadPlan(minimalPlan({
     resourceTables: [
       { kind: "concrete", resource: 0, instance: 0 },
-      { kind: "concrete", resource: 0, instance: 1 }, // alias (composed peer)
+      { kind: "concrete", resource: 0, instance: 1 }, // composed peer
       { kind: "concrete", resource: 1, instance: 0 },
+      { kind: "concrete", resource: 0, instance: 0 }, // distinct abstract import
     ],
   }));
   assertEq(
-    loaded.resourceTokens[0] === loaded.resourceTokens[1],
+    loaded.resourceTokens[0].resource === loaded.resourceTokens[1].resource,
     true,
-    "same ResourceIndex through two tables -> one token",
+    "same ResourceIndex through two tables -> one origin",
   );
   assertEq(
-    loaded.resourceTokens[0] === loaded.resourceTokens[2],
+    loaded.resourceTokens[0].resource === loaded.resourceTokens[2].resource,
     false,
     "distinct resources stay distinct",
+  );
+  assertEq(loaded.resourceTokens[0] === loaded.resourceTokens[1], false);
+  assertEq(loaded.resourceTokens[0] === loaded.resourceTokens[3], false);
+  assertEq(
+    loaded.resourceTokens[0].resource === loaded.resourceTokens[3].resource,
+    true,
+  );
+  const again = loadPlan(loaded.wire);
+  assertEq(loaded.resourceTokens[0] === again.resourceTokens[0], false);
+  assertEq(
+    loaded.resourceTokens[0].resource === again.resourceTokens[0].resource,
+    false,
   );
 });
 
@@ -143,8 +176,8 @@ Deno.test("pin: tables naming one ResourceIndex share one identity token", () =>
 Deno.test("pin: transfer-borrow works inside a FACT [async-start] window", () => {
   const srcInst = { handles: new Table<unknown>(), mayLeave: true };
   const dstInst = { handles: new Table<unknown>(), mayLeave: true };
-  const srcRt = new ResourceTypeInfo(null, null);
-  const dstRt = new ResourceTypeInfo(null, null); // dst does NOT implement it
+  const srcRt = new ResourceTableInfo(new ResourceTypeInfo(null, null));
+  const dstRt = new ResourceTableInfo(srcRt.resource); // dst does NOT implement it
 
   const factStartScopes: FactStartScope[] = [];
   const ctx = {

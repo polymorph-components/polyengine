@@ -25,6 +25,7 @@ import {
   canonResourceDrop,
   canonResourceNew,
   ResourceHandle,
+  ResourceTableInfo,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";
 import type { CoreValue, ValType } from "../src/cabi/types.ts";
@@ -40,7 +41,7 @@ interface Harness {
   caller: ComponentInstanceState;
   callee: ComponentInstanceState;
   handle: ResourceHandle;
-  rt: ResourceTypeInfo;
+  rt: ResourceTableInfo;
   handleIndex: number;
   /** Run one prepare + start-call; returns whatever escaped, or null. */
   run(kind: "sync" | "async", calleeBody: () => CoreValue): unknown;
@@ -52,7 +53,7 @@ function mkHarness(postReturn: (() => void) | null = null): Harness {
   const callee = new ComponentInstanceState(1, store);
   // The resource is implemented by the CALLER, so dropping it later is the
   // same-instance (ungated) path — this test is about `num_lends`, not #85.
-  const rt = new ResourceTypeInfo(caller, () => {});
+  const rt = new ResourceTableInfo(new ResourceTypeInfo(caller, () => {}));
   const handleIndex = canonResourceNew(caller, rt, 77);
   const handle = caller.handles.get(handleIndex) as ResourceHandle;
 
