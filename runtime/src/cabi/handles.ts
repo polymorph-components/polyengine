@@ -7,18 +7,14 @@
 //   - canon_resource_* take the instance explicitly instead of reading
 //     current_instance() from the running thread;
 //   - canon_resource_drop routes the dtor through `callDtorGated` below,
-//     which reconstructs the reference's store.lift/store.lower bracket
-//     (entry refusal + trap poisoning) around the destructor call (#85).
+//     which uses the reference's fresh synchronous lift task/thread.
 //     Host-initiated drops do NOT come here: they run the dtor through the
 //     real lift harness (`hostDtorCall`, exec/boundary.ts) — see #160.
 
-import { assert_, Trap, trap, trapIf } from "./trap.ts";
-import {
-  entryRefusal,
-  NeedsJspi,
-  notifyInstancePoisoned,
-  PendingCapability,
-} from "../task/scheduler.ts";
+import { assert_, trapIf } from "./trap.ts";
+import { removeHandleWithUnwind } from "../task/scheduler.ts";
+import { createDtorEntry } from "../exec/boundary.ts";
+import type { ComponentInstanceState } from "../task/mod.ts";
 import { COMPONENT_INSTANCE } from "./context.ts";
 import type {
   ComponentInstanceLike,
@@ -95,13 +91,14 @@ export function liftOwn(
   i: number,
   t: OwnType,
 ): number {
-  const h = requireInst(cx).handles.remove(i);
-  trapIf(!(h instanceof ResourceHandle), "not a resource handle");
-  const rh = h as ResourceHandle;
-  trapIf(rh.rt !== t.rt, "resource type mismatch");
-  trapIf(rh.numLends !== 0, "handle still lent out");
-  trapIf(!rh.own, "expected own handle");
-  return rh.rep;
+  return removeHandleWithUnwind(requireInst(cx), i, (h) => {
+    trapIf(!(h instanceof ResourceHandle), "not a resource handle");
+    const rh = h as ResourceHandle;
+    trapIf(rh.rt !== t.rt, "resource type mismatch");
+    trapIf(rh.numLends !== 0, "handle still lent out");
+    trapIf(!rh.own, "expected own handle");
+    return rh.rep;
+  });
 }
 
 export function liftBorrow(
@@ -227,8 +224,8 @@ function isThenable(v: unknown): v is PromiseLike<unknown> {
  * SCOPE (#160): this is the **guest-initiated** path only. A guest-initiated
  * drop must complete synchronously (the reference lifts the dtor with
  * `async_ = False`), so a thenable here is a trap. The host-initiated path
- * goes through the full lift harness instead (`hostDtorCall` in
- * exec/boundary.ts), which is what definitions.py actually does.
+ * uses the same lift harness with host completion policy (`hostDtorCall` in
+ * exec/boundary.ts). Guest entry uses only the reference synchronous drive.
  */
 export function callDtorGated(
   rt: ResourceTypeInfo,
@@ -236,8 +233,6 @@ export function callDtorGated(
   caller: unknown,
 ): void {
   const impl = isComponentInstance(rt.impl);
-  // Always the raw synchronous dtor: `dtorHost` is the host path's lifted
-  // entry, which is not callable from inside a guest activation.
   const dtorFn = rt.dtor;
   // No component instance behind the resource: an imported (host-implemented)
   // resource has `impl === null` by construction (executor.ts
@@ -257,46 +252,11 @@ export function callDtorGated(
   // (Store.invoke). It feeds `entryRefusal`'s `caller !== callee` guard below.
   const callerInst = isComponentInstance(caller) === null ? null : caller;
 
-  // A poisoned target's refusal names the original trap (polyengine#145).
-  // `callerInst` can legitimately BE `impl` here (a guest dropping its own
-  // resource): `entryRefusal`'s self-call guard keeps that entry allowed
-  // even against a marked instance.
-  {
-    const refusal = entryRefusal(
-      impl,
-      callerInst,
-      "cannot enter component instance",
-    );
-    if (refusal !== null) trap(refusal);
-  }
-
-  const poison = (e: unknown): void => {
-    // Capability signals are not traps: the operation they stand in for
-    // completes normally in the reference, so the instance stays healthy.
-    if (e instanceof NeedsJspi || e instanceof PendingCapability) return;
-    // A real trap buries the implementing instance, and its live
-    // stream/future ends are retired (#66) through the same seam
-    // fact_calls.ts uses for its poisoning sites.
-    notifyInstancePoisoned(impl, e);
-  };
-
-  let out: unknown;
-  try {
-    out = dtorFn?.(rep) as unknown;
-  } catch (e) {
-    poison(e);
-    throw e;
-  }
-  if (isThenable(out)) {
-    // A guest-initiated drop is lifted with `async_ = False`: the dtor must
-    // resolve before `canon_resource_drop` returns. Reaching here means the
-    // dtor's activation escaped, which is a trap that poisons the impl.
-    const e = new Trap(
-      "resource destructor did not complete synchronously",
-    );
-    poison(e);
-    throw e;
-  }
+  createDtorEntry({
+    dtor: dtorFn,
+    instance: impl as ComponentInstanceState,
+    guestCaller: callerInst as ComponentInstanceState | null,
+  })(rep);
 }
 
 export function canonResourceDrop(
@@ -305,25 +265,26 @@ export function canonResourceDrop(
   i: number,
 ): void {
   trapIf(!inst.mayLeave, "may_leave violation");
-  const h = inst.handles.remove(i);
-  trapIf(!(h instanceof ResourceHandle), "not a resource handle");
-  const rh = h as ResourceHandle;
-  trapIf(rh.rt !== rt, "resource type mismatch");
-  trapIf(rh.numLends !== 0, "handle still lent out");
-  if (rh.own) {
-    assert_(rh.borrowScope === null);
-    // definitions.py line 2326-2333: the dtor runs through the store's
-    // lift/lower bracket. SCOPE NOTE (#85): the call below is a JS frame
-    // inside the drop trampoline, so a *guest*-initiated drop whose dtor
-    // suspends traps under the JSPI frame rule. That is deterministic and
-    // loud, and routing guest-initiated dtor calls through generated wasm is
-    // explicitly out of scope for #85 (docs/architecture.md §5/§7 carry the
-    // known-limitation note).
-    callDtorGated(rt, rh.rep, inst);
-  } else {
-    assert_(rh.borrowScope !== null);
-    rh.borrowScope!.numBorrows -= 1;
-  }
+  removeHandleWithUnwind(inst, i, (h) => {
+    trapIf(!(h instanceof ResourceHandle), "not a resource handle");
+    const rh = h as ResourceHandle;
+    trapIf(rh.rt !== rt, "resource type mismatch");
+    trapIf(rh.numLends !== 0, "handle still lent out");
+    if (rh.own) {
+      assert_(rh.borrowScope === null);
+      // definitions.py line 2326-2333: the dtor runs through the store's
+      // lift/lower bracket. SCOPE NOTE (#85): the call below is a JS frame
+      // inside the drop trampoline, so a *guest*-initiated drop whose dtor
+      // suspends traps under the JSPI frame rule. That is deterministic and
+      // loud, and routing guest-initiated dtor calls through generated wasm is
+      // explicitly out of scope for #85 (docs/architecture.md §5/§7 carry the
+      // known-limitation note).
+      callDtorGated(rt, rh.rep, inst);
+    } else {
+      assert_(rh.borrowScope !== null);
+      rh.borrowScope!.numBorrows -= 1;
+    }
+  });
 }
 
 export function canonResourceRep(

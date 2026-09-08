@@ -12,7 +12,7 @@
 // `store.waiting`, so `determinate()` is false), a sibling thread's
 // `waitable.join` on the same subtask handle succeeds during the park.
 
-import { assertEq } from "./support/asserts.ts";
+import { assertEq, assertTrap } from "./support/asserts.ts";
 import {
   BLOCKED,
   createSubtaskCancel,
@@ -20,16 +20,28 @@ import {
 } from "../src/intrinsics/async_builtins.ts";
 import {
   ComponentInstanceState,
+  currentTask,
+  EventCode,
   popCurrentThread,
   pushCurrentThread,
   Store,
   Subtask,
+  SubtaskState,
   Task,
   type TaskOptions,
   Thread,
+  unpackSubtaskResult,
   WaitableSet,
+  withActivation,
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
+import {
+  createAsyncStartCall,
+  createPrepareCall,
+  type FactCallContext,
+  START_FLAG_ASYNC_CALLEE,
+} from "../src/intrinsics/fact_calls.ts";
+import { newStats } from "../src/exec/boundary.ts";
 
 const FT: FuncType = { params: [], results: [], async: true };
 const OPTS: TaskOptions = {
@@ -101,3 +113,93 @@ Deno.test(
     assertEq(subtask.hasSyncWaiter, false);
   },
 );
+
+for (const progressBeforeCancel of [true, false]) {
+  Deno.test(`sync subtask.cancel waits past STARTED progress ${progressBeforeCancel ? "before" : "during"} its park`, async () => {
+    const store = new Store();
+    const caller = new ComponentInstanceState(0, store);
+    const callee = new ComponentInstanceState(1, store);
+    const set = new WaitableSet();
+    const seti = callee.handles.add(set);
+    const wait = (seti << 4) | 2;
+    let cancelled = false;
+    let resolve = false;
+    const ctx: FactCallContext = {
+      componentInstance: (i) => [caller, callee][i],
+      resultTypes: () => [],
+      resultTypesForTuple: () => [],
+      callback: () => (code: number) => {
+        if (code === EventCode.TASK_CANCELLED) cancelled = true;
+        if (resolve) {
+          (currentTask() as Task).cancel();
+          return 0;
+        }
+        return wait;
+      },
+      memoryToken: () => null,
+      stats: newStats(),
+      suspensionMode: "jspi",
+      prepared: { current: null },
+      factStartScopes: [],
+    };
+    const callerTask = new Task(FT, OPTS, caller, () => [], () => {});
+    const callerThread = new Thread(callerTask, (function* () {})());
+    const asGuest = <T>(f: () => T) => withActivation(callerThread, f);
+    callee.backpressure = 1;
+    const packed = asGuest(() => {
+      createPrepareCall({ memory: null }, ctx)(
+        () => undefined,
+        () => undefined,
+        0,
+        1,
+        0,
+        1,
+        0,
+        0xffff_ffff,
+      );
+      return createAsyncStartCall({ callback: 0, postReturn: null }, ctx)(
+        () => wait,
+        0,
+        0,
+        START_FLAG_ASYNC_CALLEE,
+      );
+    });
+    const [state, i] = unpackSubtaskResult(packed as number);
+    assertEq(state, SubtaskState.STARTING);
+    callee.backpressure = 0;
+    assertEq(store.tick(), true);
+    const st = caller.handles.get(i) as Subtask;
+    assertEq(st.state, SubtaskState.STARTED);
+    assertEq(st.hasPendingEvent(), true);
+    if (!progressBeforeCancel) st.getPendingEvent();
+    const lender = { numLends: 0 };
+    st.addLender(lender);
+    const pending = asGuest(() =>
+      createSubtaskCancel({ async: false }, caller, "jspi")(i)
+    ) as unknown as Promise<number>;
+    assertEq(pending instanceof Promise, true);
+    assertEq(cancelled, true);
+    assertEq(st.hasSyncWaiter, true);
+    if (!progressBeforeCancel) st.setSubtaskPendingEvent(i);
+    assertEq(store.tick(), false, "STARTED is not resolution");
+    const joinSet = caller.handles.add(new WaitableSet());
+    assertTrap(() => asGuest(() => createWaitableJoin(caller)(i, joinSet)));
+    assertEq(lender.numLends, 1);
+
+    // A normal callback event lets the cooperatively cancelled callee resolve.
+    resolve = true;
+    const signal = new Subtask();
+    signal.join(set);
+    signal.setSubtaskPendingEvent(1);
+    assertEq(store.tick(), true);
+    assertEq(st.resolved(), true);
+    assertEq(st.hasSyncWaiter, true);
+    assertEq(store.tick(), true);
+    assertEq(await pending, SubtaskState.CANCELLED_BEFORE_RETURNED);
+    assertEq(st.resolveDelivered(), true);
+    assertEq(st.hasSyncWaiter, false);
+    assertEq(st.hasPendingEvent(), false);
+    assertEq(lender.numLends, 0);
+    asGuest(() => createWaitableJoin(caller)(i, joinSet));
+  });
+}

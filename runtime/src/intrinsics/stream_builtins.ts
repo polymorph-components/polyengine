@@ -55,6 +55,7 @@ import {
   type ResolvedOptions,
 } from "../exec/boundary.ts";
 import { BLOCKED } from "./async_builtins.ts";
+import { removeHandleWithUnwind } from "../task/scheduler.ts";
 
 /**
  * Standing probe (CE_COPY_TRACE=1): per-call return codes of the copy /
@@ -500,11 +501,12 @@ function dropEnd(
   // Guest-supplied index is u32; core wasm delivers i32 args signed (F3, R2).
   hi = hi >>> 0;
   trapIf(!inst.mayLeave, `${what}: cannot leave component instance`);
-  const e = inst.handles.remove(hi);
-  trapIf(!(e instanceof EndT), `${what}: wrong end type for this handle`);
-  const end = e as CopyEnd;
-  trapIf(!sameElem(end.shared.t, elem), `${what}: element type mismatch`);
-  end.drop();
+  removeHandleWithUnwind(inst, hi, (e) => {
+    trapIf(!(e instanceof EndT), `${what}: wrong end type for this handle`);
+    const end = e as CopyEnd;
+    trapIf(!sameElem(end.shared.t, elem), `${what}: element type mismatch`);
+    end.drop();
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -573,11 +575,12 @@ export function createErrorContextDrop(
       !inst.mayLeave,
       "error-context.drop: cannot leave component instance",
     );
-    const e = inst.handles.remove(i);
-    trapIf(
-      !(e instanceof ErrorContext),
-      errorContextTrapMessage("error-context.drop", e),
-    );
+    removeHandleWithUnwind(inst, i, (e) => {
+      trapIf(
+        !(e instanceof ErrorContext),
+        errorContextTrapMessage("error-context.drop", e),
+      );
+    });
   };
 }
 
@@ -846,33 +849,40 @@ function transferAsyncEnd(input: {
   what: string;
 }): number {
   const { EndT, srcInst, dstInst, srcElem, dstElem, srcIdx, what } = input;
-  const e = srcInst.handles.remove(srcIdx);
-  trapIf(!(e instanceof EndT), `${what}: handle is not a readable ${what} end`);
-  const end = e as CopyEnd;
-  trapIf(!sameElem(end.shared.t, srcElem), `${what}: source element mismatch`);
-  trapIf(
-    !sameElem(end.shared.t, dstElem),
-    `${what}: destination element mismatch`,
-  );
-  // definitions.py `lift_async_value`: an end that is mid-copy or parked in a
-  // waitable set cannot be handed on. The messages match the suite's
-  // `assert_trap` text.
-  trapIf(
-    end.state === CopyState.DONE,
-    what === "future"
-      ? "cannot lift future after previous read succeeded"
-      : "cannot lift stream after being notified that the writable end dropped",
-  );
-  trapIf(
-    end.state !== CopyState.IDLE,
-    `cannot remove busy ${what}`,
-  );
-  trapIf(
-    end.inWaitableSet(),
-    `cannot lift ${what} while it's in a waitable set`,
-  );
-  const Ctor = EndT as unknown as new (shared: unknown) => CopyEnd;
-  return dstInst.handles.add(new Ctor(end.shared));
+  return removeHandleWithUnwind(srcInst, srcIdx, (e) => {
+    trapIf(
+      !(e instanceof EndT),
+      `${what}: handle is not a readable ${what} end`,
+    );
+    const end = e as CopyEnd;
+    trapIf(
+      !sameElem(end.shared.t, srcElem),
+      `${what}: source element mismatch`,
+    );
+    trapIf(
+      !sameElem(end.shared.t, dstElem),
+      `${what}: destination element mismatch`,
+    );
+    // definitions.py `lift_async_value`: an end that is mid-copy or parked in a
+    // waitable set cannot be handed on. The messages match the suite's
+    // `assert_trap` text.
+    trapIf(
+      end.state === CopyState.DONE,
+      what === "future"
+        ? "cannot lift future after previous read succeeded"
+        : "cannot lift stream after being notified that the writable end dropped",
+    );
+    trapIf(
+      end.state !== CopyState.IDLE,
+      `cannot remove busy ${what}`,
+    );
+    trapIf(
+      end.inWaitableSet(),
+      `cannot lift ${what} while it's in a waitable set`,
+    );
+    const Ctor = EndT as unknown as new (shared: unknown) => CopyEnd;
+    return dstInst.handles.add(new Ctor(end.shared));
+  });
 }
 
 export function createStreamTransfer(ctx: AsyncTransferContext): CoreFn {

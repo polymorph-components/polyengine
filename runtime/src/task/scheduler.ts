@@ -47,6 +47,7 @@
 // rather than pretending (see `needsJspi`).
 
 import { assert_, trapIf } from "../cabi/trap.ts";
+import type { ComponentInstanceLike } from "../cabi/context.ts";
 
 /** definitions.py `Cancelled` (line 248). */
 export const CANCELLED_FALSE = false;
@@ -156,11 +157,41 @@ let onInstancePoisoned:
   | ((inst: { handles: Iterable<unknown> }, cause: unknown) => void)
   | null = null;
 
+let onHandleRemovalFailed:
+  | ((inst: ComponentInstanceLike, entry: unknown, cause: unknown) => void)
+  | null = null;
+
+/** Preserve destructive table removal, retiring an async end only if its
+ * validation/drop fails. The hook avoids a handles -> streams import cycle. */
+export function removeHandleWithUnwind<T>(
+  inst: ComponentInstanceLike,
+  i: number,
+  use: (entry: unknown) => T,
+): T {
+  const entry = inst.handles.remove(i);
+  try {
+    return use(entry);
+  } catch (cause) {
+    try {
+      onHandleRemovalFailed?.(inst, entry, cause);
+    } catch {
+      // A peer notification must not replace the original failure.
+    }
+    throw cause;
+  }
+}
+
 /** @internal — see `onInstancePoisoned`; registered once by task/streams.ts. */
 export function setOnInstancePoisoned(
   f: (inst: { handles: Iterable<unknown> }, cause: unknown) => void,
+  removalFailed?: (
+    inst: ComponentInstanceLike,
+    entry: unknown,
+    cause: unknown,
+  ) => void,
 ): void {
   onInstancePoisoned = f;
+  if (removalFailed !== undefined) onHandleRemovalFailed = removalFailed;
 }
 
 /**

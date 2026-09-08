@@ -21,6 +21,7 @@ import {
   trap,
 } from "../cabi/mod.ts";
 import { ResourceHandle } from "../cabi/handles.ts";
+import { removeHandleWithUnwind } from "../task/scheduler.ts";
 import { trapIf } from "../cabi/trap.ts";
 import { assert_ } from "../cabi/trap.ts";
 import type { ResourceTypeInfo } from "../cabi/types.ts";
@@ -832,17 +833,21 @@ function transferOwn(
   const srcRt = ctx.resourceToken(srcTable);
   const dstRt = ctx.resourceToken(dstTable);
 
-  const h = src.handles.remove(handle);
-  trapIf(!(h instanceof ResourceHandle), "transfer-own: not a resource handle");
-  const rh = h as ResourceHandle;
-  trapIf(rh.rt !== srcRt, "transfer-own: resource type mismatch");
-  // definitions.py `lift_own`: `trap_if(h.num_lends != 0)`.
-  trapIf(
-    rh.numLends !== 0,
-    "cannot remove owned resource while borrowed (handle still lent out)",
-  );
-  trapIf(!rh.own, "transfer-own: expected an owning handle");
-  return dst.handles.add(new ResourceHandle(dstRt, rh.rep, true));
+  return removeHandleWithUnwind(src, handle, (h) => {
+    trapIf(
+      !(h instanceof ResourceHandle),
+      "transfer-own: not a resource handle",
+    );
+    const rh = h as ResourceHandle;
+    trapIf(rh.rt !== srcRt, "transfer-own: resource type mismatch");
+    // definitions.py `lift_own`: `trap_if(h.num_lends != 0)`.
+    trapIf(
+      rh.numLends !== 0,
+      "cannot remove owned resource while borrowed (handle still lent out)",
+    );
+    trapIf(!rh.own, "transfer-own: expected an owning handle");
+    return dst.handles.add(new ResourceHandle(dstRt, rh.rep, true));
+  });
 }
 
 /**

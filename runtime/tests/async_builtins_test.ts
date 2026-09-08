@@ -567,14 +567,9 @@ Deno.test(
     assertEq(f.subtask.resolved(), false);
     assertEq(f.subtask.hasSyncWaiter, true);
 
-    // The callee resolves later; the park's `readyFunc` (`hasPendingEvent`)
-    // only fires once the event is actually armed — not merely once
-    // `resolved()` is true — so drive both steps to pin the ordering SITE 5
-    // now depends on.
-    f.subtask.resolve(SubtaskState.CANCELLED_BEFORE_RETURNED, []);
-    // Not yet armed: the park must not be ready on `resolved()` alone.
-    assertEq(f.store.tick(), false);
-    f.subtask.setSubtaskPendingEvent(f.subtaski);
+    // Production resolution and its progress notification are one synchronous
+    // transition; there is no scheduler turn between them.
+    resolveSubtask(f.subtask, f.subtaski);
     assertEq(f.store.tick(), true);
 
     const rc = await pending;
