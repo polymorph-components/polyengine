@@ -12,7 +12,11 @@ import {
   canonResourceNew,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";
-import { ComponentInstanceState, Store, storeQuiescent } from "../src/task/mod.ts";
+import {
+  ComponentInstanceState,
+  Store,
+  storeQuiescent,
+} from "../src/task/mod.ts";
 import { driveStoreAsync, hostDtorCall } from "../src/exec/boundary.ts";
 import {
   isInstancePoisoned,

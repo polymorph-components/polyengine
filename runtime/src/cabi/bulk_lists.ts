@@ -88,9 +88,11 @@ const FLOAT_CTORS: Record<
   f64: Float64Array,
 };
 
-
 function viewOf<
-  C extends { new (b: ArrayBufferLike, o: number, n: number): InstanceType<C>; readonly BYTES_PER_ELEMENT: number },
+  C extends {
+    new (b: ArrayBufferLike, o: number, n: number): InstanceType<C>;
+    readonly BYTES_PER_ELEMENT: number;
+  },
 >(ctor: C, mem: MemInst, ptr: number, length: number): InstanceType<C> | null {
   if (!PLATFORM_LITTLE_ENDIAN) return null;
   const byteOffset = mem.bytes.byteOffset + ptr;

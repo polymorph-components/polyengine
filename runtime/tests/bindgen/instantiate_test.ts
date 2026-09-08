@@ -59,11 +59,20 @@ Deno.test("generated instantiate: matching component verifies and binds", async 
   const instance = await hello.instantiate(artifacts(helloWasm));
 
   // Typed exports work through the wrapper's return value...
-  assertEq(await instance.exports.greet("component model"), "Hello, component model!");
+  assertEq(
+    await instance.exports.greet("component model"),
+    "Hello, component model!",
+  );
   // ...and the embedder-conventions instance shape is preserved
   // (contracts/embedder-api.md: `{ exports, handle, imports }`).
-  assert(instance.handle !== undefined, "wrapper must expose the runtime handle");
-  assert(Array.isArray(instance.imports), "wrapper must expose the import leaves");
+  assert(
+    instance.handle !== undefined,
+    "wrapper must expose the runtime handle",
+  );
+  assert(
+    Array.isArray(instance.imports),
+    "wrapper must expose the import leaves",
+  );
 });
 
 Deno.test("generated instantiate: also accepts an untranslated source", async () => {
@@ -108,7 +117,11 @@ Deno.test("generated bind(): unchecked cast, no verification", () => {
   // `bind` stays a pure cast (identity on `.exports`) — it must NOT verify,
   // even when handed an instance whose plan could never match this world.
   const exports = { greet: () => "not really" };
-  const fake = { exports, handle: null, imports: [] } as unknown as EmbedderInstance;
+  const fake = {
+    exports,
+    handle: null,
+    imports: [],
+  } as unknown as EmbedderInstance;
   const bound = hello.bind(fake);
   assert(
     bound === (exports as unknown as hello.HelloExports),

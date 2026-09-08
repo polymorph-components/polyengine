@@ -22,9 +22,9 @@ import {
   type Cancelled,
   CANCELLED_FALSE,
   CANCELLED_TRUE,
+  isInstancePoisoned,
   NeedsJspi,
   notifyInstancePoisoned,
-  isInstancePoisoned,
   PendingCapability,
   popCurrentThread,
   pushCurrentThread,
@@ -144,7 +144,10 @@ export class Thread implements SchedulableThread {
 
   /** Resume a promise-parked thread with the settled result. */
   resumeWith(value: unknown, failure?: { error: unknown }): void {
-    assert_(this.awaiting !== null, "resumeWith on a thread that is not awaiting");
+    assert_(
+      this.awaiting !== null,
+      "resumeWith on a thread that is not awaiting",
+    );
     this.awaiting = null;
     this.#store.awaiting.delete(this);
     this.#state = "suspended";
@@ -287,7 +290,9 @@ export class Thread implements SchedulableThread {
   }
 
   /** definitions.py `Thread.suspend` (line 390). */
-  *suspend(cancellable: boolean): Generator<BlockRequest, Cancelled, Cancelled> {
+  *suspend(
+    cancellable: boolean,
+  ): Generator<BlockRequest, Cancelled, Cancelled> {
     assert_(this.running(), "suspend on a non-running thread");
     if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
     const cancelled = yield { readyFunc: null, cancellable };

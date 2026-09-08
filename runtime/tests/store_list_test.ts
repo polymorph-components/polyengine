@@ -21,7 +21,10 @@ const listU32: ValType = { kind: "list", element: { kind: "u32" } };
 
 function cxWithHeap(size: number) {
   const heap = new Heap(size);
-  return { heap, cx: mkCx(new MemInst(heap.memory, "i32"), "utf8", heap.realloc) };
+  return {
+    heap,
+    cx: mkCx(new MemInst(heap.memory, "i32"), "utf8", heap.realloc),
+  };
 }
 
 /** Store a list value at a fresh spot, return [begin, length] read back. */

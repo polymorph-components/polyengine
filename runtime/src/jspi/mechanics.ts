@@ -45,7 +45,9 @@ import { jspiApi } from "./types.ts";
  * exactly a `WebAssembly.Suspending`, usable anywhere an import value is
  * expected.
  */
-export type SuspendingImport = { readonly __polyengineSuspending: unique symbol };
+export type SuspendingImport = {
+  readonly __polyengineSuspending: unique symbol;
+};
 
 /** True if the current engine implements `WebAssembly.promising` and
  * `WebAssembly.Suspending`. Both are phase-4 API surface (docs/architecture.md §3): no

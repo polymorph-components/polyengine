@@ -10,7 +10,12 @@
 // `pass-through-text` does the same for stream<string>.
 
 import { assertEq } from "../support/asserts.ts";
-import { artifactsOf, guest, haveFixture, instantiateFixture } from "./support.ts";
+import {
+  artifactsOf,
+  guest,
+  haveFixture,
+  instantiateFixture,
+} from "./support.ts";
 import type { ComponentValue, ValType } from "../../src/cabi/types.ts";
 import { SharedFutureImpl } from "../../src/task/mod.ts";
 import { Future, Stream } from "../../src/embedder/streams.ts";
@@ -25,7 +30,8 @@ const FIXTURE = guest("stream-pass");
 const ready = await haveFixture(FIXTURE);
 
 Deno.test({
-  name: "pass-through: result position — data flows host->host after the round trip",
+  name:
+    "pass-through: result position — data flows host->host after the round trip",
   ignore: !ready,
   fn: async () => {
     const c = await instantiateFixture(FIXTURE, { sink: () => 0n });
@@ -143,12 +149,17 @@ Deno.test({
     await (h.exports["forward"] as (...a: unknown[]) => Promise<unknown>)(
       hs2.value,
     );
-    assertEq(received === hs2.value, true, "import position: same shared object");
+    assertEq(
+      received === hs2.value,
+      true,
+      "import position: same shared object",
+    );
   },
 });
 
 Deno.test({
-  name: "guest-side partial take: a bounded reader drains part of a big typed offer",
+  name:
+    "guest-side partial take: a bounded reader drains part of a big typed offer",
   ignore: !ready,
   fn: async () => {
     // #63 review F3 / #67 checklist: the host offers far more than the guest
@@ -184,7 +195,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "host<->host u8: partial reads drain a typed write; re-offers stay typed",
+  name:
+    "host<->host u8: partial reads drain a typed write; re-offers stay typed",
   ignore: false,
   fn: async () => {
     // Exercises both halves of the typed-chunk write path (review F3):
@@ -216,7 +228,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "host<->host u8: a raw plain-array writer still reads back as Uint8Array",
+  name:
+    "host<->host u8: a raw plain-array writer still reads back as Uint8Array",
   ignore: false,
   fn: async () => {
     // Raw-layer writers may feed number[]; HostBuffer.taken() packs them so
@@ -257,7 +270,8 @@ async function assertTransferRefusal(
 }
 
 Deno.test({
-  name: "deadlock-verdict suppression: reading a Stream handle already passed to a guest is refused",
+  name:
+    "deadlock-verdict suppression: reading a Stream handle already passed to a guest is refused",
   ignore: !ready,
   fn: async () => {
     // The guest owns the readable end after the transfer (definitions.py
@@ -310,7 +324,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "deadlock-verdict suppression: awaiting a Future handle already passed to a guest is refused",
+  name:
+    "deadlock-verdict suppression: awaiting a Future handle already passed to a guest is refused",
   ignore: false,
   fn: async () => {
     // The `Stream` mirror, at the handle layer (no fixture needed): once
@@ -331,7 +346,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "deadlock-verdict suppression: a Future read memoized BEFORE the transfer still resolves",
+  name:
+    "deadlock-verdict suppression: a Future read memoized BEFORE the transfer still resolves",
   ignore: false,
   fn: async () => {
     // The read genuinely happened while the host owned the end; only reads

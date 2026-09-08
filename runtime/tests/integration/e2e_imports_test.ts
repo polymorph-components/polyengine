@@ -11,10 +11,7 @@
 
 import { assertEq } from "../support/asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";
-import {
-  hostResourceType,
-  instantiateComponent,
-} from "../../src/exec/mod.ts";
+import { hostResourceType, instantiateComponent } from "../../src/exec/mod.ts";
 import { PlanError } from "../../src/plan/mod.ts";
 import { ResourceHandle } from "../../src/cabi/mod.ts";
 import { SyncCallScope } from "../../src/intrinsics/mod.ts";
@@ -221,7 +218,6 @@ Deno.test({
   },
 });
 
-
 // ---------------------------------------------------------------------------
 // Re-lending a borrow across three components
 // ---------------------------------------------------------------------------
@@ -345,7 +341,6 @@ Deno.test({
   },
 });
 
-
 // ---------------------------------------------------------------------------
 // Cross-encoding strings (FACT Transcoder trampoline)
 // ---------------------------------------------------------------------------
@@ -383,20 +378,23 @@ Deno.test({
     const logged: number[] = [];
     let depth = 0;
     let inner: number | undefined;
-    const c: { exports: Record<string, unknown> } = await instantiate("imports", {
-      "log": (x: unknown) => {
-        logged.push(x as number);
-        if (depth === 0) {
-          depth = 1;
-          // Re-entry into the live instance, host-mediated.
-          inner = fn(c, "run")(10, 20) as number;
-        }
+    const c: { exports: Record<string, unknown> } = await instantiate(
+      "imports",
+      {
+        "log": (x: unknown) => {
+          logged.push(x as number);
+          if (depth === 0) {
+            depth = 1;
+            // Re-entry into the live instance, host-mediated.
+            inner = fn(c, "run")(10, 20) as number;
+          }
+        },
+        "host:api/math": {
+          add: (a: unknown, b: unknown) => (a as number) + (b as number),
+          greet: (who: unknown) => `Hello, ${who as string}!`,
+        },
       },
-      "host:api/math": {
-        add: (a: unknown, b: unknown) => (a as number) + (b as number),
-        greet: (who: unknown) => `Hello, ${who as string}!`,
-      },
-    });
+    );
 
     const outer = fn(c, "run")(1, 2) as number;
     assertEq(outer, 3, "the outer call completed");

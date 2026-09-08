@@ -122,8 +122,7 @@ Deno.test("a failing layout is not cached as a success", () => {
 //     comparing against `alignment()`/`elemSize()` would assert nothing,
 //     since those now just read the node back.
 Deno.test("layoutOf: non-compound sizes match the spec table", () => {
-  const labels = (n: number) =>
-    Array.from({ length: n }, (_, i) => `flag${i}`);
+  const labels = (n: number) => Array.from({ length: n }, (_, i) => `flag${i}`);
 
   // [type, i32 align, i32 size, i64 align, i64 size]
   const table: [ValType, number, number, number, number][] = [

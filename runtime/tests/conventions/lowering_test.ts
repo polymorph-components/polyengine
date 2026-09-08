@@ -130,7 +130,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/b: a Stream handle lowered into an IMPORT reaches the host",
+  name:
+    "conventions/b: a Stream handle lowered into an IMPORT reaches the host",
   ignore: !passReady,
   fn: async () => {
     await transcript("b-stream-handle-import-position", async (t) => {
@@ -160,7 +161,8 @@ Deno.test({
 const futureImportReady = await haveFixture(guest("future-import"));
 
 Deno.test({
-  name: "conventions/b: future import result — an import whose result is future<T> returns the source",
+  name:
+    "conventions/b: future import result — an import whose result is future<T> returns the source",
   ignore: !futureImportReady,
   fn: async () => {
     await transcript("b-a12-future-result-import", async (t) => {

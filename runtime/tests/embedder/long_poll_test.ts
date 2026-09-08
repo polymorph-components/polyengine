@@ -37,7 +37,8 @@ for (const jspi of [false, true]) {
   const tag = jspi ? "jspi" : "plain";
 
   Deno.test({
-    name: `long-poll (${tag}): next() stays pending until a later push() readies it`,
+    name:
+      `long-poll (${tag}): next() stays pending until a later push() readies it`,
     ignore: !ready,
     fn: async () => {
       const c = await instantiateFixture(FIXTURE, {}, { jspi });
@@ -70,7 +71,8 @@ for (const jspi of [false, true]) {
   });
 
   Deno.test({
-    name: `long-poll (${tag}): a trap while completing next() rejects the pending Promise`,
+    name:
+      `long-poll (${tag}): a trap while completing next() rejects the pending Promise`,
     ignore: !ready,
     fn: async () => {
       const c = await instantiateFixture(FIXTURE, {}, { jspi });
@@ -126,9 +128,7 @@ Deno.test({
       adapters,
       trapOnIdle: true,
     });
-    const err = await caught(() =>
-      (handle.exports["next"] as () => unknown)()
-    );
+    const err = await caught(() => (handle.exports["next"] as () => unknown)());
     assertEq(
       String(err).includes("deadlock detected"),
       true,

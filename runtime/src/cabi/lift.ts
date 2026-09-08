@@ -26,11 +26,7 @@ import {
   type FieldType,
   type ValType,
 } from "./types.ts";
-import {
-  liftErrorContext,
-  liftFuture,
-  liftStream,
-} from "./async_values.ts";
+import { liftErrorContext, liftFuture, liftStream } from "./async_values.ts";
 
 /** Anything lift can pull core values from (CoreValueIter or the variant
  * coercion iterator). */

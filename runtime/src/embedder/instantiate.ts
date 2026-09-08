@@ -18,10 +18,10 @@ import type { ComponentValue, VariantValue } from "../cabi/types.ts";
 import { Trap } from "../cabi/trap.ts";
 import {
   type ComponentHandle,
-  SYNC_ENTRY,
   type HostImports,
   hostResourceType,
   instantiateComponent,
+  SYNC_ENTRY,
 } from "../exec/mod.ts";
 import { camelCase, parseLeafName, pascalCase } from "./casing.ts";
 import {
@@ -33,8 +33,8 @@ import {
   suspending,
 } from "../jspi/suspending.ts";
 import { Translator } from "../shim/mod.ts";
-import { copyCensus, isTrap, isComponentException } from "@polyengine/protocol";
-import { NameCollisionError, ComponentException } from "./errors.ts";
+import { copyCensus, isComponentException, isTrap } from "@polyengine/protocol";
+import { ComponentException, NameCollisionError } from "./errors.ts";
 import { type ImportLeaf, requiredImports } from "./imports.ts";
 import { hostDtorCall } from "../exec/boundary.ts";
 import {

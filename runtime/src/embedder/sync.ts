@@ -255,10 +255,8 @@ function recordView(rec: object): unknown {
  * instead of leaving the function itself alone. */
 export type Sync<F> = F extends (...a: infer A) => Promise<infer R>
   ? (...a: A) => R
-  : F extends (...a: never[]) => unknown
-    ? F // non-Promise functions (e.g. `drop(): void`) pass through unchanged
-  : F extends object
-    ? { [K in keyof F]: Sync<F[K]> } // interfaces, class instances, records
+  : F extends (...a: never[]) => unknown ? F // non-Promise functions (e.g. `drop(): void`) pass through unchanged
+  : F extends object ? { [K in keyof F]: Sync<F[K]> } // interfaces, class instances, records
   : F;
 
 /**

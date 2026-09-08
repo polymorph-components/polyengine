@@ -97,7 +97,9 @@ Deno.test({
         jspi,
       });
       try {
-        return `ok ${JSON.stringify(await (handle.exports[field] as () => unknown)())}`;
+        return `ok ${
+          JSON.stringify(await (handle.exports[field] as () => unknown)())
+        }`;
       } catch (e) {
         // Compare the failure TEXT too: "both threw" is not agreement if they
         // threw for different reasons.

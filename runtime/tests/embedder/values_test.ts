@@ -27,7 +27,11 @@ Deno.test({
     assertEq(names.includes("echo-bool"), false, "no kebab spellings survive");
     // Even a sync WIT function returns a Promise: one calling convention.
     const p = v.echoBool(true);
-    assertEq(p instanceof Promise, true, "exports are uniformly Promise-shaped");
+    assertEq(
+      p instanceof Promise,
+      true,
+      "exports are uniformly Promise-shaped",
+    );
     assertEq(await p, true);
   },
 });
@@ -59,7 +63,9 @@ Deno.test({
       true,
     );
     assertEq(
-      String(await caught(() => v.echoChar("ab"))).includes("single-code-point"),
+      String(await caught(() => v.echoChar("ab"))).includes(
+        "single-code-point",
+      ),
       true,
     );
   },
@@ -163,7 +169,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "values: result in FUNCTION-RESULT position resolves T / rejects ComponentException",
+  name:
+    "values: result in FUNCTION-RESULT position resolves T / rejects ComponentException",
   ignore: !ready,
   fn: async () => {
     // `echo-result: func(v: result<u32, string>) -> result<u32, string>`: the
@@ -172,7 +179,11 @@ Deno.test({
     assertEq(await v.echoResult({ kind: "ok", value: 42 }), 42);
 
     const e = await caught(() => v.echoResult({ kind: "err", value: "boom" }));
-    assertEq(e instanceof ComponentException, true, `expected ComponentException, got ${e}`);
+    assertEq(
+      e instanceof ComponentException,
+      true,
+      `expected ComponentException, got ${e}`,
+    );
     assertEq((e as ComponentException).payload, "boom");
     assertEq((e as ComponentException).name, "ComponentException");
   },
@@ -267,7 +278,9 @@ Deno.test({
         { label: "note", type: { kind: "option", type: { kind: "string" } } },
       ],
     } as unknown as Parameters<typeof toHost>[1];
-    const o = { where: "export 'f'" } as unknown as Parameters<typeof toHost>[2];
+    const o = { where: "export 'f'" } as unknown as Parameters<
+      typeof toHost
+    >[2];
 
     // "fields of option type are optional properties": some -> present and
     // UNWRAPPED (not the `{kind, value}` box), none -> the property is absent,

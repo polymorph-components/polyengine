@@ -63,7 +63,10 @@ export class Translator {
       module = source;
     } else {
       module = await WebAssembly.compile(source.slice().buffer as ArrayBuffer);
-      const digest = await crypto.subtle.digest("SHA-256", source.slice().buffer as ArrayBuffer);
+      const digest = await crypto.subtle.digest(
+        "SHA-256",
+        source.slice().buffer as ArrayBuffer,
+      );
       buildHash = Array.from(new Uint8Array(digest)).map((b) =>
         b.toString(16).padStart(2, "0")
       ).join("");

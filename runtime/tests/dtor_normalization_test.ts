@@ -90,9 +90,12 @@ Deno.test("#160/#173: a dtor may run while its own instance is LIVE", async () =
   // A SECOND, synchronous dtor of the same instance, entered while the first
   // is still in flight: it simply runs (CM#705).
   let ranNested = 0;
-  const quick = new ResourceTypeInfo(impl, (() => {
-    ranNested += 1;
-  }) as unknown as (rep: number) => void);
+  const quick = new ResourceTypeInfo(
+    impl,
+    (() => {
+      ranNested += 1;
+    }) as unknown as (rep: number) => void,
+  );
   hostDtorCall(quick, 6);
   assertEq(ranNested, 1, "the nested dtor ran; nothing was refused");
 

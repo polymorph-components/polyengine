@@ -197,7 +197,9 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
   wire.initializers.forEach((init, i) =>
     validateInitializer(init, `initializers[${i}]`)
   );
-  wire.trampolines.forEach((t, i) => validateTrampoline(t, `trampolines[${i}]`));
+  wire.trampolines.forEach((t, i) =>
+    validateTrampoline(t, `trampolines[${i}]`)
+  );
   wire.canonicalOptions.forEach((o, i) =>
     validateCanonicalOptions(o, `canonicalOptions[${i}]`)
   );
@@ -285,7 +287,10 @@ export function loadPlan(wire: WirePlan): LoadedPlan {
     }
     resultTupleTypes.set(decl.results, decl.resultType);
   }
-  const elems = (ts: { element: WireValType | null }[] | undefined, what: string) =>
+  const elems = (
+    ts: { element: WireValType | null }[] | undefined,
+    what: string,
+  ) =>
     (ts ?? []).map((t, i) =>
       t.element === null
         ? null
@@ -383,7 +388,11 @@ function expect(
   if (!cond) throw new PlanError(`${where}: ${what}`);
 }
 
-function expectNumber(o: Record<string, unknown>, field: string, where: string) {
+function expectNumber(
+  o: Record<string, unknown>,
+  field: string,
+  where: string,
+) {
   expect(
     typeof o[field] === "number",
     where,
@@ -403,7 +412,11 @@ function expectNumberOrNull(
   );
 }
 
-function expectString(o: Record<string, unknown>, field: string, where: string) {
+function expectString(
+  o: Record<string, unknown>,
+  field: string,
+  where: string,
+) {
   expect(
     typeof o[field] === "string",
     where,
@@ -429,7 +442,11 @@ function expectNonNegativeInt(
   );
 }
 
-function expectBoolean(o: Record<string, unknown>, field: string, where: string) {
+function expectBoolean(
+  o: Record<string, unknown>,
+  field: string,
+  where: string,
+) {
   expect(
     typeof o[field] === "boolean",
     where,
@@ -475,7 +492,9 @@ function validateCoreDef(def: unknown, where: string): void {
       expectString(d, "intrinsic", where);
       return;
     default:
-      throw new PlanError(`${where}: unknown CoreDef kind ${describeValue(d.kind)}`);
+      throw new PlanError(
+        `${where}: unknown CoreDef kind ${describeValue(d.kind)}`,
+      );
   }
 }
 
@@ -503,7 +522,11 @@ function validateCoreExport(exp: unknown, where: string): void {
 }
 
 function validateInitializer(init: unknown, where: string): void {
-  expect(isRecord(init), where, `must be an object, got ${describeValue(init)}`);
+  expect(
+    isRecord(init),
+    where,
+    `must be an object, got ${describeValue(init)}`,
+  );
   const i = init as Record<string, unknown>;
   expectString(i, "op", where);
   switch (i.op) {
@@ -549,7 +572,9 @@ function validateInitializer(init: unknown, where: string): void {
       expectNumber(i, "instance", where);
       return;
     default:
-      throw new PlanError(`${where}: unknown initializer op ${describeValue(i.op)}`);
+      throw new PlanError(
+        `${where}: unknown initializer op ${describeValue(i.op)}`,
+      );
   }
 }
 
@@ -617,7 +642,12 @@ function validateCanonicalOptions(o: unknown, where: string): void {
   const ct = co.coreType as Record<string, unknown>;
   expectArray(ct, "params", `${where}.coreType`);
   expectArray(ct, "results", `${where}.coreType`);
-  for (const [field, lanes] of [["params", ct.params], ["results", ct.results]] as const) {
+  for (
+    const [field, lanes] of [["params", ct.params], [
+      "results",
+      ct.results,
+    ]] as const
+  ) {
     (lanes as unknown[]).forEach((lane, idx) => {
       expect(
         typeof lane === "string" && CORE_TYPE_LANES.has(lane),
@@ -652,12 +682,18 @@ function validateModule(m: unknown, where: string): void {
       );
       return;
     default:
-      throw new PlanError(`${where}: unknown module kind ${describeValue(mm.kind)}`);
+      throw new PlanError(
+        `${where}: unknown module kind ${describeValue(mm.kind)}`,
+      );
   }
 }
 
 function validateIntrinsicEntry(entry: unknown, where: string): void {
-  expect(isRecord(entry), where, `must be an object, got ${describeValue(entry)}`);
+  expect(
+    isRecord(entry),
+    where,
+    `must be an object, got ${describeValue(entry)}`,
+  );
   const e = entry as Record<string, unknown>;
   expectString(e, "module", where);
   expectString(e, "name", where);
@@ -719,7 +755,9 @@ function validateExport(exp: unknown, where: string): void {
       expectNumber(e, "module", where);
       return;
     default:
-      throw new PlanError(`${where}: unknown export kind ${describeValue(e.kind)}`);
+      throw new PlanError(
+        `${where}: unknown export kind ${describeValue(e.kind)}`,
+      );
   }
 }
 
@@ -735,7 +773,9 @@ function validateTypeExport(t: unknown, where: string): void {
       expectNumber(tt, "type", where);
       return;
     default:
-      throw new PlanError(`${where}: unknown type-export kind ${describeValue(tt.kind)}`);
+      throw new PlanError(
+        `${where}: unknown type-export kind ${describeValue(tt.kind)}`,
+      );
   }
 }
 

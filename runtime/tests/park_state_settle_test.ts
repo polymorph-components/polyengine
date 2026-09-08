@@ -102,7 +102,8 @@ function mkWorld() {
     thread,
     point(): SuspensionPoint<unknown> | undefined {
       return store.waiting.find(
-        (w) => typeof (w as { resume?: unknown }).resume === "function" &&
+        (w) =>
+          typeof (w as { resume?: unknown }).resume === "function" &&
           typeof (w as { abandon?: unknown }).abandon === "function",
       ) as SuspensionPoint<unknown> | undefined;
     },
@@ -148,7 +149,11 @@ function parkOnWait(cancellable: boolean) {
   const wset = new WaitableSet();
   const seti = w.inst.handles.add(wset);
   const o = opts(w.inst, { cancellable });
-  const ctx = { componentInstance: () => w.inst, options: () => o, resultTypes: () => [] };
+  const ctx = {
+    componentInstance: () => w.inst,
+    options: () => o,
+    resultTypes: () => [],
+  };
   const wait = createWaitableSetWait({ options: 0 }, ctx, w.inst, "jspi");
   const parked = w.run(() => wait(seti, 0));
   assert(parked instanceof Promise, "the wait parked");
@@ -223,7 +228,11 @@ Deno.test("#106 SITE 4: abandon clears hasSyncWaiter; cancel-copy and drop stay 
   // The observables the flag exists for: a concurrent cancel-copy trapped
   // "sync waiter" while set (cancelCopy), and Waitable.drop asserts
   // `!hasSyncWaiter`. Both must be legal again once no waiter exists.
-  const cancel = createStreamCancelRead({ streamTable: 0, async: false }, ctx, w.inst);
+  const cancel = createStreamCancelRead(
+    { streamTable: 0, async: false },
+    ctx,
+    w.inst,
+  );
   w.run(() => cancel(ri));
   assertEq(await settled, "rejected: store teardown");
 });
@@ -239,7 +248,10 @@ Deno.test("#106 SITE 5: abandon clears the subtask's hasSyncWaiter", async () =>
   const sti = w.inst.handles.add(st);
   const cancel = createSubtaskCancel({ async: false }, w.inst, "jspi");
   const parked = w.run(() => cancel(sti));
-  assert(parked instanceof Promise, "sync subtask.cancel parked (unresolved callee)");
+  assert(
+    parked instanceof Promise,
+    "sync subtask.cancel parked (unresolved callee)",
+  );
   assertEq(st.hasSyncWaiter, true);
   const settled = rejected(parked as Promise<unknown>);
   const point = w.point();

@@ -12,7 +12,11 @@ import {
   ImportResolver,
   trackKey,
 } from "../../src/embedder/version.ts";
-import { camelCase, parseLeafName, pascalCase } from "../../src/embedder/casing.ts";
+import {
+  camelCase,
+  parseLeafName,
+  pascalCase,
+} from "../../src/embedder/casing.ts";
 import { NameCollisionError } from "../../src/embedder/errors.ts";
 import { checkNoCollisions } from "../../src/embedder/values.ts";
 
@@ -32,7 +36,11 @@ Deno.test("track key: major 0 tracks the minor", () => {
 
 Deno.test("track key: 0.0.z and prereleases belong to no track", () => {
   assertEq(trackKey(`${P}@0.0.1`), null, "patch-only: compatible with nothing");
-  assertEq(trackKey(`${P}@0.2.0-rc-2023-10-18`), null, "prerelease is exact-only");
+  assertEq(
+    trackKey(`${P}@0.2.0-rc-2023-10-18`),
+    null,
+    "prerelease is exact-only",
+  );
   assertEq(trackKey(P), null, "unversioned ids have no track");
 });
 
@@ -77,7 +85,11 @@ Deno.test("max-wins: the highest full version claims the track", () => {
   // Registration order must not matter: 0.2.12 > 0.2.9 > 0.2.6 numerically,
   // not lexically (a string compare would pick "0.2.9").
   assertEq(r.resolve(`${P}@0.2.4`)?.value === hi, true);
-  assertEq(r.resolve(`${P}@0.2.6`)?.value === lo, true, "exact beats the track");
+  assertEq(
+    r.resolve(`${P}@0.2.6`)?.value === lo,
+    true,
+    "exact beats the track",
+  );
   void mid;
 });
 
@@ -180,7 +192,10 @@ Deno.test("casing: later fragments capitalize, remainders are preserved", () => 
 });
 
 Deno.test("mangled leaf names decode to resource membership", () => {
-  assertEq(parseLeafName("make-counter"), { form: "plain", name: "make-counter" });
+  assertEq(parseLeafName("make-counter"), {
+    form: "plain",
+    name: "make-counter",
+  });
   assertEq(parseLeafName("[constructor]counter"), {
     form: "constructor",
     resource: "counter",

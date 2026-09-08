@@ -26,7 +26,11 @@ function assertRangeError(fn: () => void, msg: string): void {
   } catch (e) {
     err = e;
   }
-  assertEq(err instanceof AssertionError, true, `${msg}: expected AssertionError, got ${err}`);
+  assertEq(
+    err instanceof AssertionError,
+    true,
+    `${msg}: expected AssertionError, got ${err}`,
+  );
   assertEq(
     String((err as Error)?.message ?? "").includes("out of range"),
     true,
@@ -89,14 +93,20 @@ Deno.test("storeInt: out-of-range s16 raises the host-precondition error", () =>
 
 Deno.test("storeInt: out-of-range u32 raises the host-precondition error", () => {
   const mem = freshMem();
-  assertRangeError(() => storeInt(mem, 0x1_0000_0000, 0, 4, false), "u32 over max");
+  assertRangeError(
+    () => storeInt(mem, 0x1_0000_0000, 0, 4, false),
+    "u32 over max",
+  );
   assertRangeError(() => storeInt(mem, -1, 0, 4, false), "u32 under min");
 });
 
 Deno.test("storeInt: out-of-range s64 (bigint) raises the host-precondition error", () => {
   const mem = freshMem();
   assertRangeError(() => storeInt(mem, 1n << 63n, 0, 8, true), "s64 over max");
-  assertRangeError(() => storeInt(mem, -(1n << 63n) - 1n, 0, 8, true), "s64 under min");
+  assertRangeError(
+    () => storeInt(mem, -(1n << 63n) - 1n, 0, 8, true),
+    "s64 under min",
+  );
 });
 
 Deno.test("storeInt: out-of-range u64 (bigint) raises the host-precondition error", () => {

@@ -17,15 +17,22 @@
 
 import { assertEq } from "./support/asserts.ts";
 import { Table } from "../src/cabi/handles.ts";
-import { loadPlan, PlanError, SUPPORTED_FORMAT_VERSION } from "../src/plan/mod.ts";
+import {
+  loadPlan,
+  PlanError,
+  SUPPORTED_FORMAT_VERSION,
+} from "../src/plan/mod.ts";
 import type { WirePlan } from "../src/plan/format.ts";
-import { createTrampoline, type TrampolineContext } from "../src/intrinsics/mod.ts";
+import {
+  createTrampoline,
+  type TrampolineContext,
+} from "../src/intrinsics/mod.ts";
 import { createTaskReturn } from "../src/intrinsics/async_builtins.ts";
 import {
   ComponentInstanceState,
   ErrorContext,
-  pushCurrentThread,
   popCurrentThread,
+  pushCurrentThread,
   Store,
   Task,
   Thread,
@@ -35,7 +42,11 @@ import type { ValType } from "../src/cabi/types.ts";
 function minimalPlan(overrides: Partial<WirePlan> = {}): WirePlan {
   return {
     formatVersion: SUPPORTED_FORMAT_VERSION,
-    producer: { shimVersion: "0", wasmtimeEnviron: "49.0.0-dev+4675ee1", features: [] },
+    producer: {
+      shimVersion: "0",
+      wasmtimeEnviron: "49.0.0-dev+4675ee1",
+      features: [],
+    },
     component: { sha256: "0".repeat(64), len: 0 },
     modules: [],
     initializers: [],
@@ -57,9 +68,15 @@ function expectPlanError(fn: () => unknown, includes: string): void {
   try {
     fn();
   } catch (e) {
-    if (!(e instanceof PlanError)) throw new Error(`expected PlanError, got ${e}`);
+    if (!(e instanceof PlanError)) {
+      throw new Error(`expected PlanError, got ${e}`);
+    }
     if (!e.message.includes(includes)) {
-      throw new Error(`expected message to include ${JSON.stringify(includes)}, got: ${e.message}`);
+      throw new Error(
+        `expected message to include ${
+          JSON.stringify(includes)
+        }, got: ${e.message}`,
+      );
     }
     return;
   }
@@ -113,8 +130,16 @@ Deno.test("v3: task-return decls require resultType and build the tuple map", ()
     types: [tupleType as never],
     trampolines: [decl as never],
   }));
-  assertEq(loaded.resultTupleTypes.get(7), 0, "raw TypeTupleIndex -> plan.types");
-  assertEq(loaded.resultTupleTypes.get(0), undefined, "no aliasing of the two spaces");
+  assertEq(
+    loaded.resultTupleTypes.get(7),
+    0,
+    "raw TypeTupleIndex -> plan.types",
+  );
+  assertEq(
+    loaded.resultTupleTypes.get(0),
+    undefined,
+    "no aliasing of the two spaces",
+  );
 
   const missing = { ...decl } as Record<string, unknown>;
   delete missing.resultType;
@@ -138,7 +163,10 @@ Deno.test("v3: task-return decls require resultType and build the tuple map", ()
     () =>
       loadPlan(minimalPlan({
         types: [tupleType as never, tupleType as never],
-        trampolines: [decl as never, { ...decl, index: 1, resultType: 1 } as never],
+        trampolines: [
+          decl as never,
+          { ...decl, index: 1, resultType: 1 } as never,
+        ],
       })),
     "maps to both type 0 and type 1",
   );
@@ -163,15 +191,24 @@ Deno.test("v3: error-context transfer uses the error-context table space", () =>
     errorContextTableInstance: (i: number) => (i === 0 ? ecSrc : ecDst),
   } as unknown as TrampolineContext;
 
-  const transfer = createTrampoline({ kind: "error-context-transfer", index: 0 } as never, ctx);
+  const transfer = createTrampoline(
+    { kind: "error-context-transfer", index: 0 } as never,
+    ctx,
+  );
   const e = new ErrorContext("boom");
   const handle = ecSrc.handles.add(e);
   const out = transfer(handle, 0, 1) as number;
-  assertEq(ecDst.handles.get(out) === e, true, "landed in the error-context table's instance");
+  assertEq(
+    ecDst.handles.get(out) === e,
+    true,
+    "landed in the error-context table's instance",
+  );
 });
 
 Deno.test("v3: an out-of-range error-context table is a loud PlanError", () => {
-  const loaded = loadPlan(minimalPlan({ errorContextTables: [{ instance: 0 }] }));
+  const loaded = loadPlan(
+    minimalPlan({ errorContextTables: [{ instance: 0 }] }),
+  );
   // The executor's accessor shape, exercised directly: absence must fail
   // loudly rather than defaulting to table 0 (the `?? 0` this replaced).
   const accessor = (i: number) => {
@@ -192,14 +229,21 @@ Deno.test("v3: error-context transfer refuses a missing table argument", () => {
   const ctx = {
     errorContextTableInstance: () => inst,
   } as unknown as TrampolineContext;
-  const transfer = createTrampoline({ kind: "error-context-transfer", index: 0 } as never, ctx);
+  const transfer = createTrampoline(
+    { kind: "error-context-transfer", index: 0 } as never,
+    ctx,
+  );
   let refused = false;
   try {
     (transfer as (...a: unknown[]) => unknown)(0);
   } catch {
     refused = true;
   }
-  assertEq(refused, true, "no silent `?? 0` default for a missing table argument");
+  assertEq(
+    refused,
+    true,
+    "no silent `?? 0` default for a missing table argument",
+  );
 });
 
 // ---------------------------------------------------------------------------

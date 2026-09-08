@@ -64,7 +64,11 @@ Deno.test({
       false,
       "no microtask elapsed between the call and the throw",
     );
-    assertEq(caughtErr instanceof ComponentException, true, `got: ${caughtErr}`);
+    assertEq(
+      caughtErr instanceof ComponentException,
+      true,
+      `got: ${caughtErr}`,
+    );
     assertEq((caughtErr as ComponentException).payload, "boom");
     // Drain the queued microtask so it doesn't leak into a later test.
     await new Promise((r) => queueMicrotask(() => r(undefined)));

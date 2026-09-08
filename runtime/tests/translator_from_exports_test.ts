@@ -30,7 +30,8 @@ const trivial = await maybeRead(trivialUrl);
 const ready = shimBytes !== null && trivial !== null;
 
 Deno.test({
-  name: "fromExports: a native wasm-module import translates identically to create(bytes)",
+  name:
+    "fromExports: a native wasm-module import translates identically to create(bytes)",
   ignore: !ready,
   fn: async () => {
     // Deno's ESM wasm integration: dynamic import instantiates the

@@ -103,7 +103,9 @@ export function useValues(instance: EmbedderInstance) {
       ValuesExports["echoOptionNested"],
       (
         v: { kind: "some"; value: number } | { kind: "none" } | undefined,
-      ) => Promise<{ kind: "some"; value: number } | { kind: "none" } | undefined>
+      ) => Promise<
+        { kind: "some"; value: number } | { kind: "none" } | undefined
+      >
     >
   >;
   const none: ReturnType<ValuesExports["echoOptionNested"]> extends

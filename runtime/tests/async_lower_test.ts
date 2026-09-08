@@ -22,8 +22,8 @@ import {
   ComponentInstanceState,
   EventCode,
   NeedsJspi,
-  pushCurrentThread,
   popCurrentThread,
+  pushCurrentThread,
   Store,
   Subtask,
   SubtaskState,
@@ -34,7 +34,10 @@ import {
   WaitableSet,
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
-import { BLOCKED, createSubtaskCancel } from "../src/intrinsics/async_builtins.ts";
+import {
+  BLOCKED,
+  createSubtaskCancel,
+} from "../src/intrinsics/async_builtins.ts";
 // cancellation discard: the cancel-discard opt-out, read off the host function exactly as
 // `executor.ts buildLoweredImport` reads it from the embedder's imports record.
 import { deferCancel, isDeferCancel } from "../src/jspi/suspending.ts";
@@ -248,12 +251,18 @@ Deno.test("sync lower of a Promise-returning host import needs JSPI", () => {
     mode: "plain",
     suspendable: false,
   });
-  const task = new Task(syncFt, {
-    async_: false,
-    callback: false,
-    stringEncoding: "utf8",
-    memory: null,
-  }, inst, () => [], () => {});
+  const task = new Task(
+    syncFt,
+    {
+      async_: false,
+      callback: false,
+      stringEncoding: "utf8",
+      memory: null,
+    },
+    inst,
+    () => [],
+    () => {},
+  );
   const thread = new Thread(task, (function* () {})());
   pushCurrentThread(thread);
   let raised: unknown;

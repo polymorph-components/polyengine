@@ -13,8 +13,8 @@ import {
   chooseMode,
   enterWasm,
   planNeedsSuspension,
-  SuspensionPoint,
   suspendingImport,
+  SuspensionPoint,
 } from "../../src/jspi/mod.ts";
 import { isSupported } from "../../src/jspi/mechanics.ts";
 import { entryRefusal } from "../../src/task/scheduler.ts";
@@ -199,7 +199,10 @@ Deno.test("bridge: the invariant is checked, not hoped for", () => {
     } catch {
       threw = true;
     }
-    assert(threw, `mixture (${mode}, entries=${e}, imports=${i}) must be rejected`);
+    assert(
+      threw,
+      `mixture (${mode}, entries=${e}, imports=${i}) must be rejected`,
+    );
   }
 });
 
@@ -272,7 +275,9 @@ Deno.test("bridge: planNeedsSuspension recognises both sources of blocking", () 
       `${kind} (async form)`,
     );
   }
-  for (const kind of ["stream-read", "stream-write", "future-read", "future-write"]) {
+  for (
+    const kind of ["stream-read", "stream-write", "future-read", "future-write"]
+  ) {
     assertEq(
       planNeedsSuspension({
         canonicalOptions: [{ async: true, callback: 0 }],
@@ -312,7 +317,10 @@ Deno.test("plain mode: lifted exports still return values, not Promises", async 
   let shim: Uint8Array, guest: Uint8Array;
   try {
     shim = await Deno.readFile(
-      new URL("target/wasm32-unknown-unknown/release/translator_shim.wasm", root),
+      new URL(
+        "target/wasm32-unknown-unknown/release/translator_shim.wasm",
+        root,
+      ),
     );
     guest = await Deno.readFile(
       new URL("examples/guests/build/hello.component.wasm", root),

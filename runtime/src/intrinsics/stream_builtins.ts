@@ -43,13 +43,17 @@ import {
   needsJspi,
   ReadableFutureEnd,
   ReadableStreamEnd,
+  sameElemType as sameElem,
   SharedFutureImpl,
   SharedStreamImpl,
-  sameElemType as sameElem,
   WritableFutureEnd,
   WritableStreamEnd,
 } from "../task/mod.ts";
-import { cabiOptions, type CoreFn, type ResolvedOptions } from "../exec/boundary.ts";
+import {
+  cabiOptions,
+  type CoreFn,
+  type ResolvedOptions,
+} from "../exec/boundary.ts";
 import { BLOCKED } from "./async_builtins.ts";
 
 /**
@@ -186,9 +190,7 @@ function streamCopy(input: {
   ): EventTuple => {
     reclaim();
     assert_(end.copying(), "stream event on a non-copying end");
-    end.state = result === CopyResult.DROPPED
-      ? CopyState.DONE
-      : CopyState.IDLE;
+    end.state = result === CopyResult.DROPPED ? CopyState.DONE : CopyState.IDLE;
     assert_(
       buffer.progress <= BUFFER_MAX_LENGTH,
       "stream progress out of packing range",
@@ -527,7 +529,10 @@ export function createErrorContextNew(
   return (ptr?: number, taggedCodeUnits?: number) => {
     ptr = (ptr ?? 0) >>> 0;
     taggedCodeUnits = (taggedCodeUnits ?? 0) >>> 0;
-    trapIf(!inst.mayLeave, "error-context.new: cannot leave component instance");
+    trapIf(
+      !inst.mayLeave,
+      "error-context.new: cannot leave component instance",
+    );
     const cx = new LiftLowerContext(cabiOptions(opts), inst, null);
     const s = loadStringFromRange(cx, ptr, taggedCodeUnits);
     return inst.handles.add(new ErrorContext(s));
@@ -845,7 +850,10 @@ function transferAsyncEnd(input: {
   trapIf(!(e instanceof EndT), `${what}: handle is not a readable ${what} end`);
   const end = e as CopyEnd;
   trapIf(!sameElem(end.shared.t, srcElem), `${what}: source element mismatch`);
-  trapIf(!sameElem(end.shared.t, dstElem), `${what}: destination element mismatch`);
+  trapIf(
+    !sameElem(end.shared.t, dstElem),
+    `${what}: destination element mismatch`,
+  );
   // definitions.py `lift_async_value`: an end that is mid-copy or parked in a
   // waitable set cannot be handed on. The messages match the suite's
   // `assert_trap` text.

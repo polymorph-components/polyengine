@@ -12,9 +12,14 @@
 // Promise is refused, naming `suspending()`. Silent degradation is what the
 // declaration exists to prevent.
 
-import { haveFixture, instantiateFixture, jspiSupported, testdata } from "./harness.ts";
+import {
+  haveFixture,
+  instantiateFixture,
+  jspiSupported,
+  testdata,
+} from "./harness.ts";
 import { transcript } from "./support.ts";
-import { Gauge, SuspendingGauge, suspending } from "./probe.ts";
+import { Gauge, suspending, SuspendingGauge } from "./probe.ts";
 import { handRolledSuspending } from "./probe_zero_import.ts";
 
 /**
@@ -26,10 +31,12 @@ function later<T>(value: T): Promise<T> {
   return new Promise((r) => setTimeout(() => r(value), 0));
 }
 
-const importsReady = (await haveFixture(testdata("imports"))) && jspiSupported();
+const importsReady = (await haveFixture(testdata("imports"))) &&
+  jspiSupported();
 
 Deno.test({
-  name: "conventions/f: a MARKED sync-typed import parks and resumes with the value",
+  name:
+    "conventions/f: a MARKED sync-typed import parks and resumes with the value",
   ignore: !importsReady,
   fn: async () => {
     await transcript("f-suspending-plain-import", async (t) => {
@@ -88,7 +95,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "conventions/f: an explicit jspi:false refuses a MARKED import's Promise",
+  name:
+    "conventions/f: an explicit jspi:false refuses a MARKED import's Promise",
   ignore: !importsReady,
   fn: async () => {
     await transcript("f-suspending-jspi-false", async (t) => {
@@ -111,7 +119,8 @@ const GAUGE = "runtime/tests/embedder/suspending-method.wasm";
 const gaugeReady = (await haveFixture(GAUGE)) && jspiSupported();
 
 Deno.test({
-  name: "conventions/f: suspending mark — a mark on the class PROTOTYPE relays to instances",
+  name:
+    "conventions/f: suspending mark — a mark on the class PROTOTYPE relays to instances",
   ignore: !gaugeReady,
   fn: async () => {
     await transcript("f-suspending-prototype-relay", async (t) => {

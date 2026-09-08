@@ -13,10 +13,7 @@
 // libcalls.rs takes unsigned pointers.
 
 import { assertEq } from "./support/asserts.ts";
-import {
-  createTranscoder,
-  TranscodeMemory,
-} from "../src/intrinsics/mod.ts";
+import { createTranscoder, TranscodeMemory } from "../src/intrinsics/mod.ts";
 
 // ~2.4 GiB: large enough that an address >= 2^31 is in bounds. V8 reserves
 // wasm memory lazily on 64-bit hosts; if this allocation fails here, the
@@ -101,6 +98,10 @@ Deno.test({
     // property write (or, for other ops, `.set()` throws a non-Trap
     // RangeError) — the correct location is left untouched.
     const got = [...new Uint8Array(memory.buffer).subarray(dstP, dstP + 4)];
-    assertEq(got, [0x41, 0x00, 0xff, 0x00], "expected inflated utf16 at unsigned dst");
+    assertEq(
+      got,
+      [0x41, 0x00, 0xff, 0x00],
+      "expected inflated utf16 at unsigned dst",
+    );
   },
 });

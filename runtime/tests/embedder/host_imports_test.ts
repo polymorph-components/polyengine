@@ -8,7 +8,12 @@
 // the host has to keep its own identity table — the friction this layer deletes.
 
 import { assertEq } from "../support/asserts.ts";
-import { caught, haveFixture, instantiateFixture, testdata } from "./support.ts";
+import {
+  caught,
+  haveFixture,
+  instantiateFixture,
+  testdata,
+} from "./support.ts";
 import { ComponentException, Trap } from "@polyengine/protocol";
 import { INTERNAL_HOST_REGISTRIES } from "../../src/embedder/instantiate.ts";
 
@@ -196,7 +201,11 @@ Deno.test({
       `the trap must name the import leaf: ${e}`,
     );
     assertEq(String(e).includes("TypeError"), true, `${e}`);
-    assertEq(String(e).includes("ComponentException"), true, "…and say how to signal err");
+    assertEq(
+      String(e).includes("ComponentException"),
+      true,
+      "…and say how to signal err",
+    );
   },
 });
 
@@ -279,7 +288,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "error model: ComponentException's PAYLOAD reaches the guest's err case",
+  name:
+    "error model: ComponentException's PAYLOAD reaches the guest's err case",
   ignore: !payloadReady,
   fn: async () => {
     // The whole branded-throw path end to end: `throw new ComponentException("boom")`
@@ -307,7 +317,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "error model: an unbranded throw from a FALLIBLE import is still a trap",
+  name:
+    "error model: an unbranded throw from a FALLIBLE import is still a trap",
   ignore: !payloadReady,
   fn: async () => {
     // Having an err side does not make a stray platform error into one.
@@ -324,10 +335,13 @@ Deno.test({
 // B2: a borrow of a never-registered host instance is CALL-SCOPED
 // ---------------------------------------------------------------------------
 
-const borrowReady = await haveFixture("runtime/tests/embedder/host-borrow.wasm");
+const borrowReady = await haveFixture(
+  "runtime/tests/embedder/host-borrow.wasm",
+);
 
 Deno.test({
-  name: "host resources: a borrow-allocated rep is released when the call returns",
+  name:
+    "host resources: a borrow-allocated rep is released when the call returns",
   ignore: !borrowReady,
   fn: async () => {
     // contracts/embedder-api.md 2x4 table, bottom-right: "a
@@ -339,9 +353,12 @@ Deno.test({
       "runtime/tests/embedder/host-borrow.wasm",
       { "host:api/res": { R: Cell, value: (r: Cell) => r.v } },
     );
-    const registries = (c as unknown as Record<symbol, Map<number, {
-      liveCount: number;
-    }>>)[INTERNAL_HOST_REGISTRIES];
+    const registries = (c as unknown as Record<
+      symbol,
+      Map<number, {
+        liveCount: number;
+      }>
+    >)[INTERNAL_HOST_REGISTRIES];
     const registry = registries.get(0)!;
 
     assertEq(registry.liveCount, 0, "nothing registered yet");
@@ -361,7 +378,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "host resources: an own-registered instance survives the call, as owned",
+  name:
+    "host resources: an own-registered instance survives the call, as owned",
   ignore: !borrowReady,
   fn: async () => {
     // The other half of the rule: only a rep minted *for* the borrow is
@@ -370,11 +388,14 @@ Deno.test({
       "runtime/tests/embedder/host-borrow.wasm",
       { "host:api/res": { R: Cell, value: (r: Cell) => r.v } },
     );
-    const registries = (c as unknown as Record<symbol, Map<number, {
-      liveCount: number;
-      repFor(i: unknown): number;
-      hasRep(r: number): boolean;
-    }>>)[INTERNAL_HOST_REGISTRIES];
+    const registries = (c as unknown as Record<
+      symbol,
+      Map<number, {
+        liveCount: number;
+        repFor(i: unknown): number;
+        hasRep(r: number): boolean;
+      }>
+    >)[INTERNAL_HOST_REGISTRIES];
     const registry = registries.get(0)!;
     const cell = new Cell(5);
     const rep = registry.repFor(cell); // as if the guest had been given an own
@@ -390,7 +411,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "host resources: a resource import with no importedResources table is loud",
+  name:
+    "host resources: a resource import with no importedResources table is loud",
   ignore: !borrowReady,
   fn: async () => {
     const { artifactsOf } = await import("./support.ts");

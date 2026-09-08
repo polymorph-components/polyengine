@@ -5,14 +5,14 @@
 
 import {
   type CanonicalOptions,
-  coreFuncTypeEquals,
-  CoreValueIter,
   type ComponentValue,
   type CoreFuncType,
+  coreFuncTypeEquals,
   type CoreType,
   type CoreValue,
-  type FuncType,
+  CoreValueIter,
   flattenFunctype,
+  type FuncType,
   liftFlatValues,
   LiftLowerContext,
   lowerFlatValues,
@@ -25,34 +25,34 @@ import {
   trap,
   trapIf,
 } from "../cabi/mod.ts";
-import { AssertionError, assert_ } from "../cabi/trap.ts";
+import { assert_, AssertionError } from "../cabi/trap.ts";
 import {
+  addInstancePoisonedListener,
   type BlockRequest,
   type Cancelled,
   ComponentInstanceState,
   driveSyncLift,
+  entryRefusal,
   EventCode,
-  withActivation,
-  addInstancePoisonedListener,
+  type EventTuple,
   hasRealHostCall,
   isInstancePoisoned,
-  type EventTuple,
   NeedsJspi,
   needsJspi,
+  notifyInstancePoisoned,
   packSubtaskResult,
   PendingCapability,
-  notifyInstancePoisoned,
   realHostCalls,
   Store,
   storeQuiescent,
   Subtask,
-  SyncEntryBusy,
-  WaitableSet,
   SubtaskState,
+  SyncEntryBusy,
   Task,
   type TaskOptions,
   Thread,
-  entryRefusal,
+  WaitableSet,
+  withActivation,
 } from "../task/mod.ts";
 import { currentTask } from "../task/scheduler.ts";
 import { PlanError } from "../plan/loader.ts";
@@ -376,7 +376,6 @@ function isPromiseLike(v: unknown): v is PromiseLike<unknown> {
   );
 }
 
-
 // ---------------------------------------------------------------------------
 // Handshake probe
 // ---------------------------------------------------------------------------
@@ -406,14 +405,21 @@ function describeWaiter(t: unknown): string {
   const kind = w?.constructor?.name ?? "?";
   let verdict = "?";
   try {
-    verdict = w.ready?.() ? "READY" : (w.readyFunc === null ? "explicit" : "not-ready");
+    verdict = w.ready?.()
+      ? "READY"
+      : (w.readyFunc === null ? "explicit" : "not-ready");
   } catch (e) {
     verdict = `threw:${e}`;
   }
   return `${kind}[${verdict}]`;
 }
 
-function traceDrive(loop: string, store: Store, done: () => boolean, branch: string): void {
+function traceDrive(
+  loop: string,
+  store: Store,
+  done: () => boolean,
+  branch: string,
+): void {
   if (!DRIVE_TRACE) return;
   let doneVerdict = "?";
   try {
@@ -423,7 +429,10 @@ function traceDrive(loop: string, store: Store, done: () => boolean, branch: str
   }
   const waiters = store.waiting.map(describeWaiter).join(",");
   const awaiters = [...store.awaiting].map((t) => {
-    const a = t as { constructor?: { name?: string }; task?: { label?: string } };
+    const a = t as {
+      constructor?: { name?: string };
+      task?: { label?: string };
+    };
     return `${a?.constructor?.name ?? "?"}`;
   }).join(",");
   console.error(
@@ -569,7 +578,10 @@ function driveLoop(
 
 /** A settled parked-thread promise, tagged with the thread that owns it. */
 type AwaitWinner = {
-  t: { awaiting: Promise<unknown> | null; resumeWith(v: unknown, f?: { error: unknown }): void };
+  t: {
+    awaiting: Promise<unknown> | null;
+    resumeWith(v: unknown, f?: { error: unknown }): void;
+  };
   /**
    * The promise this tag was minted from — i.e. what `t.awaiting` held at
    * `tagAwait` time. Carried so a resumption site can check that the thread is
@@ -731,7 +743,10 @@ export function whenStoreDriverIdle(store: Store): Promise<void> {
 // drops the speculative entry on its way out of the race, and re-evaluates
 // `done()` — which is exactly the stand-down the pumps were always supposed to
 // perform, now prompt instead of "whenever the host happens to answer".
-const driverArrivals = new WeakMap<Store, { p: Promise<null>; r: () => void }>();
+const driverArrivals = new WeakMap<
+  Store,
+  { p: Promise<null>; r: () => void }
+>();
 
 /** A one-shot that resolves (to `null`, the race's "nothing settled" value)
  * when another driver starts on `store`. */
@@ -796,7 +811,10 @@ function fireDriverArrival(store: Store): void {
 // two mean different things — "another loop is driving this store, stand
 // down" versus "your snapshot is stale, re-take it" — and only the first is
 // what `fireDriverArrival`'s callers and doc comment assert.
-const hostCallArrivals = new WeakMap<Store, { p: Promise<null>; r: () => void }>();
+const hostCallArrivals = new WeakMap<
+  Store,
+  { p: Promise<null>; r: () => void }
+>();
 
 /** A one-shot that resolves (to `null`, the race's "nothing settled" value)
  * when a new host call is registered on `store`. */
@@ -833,7 +851,10 @@ function fireHostCallArrival(store: Store): void {
  * act", not "the host owes an event" — the same distinction `hasRealHostCall`
  * draws.)
  */
-export function registerHostCall(store: Store, promise: Promise<unknown>): void {
+export function registerHostCall(
+  store: Store,
+  promise: Promise<unknown>,
+): void {
   store.pendingHostCalls.add(promise);
   fireHostCallArrival(store);
 }
@@ -890,7 +911,10 @@ export function registerHostCall(store: Store, promise: Promise<unknown>): void 
 // the keeper wakes, re-snapshots, and re-parks.
 
 const settlementPumps = new WeakSet<Store>();
-const settlementNudges = new WeakMap<Store, { p: Promise<void>; r: () => void }>();
+const settlementNudges = new WeakMap<
+  Store,
+  { p: Promise<void>; r: () => void }
+>();
 
 function armSettlementNudge(store: Store): Promise<void> {
   let n = settlementNudges.get(store);
@@ -1030,415 +1054,422 @@ async function driveAsync(
   // stands down within a microtask.
   if (depth > 1) fireDriverArrival(store);
   try {
-  let claimHops = 0;
-  for (;;) {
-    traceDrive("driveAsync", store, done, "top");
-    // FIRST: service every settled-but-unserviced activation tail, in settle
-    // order (`Store.settled` — armed eagerly at park time). A settled
-    // `awaitValue` is the rest of an activation that already finished its
-    // wasm; the reference runs that bookkeeping atomically inside
-    // `Thread.resume`, so nothing may be scheduled past it (`Store.tick`
-    // refuses while the queue is non-empty). Servicing after ticking let a
-    // freshly-resumed caller race into an entry gate while a finished
-    // callee's body had yet to release the exclusive slot — cancellable.wast
-    // then reported STARTING for an entry the reference admits.
-    store.serviceSettled();
-    if (store.hostFailure !== undefined) throw takeHostFailure(store);
-    // A pending resumption of THIS store is an engine-driven resumption in
-    // flight: its activation has not yet parked again or finished. It will
-    // die on its own — parking consumes it (`blockCurrentActivation`),
-    // finishing releases it (`Store.noteAwaiting`'s settle continuation) — so
-    // yield microtasks until it does. The driver must NOT blanket-clear here:
-    // an entry may have been taken by a guest built-in settling another
-    // activation's suspension (`subtask.cancel` delivering a cancellation),
-    // and clearing it before that activation runs re-opens the
-    // mis-attribution window the entry exists to close.
-    //
-    // PER-STORE (issue #210): read only THIS store's entries. Activations
-    // never cross stores, so another store's pending resumption is none of
-    // this loop's business — and a gate shared across stores would spin an
-    // idle store's driver here, to its death at the hop bound below in
-    // ~311ms, merely because ANOTHER store's guest was dwelling on a slow
-    // host import.
-    if (store.hasPendingResumptions()) {
-      traceDrive("driveAsync", store, done, "yield-pending");
-      // Bounded: a pending entry that never dies is an internal bug (every
-      // path out of a resumed activation releases it — park, finish, trap),
-      // and a pure-microtask wait would otherwise starve the event loop and
-      // every stall timer with it. Interleave macrotask hops so timers stay
-      // alive, and fail loudly rather than spin forever. Scoped per store,
-      // this is again the internal-bug detector it was meant to be.
-      claimHops++;
-      assert_(
-        claimHops < 10_000,
-        "driveAsync: a resumed-activation claim was never released " +
-          "(the activation neither parked, finished, nor trapped)",
-      );
-      if (claimHops % 100 === 0) {
-        await new Promise((r) => setTimeout(r, 0));
-      } else {
-        await Promise.resolve();
-      }
-      continue;
-    }
-    claimHops = 0;
-    while (store.tick()) {
+    let claimHops = 0;
+    for (;;) {
+      traceDrive("driveAsync", store, done, "top");
+      // FIRST: service every settled-but-unserviced activation tail, in settle
+      // order (`Store.settled` — armed eagerly at park time). A settled
+      // `awaitValue` is the rest of an activation that already finished its
+      // wasm; the reference runs that bookkeeping atomically inside
+      // `Thread.resume`, so nothing may be scheduled past it (`Store.tick`
+      // refuses while the queue is non-empty). Servicing after ticking let a
+      // freshly-resumed caller race into an entry gate while a finished
+      // callee's body had yet to release the exclusive slot — cancellable.wast
+      // then reported STARTING for an entry the reference admits.
+      store.serviceSettled();
       if (store.hostFailure !== undefined) throw takeHostFailure(store);
-      // FAIRNESS between tick-able threads and promise-parked ones. A thread
-      // that is READY again on every resume (the callback-ABI YIELD spin)
-      // would otherwise monopolize this drain while a parked thread's
-      // settled promise waits (the starvation that hung
-      // drop-subtask.wast:139), and the engine's own continuations (jspi
-      // pin (j)) only ever land on microtask turns. One hop per tick; bail
-      // to the top the moment an activation tail lands.
-      if (store.awaiting.size > 0) {
-        await Promise.resolve();
-        if (store.hasServiceableSettled()) break;
-      }
-    }
-    if (store.hostFailure !== undefined) throw takeHostFailure(store);
-    if (done()) {
-      traceDrive("driveAsync", store, done, "EXIT-done");
-      return "done";
-    }
-    // Only a SERVICEABLE tail is a reason to loop again: a queue holding
-    // only tails DEFERRED on a non-enterable instance (issue #156) would
-    // spin this loop hot — nothing in the cycle awaits.
-    if (store.hasServiceableSettled() || store.hasPendingResumptions()) {
-      continue;
-    }
-    // Service promise-parked threads (jspi).
-    //
-    // This must NOT block on one chosen thread's promise. A thread parked on a
-    // promising-wrapped nested activation only settles once that activation's
-    // own suspension points have been resumed -- and resuming those is
-    // `Store.tick`'s job, i.e. *this loop's* job. Awaiting a single promise
-    // therefore stops the scheduler while waiting for something that needs the
-    // scheduler: a pure-microtask stall with no trap and no rejection.
-    // Observed on `async/async-calls-sync.wast` the moment site 1 became the
-    // first lit suspension site: turn N serviced a promise that
-    // never settled while three other parked threads and three ready-able
-    // suspension points went unexamined.
-    //
-    // So: race every outstanding promise (parked threads AND host calls) and
-    // service whichever settles first, re-ticking each turn. The claim is
-    // taken in the tagged continuation -- as close to settlement as we can get
-    // -- so pin (i)'s window (engine-driven wasm resumption running built-ins
-    // before our continuation) is still covered for the thread that actually
-    // resumed, without falsely claiming the ambient for threads that did not.
-    if (store.awaiting.size > 0) {
-      // Is this actually progress, or a deadlock wearing its clothes?
+      // A pending resumption of THIS store is an engine-driven resumption in
+      // flight: its activation has not yet parked again or finished. It will
+      // die on its own — parking consumes it (`blockCurrentActivation`),
+      // finishing releases it (`Store.noteAwaiting`'s settle continuation) — so
+      // yield microtasks until it does. The driver must NOT blanket-clear here:
+      // an entry may have been taken by a guest built-in settling another
+      // activation's suspension (`subtask.cancel` delivering a cancellation),
+      // and clearing it before that activation runs re-opens the
+      // mis-attribution window the entry exists to close.
       //
-      // Everything in `store.awaiting` is an INTERNAL promise: a
-      // promising-wrapped wasm activation. Such a promise settles either on
-      // its own (the activation ran to completion -- which happens within one
-      // macrotask turn, since the work is already done and only the microtask
-      // hop remains) or because WE resume a suspension point it is waiting
-      // behind. If no thread is ready, no host call is outstanding, and a full
-      // macrotask turn passes with nothing settling, then nobody can move: the
-      // awaited promises need us and we need them. That is the deadlock trap
-      // (definitions.py `canon_lift`'s empty-candidate-set `trap_if`), and
-      // without this check it presents as a silent stall instead -- which is
-      // exactly what `tests/jspi/deadlock_test.ts` caught the moment site 2
-      // was lit.
-      if (store.pendingHostCalls.size === 0 && !store.hasPendingResumptions()) {
-        traceDrive("driveAsync", store, done, "deadlock-probe");
-        // Exclude threads whose settle is already QUEUED in `store.settled`
-        // (issue #156): their promise has settled, so racing them wins
-        // instantly off the memoized `tagAwait` tag, forever, in an unbounded
-        // microtask chain — the tail is `serviceSettled`'s to run.
+      // PER-STORE (issue #210): read only THIS store's entries. Activations
+      // never cross stores, so another store's pending resumption is none of
+      // this loop's business — and a gate shared across stores would spin an
+      // idle store's driver here, to its death at the hop bound below in
+      // ~311ms, merely because ANOTHER store's guest was dwelling on a slow
+      // host import.
+      if (store.hasPendingResumptions()) {
+        traceDrive("driveAsync", store, done, "yield-pending");
+        // Bounded: a pending entry that never dies is an internal bug (every
+        // path out of a resumed activation releases it — park, finish, trap),
+        // and a pure-microtask wait would otherwise starve the event loop and
+        // every stall timer with it. Interleave macrotask hops so timers stay
+        // alive, and fail loudly rather than spin forever. Scoped per store,
+        // this is again the internal-bug detector it was meant to be.
+        claimHops++;
+        assert_(
+          claimHops < 10_000,
+          "driveAsync: a resumed-activation claim was never released " +
+            "(the activation neither parked, finished, nor trapped)",
+        );
+        if (claimHops % 100 === 0) {
+          await new Promise((r) => setTimeout(r, 0));
+        } else {
+          await Promise.resolve();
+        }
+        continue;
+      }
+      claimHops = 0;
+      while (store.tick()) {
+        if (store.hostFailure !== undefined) throw takeHostFailure(store);
+        // FAIRNESS between tick-able threads and promise-parked ones. A thread
+        // that is READY again on every resume (the callback-ABI YIELD spin)
+        // would otherwise monopolize this drain while a parked thread's
+        // settled promise waits (the starvation that hung
+        // drop-subtask.wast:139), and the engine's own continuations (jspi
+        // pin (j)) only ever land on microtask turns. One hop per tick; bail
+        // to the top the moment an activation tail lands.
+        if (store.awaiting.size > 0) {
+          await Promise.resolve();
+          if (store.hasServiceableSettled()) break;
+        }
+      }
+      if (store.hostFailure !== undefined) throw takeHostFailure(store);
+      if (done()) {
+        traceDrive("driveAsync", store, done, "EXIT-done");
+        return "done";
+      }
+      // Only a SERVICEABLE tail is a reason to loop again: a queue holding
+      // only tails DEFERRED on a non-enterable instance (issue #156) would
+      // spin this loop hot — nothing in the cycle awaits.
+      if (store.hasServiceableSettled() || store.hasPendingResumptions()) {
+        continue;
+      }
+      // Service promise-parked threads (jspi).
+      //
+      // This must NOT block on one chosen thread's promise. A thread parked on a
+      // promising-wrapped nested activation only settles once that activation's
+      // own suspension points have been resumed -- and resuming those is
+      // `Store.tick`'s job, i.e. *this loop's* job. Awaiting a single promise
+      // therefore stops the scheduler while waiting for something that needs the
+      // scheduler: a pure-microtask stall with no trap and no rejection.
+      // Observed on `async/async-calls-sync.wast` the moment site 1 became the
+      // first lit suspension site: turn N serviced a promise that
+      // never settled while three other parked threads and three ready-able
+      // suspension points went unexamined.
+      //
+      // So: race every outstanding promise (parked threads AND host calls) and
+      // service whichever settles first, re-ticking each turn. The claim is
+      // taken in the tagged continuation -- as close to settlement as we can get
+      // -- so pin (i)'s window (engine-driven wasm resumption running built-ins
+      // before our continuation) is still covered for the thread that actually
+      // resumed, without falsely claiming the ambient for threads that did not.
+      if (store.awaiting.size > 0) {
+        // Is this actually progress, or a deadlock wearing its clothes?
+        //
+        // Everything in `store.awaiting` is an INTERNAL promise: a
+        // promising-wrapped wasm activation. Such a promise settles either on
+        // its own (the activation ran to completion -- which happens within one
+        // macrotask turn, since the work is already done and only the microtask
+        // hop remains) or because WE resume a suspension point it is waiting
+        // behind. If no thread is ready, no host call is outstanding, and a full
+        // macrotask turn passes with nothing settling, then nobody can move: the
+        // awaited promises need us and we need them. That is the deadlock trap
+        // (definitions.py `canon_lift`'s empty-candidate-set `trap_if`), and
+        // without this check it presents as a silent stall instead -- which is
+        // exactly what `tests/jspi/deadlock_test.ts` caught the moment site 2
+        // was lit.
+        if (
+          store.pendingHostCalls.size === 0 && !store.hasPendingResumptions()
+        ) {
+          traceDrive("driveAsync", store, done, "deadlock-probe");
+          // Exclude threads whose settle is already QUEUED in `store.settled`
+          // (issue #156): their promise has settled, so racing them wins
+          // instantly off the memoized `tagAwait` tag, forever, in an unbounded
+          // microtask chain — the tail is `serviceSettled`'s to run.
+          const queued = new Set(store.settled.map((s) => s.t));
+          const parked = ([...store.awaiting] as AwaitWinner["t"][]).filter(
+            (t) => !queued.has(t),
+          );
+          const progressed = await Promise.race([
+            ...parked.map((t) => tagAwait(t).then(() => true)),
+            new Promise<boolean>((r) => setTimeout(() => r(false), 0)),
+          ]);
+          traceDrive(
+            "driveAsync",
+            store,
+            done,
+            `deadlock-probe:progressed=${progressed}`,
+          );
+          if (!progressed) {
+            // The race covered a SNAPSHOT of the awaiting set. A thread that
+            // parked during the macrotask turn (a promising callee's body
+            // yielding its awaitValue mid-hop — jspi pin (j) makes this
+            // routine) was not raced, and its promise may already be settled;
+            // trapping now would declare a deadlock one iteration before the
+            // loop would have serviced it. Membership change ⇒ re-probe.
+            //
+            // `fresh` gets the SAME queued-entry filter `parked` got (issue
+            // #156), against a RECOMPUTED queued set — the settled queue can
+            // change across the probe's await. Comparing a filtered snapshot
+            // against an unfiltered one would read "changed" on every turn in
+            // the all-deferred wedge state, so the verdict below could never
+            // be reached and the wedge would present as a silent
+            // macrotask-paced busy idle instead of a trap.
+            const freshQueued = new Set(store.settled.map((s) => s.t));
+            const fresh = ([...store.awaiting] as AwaitWinner["t"][]).filter(
+              (t) => !freshQueued.has(t),
+            );
+            const changed = fresh.length !== parked.length ||
+              fresh.some((t, i) => t !== parked[i]);
+            if (changed) continue;
+            // The probe's precondition can also expire WITHOUT the awaiting
+            // set changing: the same activation resumes off an engine
+            // continuation chunk during the probe's macrotask turn (jspi
+            // pin (j) — a sync-completing Suspending import still defers its
+            // continuation), runs, and re-parks through the suspending mark arm, which
+            // registers a fresh `pendingHostCalls` entry. The activation
+            // promise never settled and `awaiting` membership is unchanged,
+            // but the park is externally wakeable now — the verdict's own
+            // precondition (`pendingHostCalls.size === 0`) no longer holds.
+            // Observed on wasi-shims' stream/future round-trip poll (sync fast path): probe sampled
+            // hostCalls=0 between a settled park and the next one, then
+            // trapped a live workload with hostCalls=1. Re-check ⇒ re-probe.
+            // Likewise a SERVICEABLE settled entry (issue #156): dispatching
+            // it is progress, so this is not a deadlock verdict — re-probe.
+            // A deferred-only queue deliberately does NOT re-probe: nothing
+            // can dispatch it while the lock is held, and if no host call is
+            // outstanding nothing will ever release that lock, so it falls
+            // THROUGH to the verdict below — the same loud-wedge treatment the
+            // servicing race's own all-deferred fallthrough gets. Per the #156
+            // analysis that state is unreachable (a lock spanning this loop's
+            // await always has a `pendingHostCalls` entry, which fails this
+            // probe's precondition); keeping it loud is what makes it an
+            // internal-wedge detector rather than dead code.
+            if (
+              store.pendingHostCalls.size > 0 ||
+              store.hasPendingResumptions() ||
+              store.hasServiceableSettled()
+            ) {
+              continue;
+            }
+            if (store.readyCandidates().length === 0) {
+              if (idle === "exit") {
+                traceDrive("driveAsync", store, done, "EXIT-idle");
+                return "idle";
+              }
+              trapIf(
+                true,
+                `wasm trap: deadlock detected: event loop cannot make ` +
+                  `further progress (${what}: every suspended activation is ` +
+                  `waiting on a suspension only this scheduler could resume, ` +
+                  `and none is ready)`,
+              );
+            }
+            // No promise settled, but a thread became READY while we waited --
+            // typically a suspension point whose `readyFunc` turned true because
+            // another activation ran during the macrotask turn. The way forward
+            // is `Store.tick`, not a promise: go back to the top and resume it.
+            // Falling through to the servicing block instead would await
+            // promises that nothing will settle while a runnable thread sits
+            // there -- the `async/sync-barges-in.wast` stall exactly.
+            continue;
+          }
+          // Progress IS possible: fall through to the normal servicing below,
+          // which resumes the settled thread. Returning to the top instead would
+          // spin -- the memoized tag is already settled, so the race would win
+          // instantly, forever, without anyone being resumed.
+        }
+        // Re-check membership: the deadlock probe above AWAITS, and everything
+        // below reads `[...store.awaiting][0]` as if the set were still
+        // non-empty. A thread resumed during the probe (its settle continuation
+        // runs `resumeWith`, which deletes it) can empty the set, and the
+        // snapshot's `parked[0]` is then `undefined` — the exact check-then-act
+        // shape that made the host pump's copy of this loop throw
+        // `TypeError: ... (reading 'awaiting')` into `store.hostFailure`, where
+        // it poisoned a later unrelated call via check-then-act on `store.hostFailure`. Nothing to
+        // service ⇒ go back to the top and re-evaluate `done`.
+        // Same re-check for the settled queue, and for the same reason: the
+        // probe's macrotask turn can land a fresh, SERVICEABLE activation tail
+        // (that is exactly what "progress IS possible" above usually means).
+        // The queue owns those threads — the race below deliberately excludes
+        // them (issue #156) — so the way forward is the top of the loop, where
+        // `serviceSettled` dispatches them. Without this, filtering the
+        // just-settled thread out of the race left the loop awaiting promises
+        // that only its dispatch could settle (observed: tests/jspi/
+        // handshake_test.ts stalled, then tripped the claim assert).
+        if (store.awaiting.size === 0 || store.hasServiceableSettled()) {
+          continue;
+        }
+        // Claim the ambient for ONE parked thread and await its promise -- as
+        // before, so pin (i)'s window is covered exactly as it was -- but race
+        // that promise against every other outstanding promise so this loop can
+        // never be held hostage by it. The claimed thread's promise may only be
+        // settleable by further scheduler progress (a promising-wrapped nested
+        // activation whose own suspension points this loop must still resume);
+        // blocking on it alone is the pure-microtask stall described above.
+        // Same exclusion as the probe (issue #156): a thread whose tail is
+        // already queued in `store.settled` must not be raced — its tag is
+        // settled, so it re-wins instantly and livelocks the event loop,
+        // starving the very host-call settle that would release the lock.
         const queued = new Set(store.settled.map((s) => s.t));
         const parked = ([...store.awaiting] as AwaitWinner["t"][]).filter(
           (t) => !queued.has(t),
         );
-        const progressed = await Promise.race([
-          ...parked.map((t) => tagAwait(t).then(() => true)),
-          new Promise<boolean>((r) => setTimeout(() => r(false), 0)),
-        ]);
-        traceDrive(
-          "driveAsync",
-          store,
-          done,
-          `deadlock-probe:progressed=${progressed}`,
-        );
-        if (!progressed) {
-          // The race covered a SNAPSHOT of the awaiting set. A thread that
-          // parked during the macrotask turn (a promising callee's body
-          // yielding its awaitValue mid-hop — jspi pin (j) makes this
-          // routine) was not raced, and its promise may already be settled;
-          // trapping now would declare a deadlock one iteration before the
-          // loop would have serviced it. Membership change ⇒ re-probe.
-          //
-          // `fresh` gets the SAME queued-entry filter `parked` got (issue
-          // #156), against a RECOMPUTED queued set — the settled queue can
-          // change across the probe's await. Comparing a filtered snapshot
-          // against an unfiltered one would read "changed" on every turn in
-          // the all-deferred wedge state, so the verdict below could never
-          // be reached and the wedge would present as a silent
-          // macrotask-paced busy idle instead of a trap.
-          const freshQueued = new Set(store.settled.map((s) => s.t));
-          const fresh = ([...store.awaiting] as AwaitWinner["t"][]).filter(
-            (t) => !freshQueued.has(t),
-          );
-          const changed = fresh.length !== parked.length ||
-            fresh.some((t, i) => t !== parked[i]);
-          if (changed) continue;
-          // The probe's precondition can also expire WITHOUT the awaiting
-          // set changing: the same activation resumes off an engine
-          // continuation chunk during the probe's macrotask turn (jspi
-          // pin (j) — a sync-completing Suspending import still defers its
-          // continuation), runs, and re-parks through the suspending mark arm, which
-          // registers a fresh `pendingHostCalls` entry. The activation
-          // promise never settled and `awaiting` membership is unchanged,
-          // but the park is externally wakeable now — the verdict's own
-          // precondition (`pendingHostCalls.size === 0`) no longer holds.
-          // Observed on wasi-shims' stream/future round-trip poll (sync fast path): probe sampled
-          // hostCalls=0 between a settled park and the next one, then
-          // trapped a live workload with hostCalls=1. Re-check ⇒ re-probe.
-          // Likewise a SERVICEABLE settled entry (issue #156): dispatching
-          // it is progress, so this is not a deadlock verdict — re-probe.
-          // A deferred-only queue deliberately does NOT re-probe: nothing
-          // can dispatch it while the lock is held, and if no host call is
-          // outstanding nothing will ever release that lock, so it falls
-          // THROUGH to the verdict below — the same loud-wedge treatment the
-          // servicing race's own all-deferred fallthrough gets. Per the #156
-          // analysis that state is unreachable (a lock spanning this loop's
-          // await always has a `pendingHostCalls` entry, which fails this
-          // probe's precondition); keeping it loud is what makes it an
-          // internal-wedge detector rather than dead code.
-          if (
-            store.pendingHostCalls.size > 0 || store.hasPendingResumptions() ||
-            store.hasServiceableSettled()
-          ) {
+        if (parked.length === 0) {
+          // UNREACHABLE BY CONSTRUCTION. `parked` is `store.awaiting` minus
+          // the threads whose tails are already queued in `store.settled`, and
+          // we only get here with `awaiting` non-empty and
+          // `hasServiceableSettled()` false — which means the settled queue is
+          // EMPTY, so nothing was excluded. Retained as a wedge detector, not
+          // as expected behavior.
+          if (store.pendingHostCalls.size > 0) {
+            await Promise.race([
+              ...store.pendingHostCalls,
+              armDriverArrival(store),
+              armHostCallArrival(store),
+            ]).catch(() => {});
             continue;
           }
-          if (store.readyCandidates().length === 0) {
-            if (idle === "exit") {
-              traceDrive("driveAsync", store, done, "EXIT-idle");
-              return "idle";
-            }
-            trapIf(
-              true,
-              `wasm trap: deadlock detected: event loop cannot make ` +
-                `further progress (${what}: every suspended activation is ` +
-                `waiting on a suspension only this scheduler could resume, ` +
-                `and none is ready)`,
-            );
-          }
-          // No promise settled, but a thread became READY while we waited --
-          // typically a suspension point whose `readyFunc` turned true because
-          // another activation ran during the macrotask turn. The way forward
-          // is `Store.tick`, not a promise: go back to the top and resume it.
-          // Falling through to the servicing block instead would await
-          // promises that nothing will settle while a runnable thread sits
-          // there -- the `async/sync-barges-in.wast` stall exactly.
-          continue;
+          // Per the issue #156 analysis this is unreachable (a spanning lock
+          // always has a `pendingHostCalls` entry; a synchronous lock cannot
+          // span this loop's await). An internal-wedge detector, not expected
+          // behavior.
+          traceDrive("driveAsync", store, done, "DEADLOCK-TRAP-deferred");
+          trapIf(
+            true,
+            `wasm trap: deadlock detected: event loop cannot make further ` +
+              `progress (${what}: every settled activation tail is deferred ` +
+              `on a non-enterable instance and no host call is outstanding)`,
+          );
         }
-        // Progress IS possible: fall through to the normal servicing below,
-        // which resumes the settled thread. Returning to the top instead would
-        // spin -- the memoized tag is already settled, so the race would win
-        // instantly, forever, without anyone being resumed.
-      }
-      // Re-check membership: the deadlock probe above AWAITS, and everything
-      // below reads `[...store.awaiting][0]` as if the set were still
-      // non-empty. A thread resumed during the probe (its settle continuation
-      // runs `resumeWith`, which deletes it) can empty the set, and the
-      // snapshot's `parked[0]` is then `undefined` — the exact check-then-act
-      // shape that made the host pump's copy of this loop throw
-      // `TypeError: ... (reading 'awaiting')` into `store.hostFailure`, where
-      // it poisoned a later unrelated call via check-then-act on `store.hostFailure`. Nothing to
-      // service ⇒ go back to the top and re-evaluate `done`.
-      // Same re-check for the settled queue, and for the same reason: the
-      // probe's macrotask turn can land a fresh, SERVICEABLE activation tail
-      // (that is exactly what "progress IS possible" above usually means).
-      // The queue owns those threads — the race below deliberately excludes
-      // them (issue #156) — so the way forward is the top of the loop, where
-      // `serviceSettled` dispatches them. Without this, filtering the
-      // just-settled thread out of the race left the loop awaiting promises
-      // that only its dispatch could settle (observed: tests/jspi/
-      // handshake_test.ts stalled, then tripped the claim assert).
-      if (store.awaiting.size === 0 || store.hasServiceableSettled()) continue;
-      // Claim the ambient for ONE parked thread and await its promise -- as
-      // before, so pin (i)'s window is covered exactly as it was -- but race
-      // that promise against every other outstanding promise so this loop can
-      // never be held hostage by it. The claimed thread's promise may only be
-      // settleable by further scheduler progress (a promising-wrapped nested
-      // activation whose own suspension points this loop must still resume);
-      // blocking on it alone is the pure-microtask stall described above.
-      // Same exclusion as the probe (issue #156): a thread whose tail is
-      // already queued in `store.settled` must not be raced — its tag is
-      // settled, so it re-wins instantly and livelocks the event loop,
-      // starving the very host-call settle that would release the lock.
-      const queued = new Set(store.settled.map((s) => s.t));
-      const parked = ([...store.awaiting] as AwaitWinner["t"][]).filter(
-        (t) => !queued.has(t),
-      );
-      if (parked.length === 0) {
-        // UNREACHABLE BY CONSTRUCTION. `parked` is `store.awaiting` minus
-        // the threads whose tails are already queued in `store.settled`, and
-        // we only get here with `awaiting` non-empty and
-        // `hasServiceableSettled()` false — which means the settled queue is
-        // EMPTY, so nothing was excluded. Retained as a wedge detector, not
-        // as expected behavior.
-        if (store.pendingHostCalls.size > 0) {
-          await Promise.race([
-            ...store.pendingHostCalls,
+        const chosen = parked[0];
+        const chosenTag = tagAwait(chosen);
+        const others: Promise<AwaitWinner | null>[] = parked.slice(1).map(
+          tagAwait,
+        );
+        for (const h of store.pendingHostCalls) {
+          others.push(h.then(() => null, () => null));
+        }
+        // A SPECULATIVE entry: the chosen thread is a promising-wrapped
+        // activation, and the engine may run its wasm during this await (pin
+        // (i)). It is dropped on the way out — if the activation is genuinely
+        // mid-resumption its own exact entry (minted by
+        // `SuspensionPoint.resume`) is what carries it, and dropping an entry
+        // that names a thread already gone from the set is a no-op.
+        //
+        // ONLY ITS OWN ENTRY (issue #158): the `finally` must drop the entry
+        // THIS loop added and nothing else. A guest-synchronous delivery during
+        // the await takes a fresh entry of its own, and clearing that one here
+        // would re-open early the very window it exists to close — which is why
+        // the gate is a set of entries rather than a single slot.
+        //
+        // SOLE DRIVER ONLY, AND ONLY UNTIL ONE ARRIVES (issue #239). The entry
+        // is a claim over a window this loop cannot bound: the race settles when
+        // the HOST answers, which may be never. As a store-wide scheduling gate
+        // (`Store.tick` refuses; every driver yields at its top) that is a wedge
+        // the moment a second driver exists — it spins at the top of its own
+        // loop and dies at the 10,000-hop assert in ~311ms, an internal-bug
+        // detector firing on a perfectly ordinary suspended guest. Two concurrent
+        // export calls with one slow suspending import were enough; the reported
+        // shape was a detached guest task cancelling an in-flight import, which
+        // parks mid-frame with no export call outstanding and leaves the
+        // settlement pump holding this entry.
+        //
+        // What the entry protects — "the engine may run `chosen`'s wasm during
+        // this await" — it protects by refusing OTHER `Store.tick` callers, and
+        // this loop is not one of them while it awaits. The tick callers that
+        // can reach a store mid-race are another `driveAsync` loop and
+        // `HostActivity.pump`'s synchronous drain (exec/host_streams.ts) — the
+        // latter is not gated by driver depth, so scoping the entry to "sole
+        // driver" does hand it a window an unscoped entry would close at
+        // depth >= 2.
+        // What holds regardless is the invariant the `driverDepth` note names:
+        // a genuine resumption is preceded by `SuspensionPoint.resume`'s OWN
+        // entry (jspi/bridge.ts, minted before the settle), and every
+        // resumption site here re-checks membership and promise identity
+        // synchronously — mechanisms (a) and (b), which is where that note
+        // already puts the weight.
+        // ONLY IF WE ADDED IT (issue #158, same rule as the `finally` below):
+        // `pendingResumptions` is a Set by identity, so a genuine entry for
+        // `chosen` minted meanwhile — or already held — collapses with ours,
+        // and removing "ours" would drop the genuine one.
+        const sole = storeDriverDepth(store) === 1;
+        const added = sole && !store.pendingResumptions.has(chosen);
+        if (added) store.addPendingResumption(chosen);
+        let winner: AwaitWinner | null;
+        try {
+          // `armDriverArrival` rides the race for every driver, not just the one
+          // holding the entry: waking on a new arrival is also how a fallback
+          // pump reaches its next `done()` — i.e. its stand-down — promptly.
+          // `armHostCallArrival` rides for the sibling reason: the tags below
+          // are a snapshot of what was parked when we entered the race, so a
+          // host call registered after that under no new driver (a sync `drive`
+          // export, `HostActivity.pump()`'s sync drain — neither fires a driver
+          // arrival) can ready a thread with no racer watching for it. See the
+          // host-call arrival note above.
+          winner = await Promise.race([
+            chosenTag,
+            ...others,
             armDriverArrival(store),
             armHostCallArrival(store),
-          ]).catch(() => {});
-          continue;
+          ]);
+        } finally {
+          if (added) store.removePendingResumption(chosen);
         }
-        // Per the issue #156 analysis this is unreachable (a spanning lock
-        // always has a `pendingHostCalls` entry; a synchronous lock cannot
-        // span this loop's await). An internal-wedge detector, not expected
-        // behavior.
-        traceDrive("driveAsync", store, done, "DEADLOCK-TRAP-deferred");
+        // Resume whichever thread actually settled -- not necessarily the one we
+        // claimed. Resuming only the claimed thread would spin: its promise may
+        // never settle, the same thread would be chosen again next turn, and the
+        // already-settled tags would win the race instantly forever (observed as
+        // an OOM, not a hang). Our own entry is dropped above before any resumption,
+        // exactly as on the original single-promise path, so this does not widen
+        // the ambient window; it only ensures the loop always makes progress.
+        // Membership is not enough: the corner it misses is a thread the OTHER
+        // overlapping loop resumed via `tick`, which then re-parked on a NEW
+        // promise, after which its OLD promise settles late — membership is
+        // true again but the tag's value belongs to a settlement this thread
+        // has already consumed. Compare promise identity too.
+        // ONE SETTLEMENT, ONE DELIVERY (definitions.py `Thread.resume` is
+        // atomic). `noteAwaiting` records settlements EAGERLY, so this
+        // promise's `store.settled` entry is already queued; left there, a
+        // body that re-parks SYNCHRONOUSLY inside `resumeWith` gets the OLD
+        // value delivered against its NEW park by the next `serviceSettled`.
+        if (
+          winner !== null && store.awaiting.has(winner.t) &&
+          winner.t.awaiting === winner.p
+        ) {
+          for (let i = store.settled.length - 1; i >= 0; i--) {
+            if (store.settled[i].t === winner.t) store.settled.splice(i, 1);
+          }
+          winner.t.resumeWith(winner.value, winner.failure);
+        }
+        continue;
+      }
+      if (store.pendingHostCalls.size === 0) {
+        if (idle === "exit") {
+          traceDrive("driveAsync", store, done, "EXIT-idle");
+          return "idle";
+        }
+        traceDrive("driveAsync", store, done, "DEADLOCK-TRAP");
         trapIf(
           true,
           `wasm trap: deadlock detected: event loop cannot make further ` +
-            `progress (${what}: every settled activation tail is deferred ` +
-            `on a non-enterable instance and no host call is outstanding)`,
+            `progress (${what}: no thread is ready and no host call is ` +
+            `outstanding)`,
         );
       }
-      const chosen = parked[0];
-      const chosenTag = tagAwait(chosen);
-      const others: Promise<AwaitWinner | null>[] = parked.slice(1).map(tagAwait);
-      for (const h of store.pendingHostCalls) {
-        others.push(h.then(() => null, () => null));
-      }
-      // A SPECULATIVE entry: the chosen thread is a promising-wrapped
-      // activation, and the engine may run its wasm during this await (pin
-      // (i)). It is dropped on the way out — if the activation is genuinely
-      // mid-resumption its own exact entry (minted by
-      // `SuspensionPoint.resume`) is what carries it, and dropping an entry
-      // that names a thread already gone from the set is a no-op.
+      traceDrive("driveAsync", store, done, "await-race");
+      // Settlement order among several outstanding host calls is the host's,
+      // not ours — this is genuine, unavoidable nondeterminism at the boundary
+      // (the reference has the same freedom in `Store.tick`). Everything
+      // *inside* the component stays deterministic per scheduler.ts.
       //
-      // ONLY ITS OWN ENTRY (issue #158): the `finally` must drop the entry
-      // THIS loop added and nothing else. A guest-synchronous delivery during
-      // the await takes a fresh entry of its own, and clearing that one here
-      // would re-open early the very window it exists to close — which is why
-      // the gate is a set of entries rather than a single slot.
-      //
-      // SOLE DRIVER ONLY, AND ONLY UNTIL ONE ARRIVES (issue #239). The entry
-      // is a claim over a window this loop cannot bound: the race settles when
-      // the HOST answers, which may be never. As a store-wide scheduling gate
-      // (`Store.tick` refuses; every driver yields at its top) that is a wedge
-      // the moment a second driver exists — it spins at the top of its own
-      // loop and dies at the 10,000-hop assert in ~311ms, an internal-bug
-      // detector firing on a perfectly ordinary suspended guest. Two concurrent
-      // export calls with one slow suspending import were enough; the reported
-      // shape was a detached guest task cancelling an in-flight import, which
-      // parks mid-frame with no export call outstanding and leaves the
-      // settlement pump holding this entry.
-      //
-      // What the entry protects — "the engine may run `chosen`'s wasm during
-      // this await" — it protects by refusing OTHER `Store.tick` callers, and
-      // this loop is not one of them while it awaits. The tick callers that
-      // can reach a store mid-race are another `driveAsync` loop and
-      // `HostActivity.pump`'s synchronous drain (exec/host_streams.ts) — the
-      // latter is not gated by driver depth, so scoping the entry to "sole
-      // driver" does hand it a window an unscoped entry would close at
-      // depth >= 2.
-      // What holds regardless is the invariant the `driverDepth` note names:
-      // a genuine resumption is preceded by `SuspensionPoint.resume`'s OWN
-      // entry (jspi/bridge.ts, minted before the settle), and every
-      // resumption site here re-checks membership and promise identity
-      // synchronously — mechanisms (a) and (b), which is where that note
-      // already puts the weight.
-      // ONLY IF WE ADDED IT (issue #158, same rule as the `finally` below):
-      // `pendingResumptions` is a Set by identity, so a genuine entry for
-      // `chosen` minted meanwhile — or already held — collapses with ours,
-      // and removing "ours" would drop the genuine one.
-      const sole = storeDriverDepth(store) === 1;
-      const added = sole && !store.pendingResumptions.has(chosen);
-      if (added) store.addPendingResumption(chosen);
-      let winner: AwaitWinner | null;
-      try {
-        // `armDriverArrival` rides the race for every driver, not just the one
-        // holding the entry: waking on a new arrival is also how a fallback
-        // pump reaches its next `done()` — i.e. its stand-down — promptly.
-        // `armHostCallArrival` rides for the sibling reason: the tags below
-        // are a snapshot of what was parked when we entered the race, so a
-        // host call registered after that under no new driver (a sync `drive`
-        // export, `HostActivity.pump()`'s sync drain — neither fires a driver
-        // arrival) can ready a thread with no racer watching for it. See the
-        // host-call arrival note above.
-        winner = await Promise.race([
-          chosenTag,
-          ...others,
-          armDriverArrival(store),
-          armHostCallArrival(store),
-        ]);
-      } finally {
-        if (added) store.removePendingResumption(chosen);
-      }
-      // Resume whichever thread actually settled -- not necessarily the one we
-      // claimed. Resuming only the claimed thread would spin: its promise may
-      // never settle, the same thread would be chosen again next turn, and the
-      // already-settled tags would win the race instantly forever (observed as
-      // an OOM, not a hang). Our own entry is dropped above before any resumption,
-      // exactly as on the original single-promise path, so this does not widen
-      // the ambient window; it only ensures the loop always makes progress.
-      // Membership is not enough: the corner it misses is a thread the OTHER
-      // overlapping loop resumed via `tick`, which then re-parked on a NEW
-      // promise, after which its OLD promise settles late — membership is
-      // true again but the tag's value belongs to a settlement this thread
-      // has already consumed. Compare promise identity too.
-      // ONE SETTLEMENT, ONE DELIVERY (definitions.py `Thread.resume` is
-      // atomic). `noteAwaiting` records settlements EAGERLY, so this
-      // promise's `store.settled` entry is already queued; left there, a
-      // body that re-parks SYNCHRONOUSLY inside `resumeWith` gets the OLD
-      // value delivered against its NEW park by the next `serviceSettled`.
-      if (
-        winner !== null && store.awaiting.has(winner.t) &&
-        winner.t.awaiting === winner.p
-      ) {
-        for (let i = store.settled.length - 1; i >= 0; i--) {
-          if (store.settled[i].t === winner.t) store.settled.splice(i, 1);
-        }
-        winner.t.resumeWith(winner.value, winner.failure);
-      }
-      continue;
+      // The driver-arrival one-shot rides here too. This is the routine park of
+      // a quiet guest with a real host call outstanding — no speculative entry
+      // is held, so there is no wedge to break, but a fallback pump parked here
+      // would otherwise not reach its `done()` (i.e. its stand-down) until the
+      // HOST answered, leaving two loops interleaving `serviceSettled`/`tick`
+      // for that whole window. That interleaving is what the `driverDepth` note
+      // above calls out as bad for throughput and blame.
+      await Promise.race([
+        ...store.pendingHostCalls,
+        armDriverArrival(store),
+        // ... and the host-call-arrival one-shot, because the spread above is a
+        // SNAPSHOT: a host call registered while we are parked here under no
+        // new driver (a sync `drive` export, `HostActivity.pump()`'s sync drain
+        // — neither fires a driver arrival) would otherwise be watched by
+        // nobody at all (the settlement pump stands down while we, the parked
+        // driver, keep `storeDriverDepth` positive). See the host-call arrival
+        // note above.
+        armHostCallArrival(store),
+      ]).catch(() => {});
     }
-    if (store.pendingHostCalls.size === 0) {
-      if (idle === "exit") {
-        traceDrive("driveAsync", store, done, "EXIT-idle");
-        return "idle";
-      }
-      traceDrive("driveAsync", store, done, "DEADLOCK-TRAP");
-      trapIf(
-        true,
-        `wasm trap: deadlock detected: event loop cannot make further ` +
-          `progress (${what}: no thread is ready and no host call is ` +
-          `outstanding)`,
-      );
-    }
-    traceDrive("driveAsync", store, done, "await-race");
-    // Settlement order among several outstanding host calls is the host's,
-    // not ours — this is genuine, unavoidable nondeterminism at the boundary
-    // (the reference has the same freedom in `Store.tick`). Everything
-    // *inside* the component stays deterministic per scheduler.ts.
-    //
-    // The driver-arrival one-shot rides here too. This is the routine park of
-    // a quiet guest with a real host call outstanding — no speculative entry
-    // is held, so there is no wedge to break, but a fallback pump parked here
-    // would otherwise not reach its `done()` (i.e. its stand-down) until the
-    // HOST answered, leaving two loops interleaving `serviceSettled`/`tick`
-    // for that whole window. That interleaving is what the `driverDepth` note
-    // above calls out as bad for throughput and blame.
-    await Promise.race([
-      ...store.pendingHostCalls,
-      armDriverArrival(store),
-      // ... and the host-call-arrival one-shot, because the spread above is a
-      // SNAPSHOT: a host call registered while we are parked here under no
-      // new driver (a sync `drive` export, `HostActivity.pump()`'s sync drain
-      // — neither fires a driver arrival) would otherwise be watched by
-      // nobody at all (the settlement pump stands down while we, the parked
-      // driver, keep `storeDriverDepth` positive). See the host-call arrival
-      // note above.
-      armHostCallArrival(store),
-    ]).catch(() => {});
-  }
   } finally {
     const left = storeDriverDepth(store) - 1;
     driverDepth.set(store, left);
@@ -1527,7 +1558,7 @@ const pendingLifts = new WeakMap<object, Set<(cause: unknown) => void>>();
 
 function registerPendingLift(inst: object, reject: (c: unknown) => void): void {
   let s = pendingLifts.get(inst);
-  if (s === undefined) pendingLifts.set(inst, (s = new Set()));
+  if (s === undefined) pendingLifts.set(inst, s = new Set());
   s.add(reject);
 }
 
@@ -1637,8 +1668,9 @@ export function createLiftedFunction(input: {
   // `Suspending`-wrapped.
   const enteredCore = enterWasm(core, mode);
   // See the comment at the `drive` call in `invokeNow` and `IdlePolicy`.
-  const idlePolicy: IdlePolicy =
-    ft.async === true && input.trapOnIdle !== true ? "exit" : "trap";
+  const idlePolicy: IdlePolicy = ft.async === true && input.trapOnIdle !== true
+    ? "exit"
+    : "trap";
   const taskOpts: TaskOptions = {
     async_: opts.async,
     callback: opts.callback !== null,
@@ -2167,10 +2199,12 @@ async function awaitHopQuiescence(store: Store, inst: unknown): Promise<void> {
     const hops = entryHopThreads(store, inst);
     if (hops.length === 0) return;
     await Promise.race(
-      hops.map((t) => (t.awaiting ?? Promise.resolve()).then(
-        () => undefined,
-        () => undefined,
-      )),
+      hops.map((t) =>
+        (t.awaiting ?? Promise.resolve()).then(
+          () => undefined,
+          () => undefined,
+        )
+      ),
     );
     store.serviceSettled();
   }
@@ -2364,7 +2398,9 @@ export function* awaitCore(
       ),
     };
     if (settled === undefined) return [];
-    return Array.isArray(settled) ? settled as CoreValue[] : [settled as CoreValue];
+    return Array.isArray(settled)
+      ? settled as CoreValue[]
+      : [settled as CoreValue];
   }
   return raw;
 }
@@ -2713,18 +2749,18 @@ export function createLoweredImport(input: {
         // guest code in an unattributed chunk — the issue-#24 class the
         // attribution sentinels exist to prevent.
         let outcome: { value: unknown } | { error: unknown } | undefined;
-      // The async arm runs `onResolve` — result lowering, including possible
-      // realloc re-entry into the guest — in this bare promise continuation,
-      // where the sync arm above defers all CABI work to `produce` (the
-      // issue-#24 attribution note). The asymmetry is deliberate (#93): here
-      // no wasm frame is suspended mid-call — the guest returned BLOCKED and
-      // is between activations, which is exactly when the reference's
-      // `on_resolve` runs (the callee's turn), so there is no activation for
-      // the sentinels to attribute this chunk to. Lowering failures are host
-      // failures, not guest traps: they land on `store.hostFailure` and the
-      // driving loop raises them site-named (pinned by
-      // tests/async_lower_onresolve_failure_test.ts).
-      const promise = Promise.resolve(raw).then(
+        // The async arm runs `onResolve` — result lowering, including possible
+        // realloc re-entry into the guest — in this bare promise continuation,
+        // where the sync arm above defers all CABI work to `produce` (the
+        // issue-#24 attribution note). The asymmetry is deliberate (#93): here
+        // no wasm frame is suspended mid-call — the guest returned BLOCKED and
+        // is between activations, which is exactly when the reference's
+        // `on_resolve` runs (the callee's turn), so there is no activation for
+        // the sentinels to attribute this chunk to. Lowering failures are host
+        // failures, not guest traps: they land on `store.hostFailure` and the
+        // driving loop raises them site-named (pinned by
+        // tests/async_lower_onresolve_failure_test.ts).
+        const promise = Promise.resolve(raw).then(
           (v) => {
             store.pendingHostCalls.delete(promise);
             outcome = { value: v };
@@ -2915,7 +2951,6 @@ export function createLoweredImport(input: {
     return packSubtaskResult(subtask.state, subtaski);
   };
 }
-
 
 /**
  * The callback-ABI dispatch loop of `canon_lift` (definitions.py lines

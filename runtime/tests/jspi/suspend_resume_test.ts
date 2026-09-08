@@ -18,7 +18,9 @@ Deno.test("promising export suspends on a Suspending import and resumes with its
 
   const exp = await instantiateActivation({
     // activation.wat's `run` computes block(x) + 1.
-    block: new WebAssembly.Suspending((x: number) => blocked.then((v) => v + x)),
+    block: new WebAssembly.Suspending((x: number) =>
+      blocked.then((v) => v + x)
+    ),
   });
 
   const runPromising = WebAssembly.promising(exp.run);

@@ -42,7 +42,11 @@
 // the driver (`DriveExit`) it resolves.
 
 import { assertEq } from "./support/asserts.ts";
-import { createLiftedFunction, newStats, type ResolvedOptions } from "../src/exec/mod.ts";
+import {
+  createLiftedFunction,
+  newStats,
+  type ResolvedOptions,
+} from "../src/exec/mod.ts";
 import {
   ComponentInstanceState,
   currentThread,

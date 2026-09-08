@@ -70,7 +70,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "futures: the tcp-receive shape — tuple<stream<u8>, future<u32>> from one sync import",
+  name:
+    "futures: the tcp-receive shape — tuple<stream<u8>, future<u32>> from one sync import",
   ignore: !have,
   async fn() {
     const c = await instantiateFixture(FIXTURE, {
@@ -99,7 +100,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "futures: a rejecting future-source Promise is a producer failure, not an err value",
+  name:
+    "futures: a rejecting future-source Promise is a producer failure, not an err value",
   ignore: !have,
   async fn() {
     const c = await instantiateFixture(FIXTURE, {

@@ -269,7 +269,9 @@ export class ImportResolver {
             `'${p.base}' is the unversioned key '${un}'. Version-agnostic ` +
             `folding is banned (contracts/embedder-api.md §"Version canonicalization"): ` +
             `register '${p.base}@${p.version}' or the compatibility-track ` +
-            `key '${trackKeyOf(p.base, p.semver) ?? p.base + "@" + p.version}'.`,
+            `key '${
+              trackKeyOf(p.base, p.semver) ?? p.base + "@" + p.version
+            }'.`,
         );
       }
       return undefined;

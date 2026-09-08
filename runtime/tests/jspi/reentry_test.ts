@@ -18,7 +18,9 @@ Deno.test("reentry: calling another export of the same instance while one export
   });
 
   const exp = await instantiateActivation({
-    block: new WebAssembly.Suspending((x: number) => blocked.then((v) => v + x)),
+    block: new WebAssembly.Suspending((x: number) =>
+      blocked.then((v) => v + x)
+    ),
   });
 
   const runPromising = WebAssembly.promising(exp.run);
@@ -29,7 +31,11 @@ Deno.test("reentry: calling another export of the same instance while one export
   // engine, this would trap; docs/architecture.md §6 says it is NOT — the CM-level check
   // is the scheduler's job (out of scope for this mechanics-only module).
   const otherResult = exp.other(1);
-  assertEquals(otherResult, 1001, "OBSERVED: reentry succeeds, no engine-level trap");
+  assertEquals(
+    otherResult,
+    1001,
+    "OBSERVED: reentry succeeds, no engine-level trap",
+  );
 
   resolveBlock!(100);
   const result = await suspendedCall;

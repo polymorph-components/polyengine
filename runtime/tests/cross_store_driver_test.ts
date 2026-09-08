@@ -30,8 +30,7 @@ function assert(cond: boolean, msg: string): asserts cond {
 }
 
 function fakeInst() {
-  return {
-  };
+  return {};
 }
 
 /** A thread parked on an awaitValue promise, as a promising-wrapped guest

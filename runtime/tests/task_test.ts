@@ -16,12 +16,12 @@ import {
   driveSyncLift,
   entryRefusal,
   EventCode,
-  packSubtaskResult,
-  schedulerPolicy,
-  schedulerSeedForTesting,
   isInstancePoisoned,
   notifyInstancePoisoned,
+  packSubtaskResult,
   PendingCapability,
+  schedulerPolicy,
+  schedulerSeedForTesting,
   Store,
   Subtask,
   SubtaskState,
@@ -74,7 +74,6 @@ const STACKFUL_OPTS: TaskOptions = {
   stringEncoding: "utf8",
   memory: null,
 };
-
 
 /**
  * Create a thread whose body needs a reference to the thread itself (every
@@ -410,7 +409,11 @@ Deno.test("cm705: stale settled entries are removed", async () => {
   // Simulate the elsewhere-resumption.
   store.awaiting.delete(bThread);
   void a;
-  assertEq(store.serviceSettled(), false, "removing a stale entry is not progress");
+  assertEq(
+    store.serviceSettled(),
+    false,
+    "removing a stale entry is not progress",
+  );
   assertEq(store.settled.length, 0, "but it is removed");
 });
 
@@ -534,7 +537,10 @@ Deno.test("exclusive thread: a callback task takes and releases it", () => {
     // Identity, not deep equality: Thread objects are cyclic (thread -> task
     // -> inst -> threads -> thread), which a structural comparison cannot
     // walk.
-    assert(inst.exclusiveThread === thread, "the task holds the exclusive thread");
+    assert(
+      inst.exclusiveThread === thread,
+      "the task holds the exclusive thread",
+    );
     task.start();
     task.return_([]);
     task.exitImplicitThread(thread);

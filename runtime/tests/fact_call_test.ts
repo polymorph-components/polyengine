@@ -97,7 +97,10 @@ function runPrepared(input: {
   // deno-lint-ignore no-explicit-any
   const prep = createPrepareCall({ memory: null }, ctx as any);
   // deno-lint-ignore no-explicit-any
-  const startCall = createAsyncStartCall({ callback: null, postReturn: null }, ctx as any);
+  const startCall = createAsyncStartCall(
+    { callback: null, postReturn: null },
+    ctx as any,
+  );
 
   prep(
     start,

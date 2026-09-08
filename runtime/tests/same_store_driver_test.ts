@@ -44,8 +44,7 @@ function assert(cond: boolean, msg: string): asserts cond {
 }
 
 function fakeInst() {
-  return {
-  };
+  return {};
 }
 
 /** A thread parked on an awaitValue promise, as a promising-wrapped guest
@@ -133,7 +132,10 @@ Deno.test("a second driver on the same store is not wedged by the incumbent's sp
     // on purpose — the property is "promptly, not gated on A's host" — and it
     // is the throw above that carries the regression; this only pins that B
     // cannot instead be made to dwell for the host's own duration.
-    assert(elapsed < 2000, `B's driver returned in ${elapsed}ms, expected < 2s`);
+    assert(
+      elapsed < 2000,
+      `B's driver returned in ${elapsed}ms, expected < 2s`,
+    );
   } finally {
     aDone = true;
     settleThread(0);

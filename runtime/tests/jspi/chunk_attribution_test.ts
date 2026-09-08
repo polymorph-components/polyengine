@@ -26,7 +26,9 @@ Deno.test("issue #24: interleaved continuation chunks each read their own ambien
   const ownerB = { name: "B", storage: [0, 0] };
   const seen: Array<[string, unknown]> = [];
 
-  function mkBlock(label: string): { resolveFirst: () => void; block: unknown } {
+  function mkBlock(
+    label: string,
+  ): { resolveFirst: () => void; block: unknown } {
     let calls = 0;
     let resolveFirst!: () => void;
     const gate = new Promise<number>((res) => {

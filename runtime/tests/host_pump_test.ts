@@ -42,8 +42,7 @@ function assert(cond: boolean, msg: string): asserts cond {
 
 /** The slice of `ComponentInstance` that `Store.tick` touches. */
 function fakeInst() {
-  return {
-  };
+  return {};
 }
 
 /**
@@ -253,7 +252,10 @@ Deno.test({
         (reclaim) => reclaim(),
         () => {},
       );
-      assertEq((await withTimeout(reading, `raced read hops=${hops}`)).length, 3);
+      assertEq(
+        (await withTimeout(reading, `raced read hops=${hops}`)).length,
+        3,
+      );
       host.readable.drop();
       await new Promise((r) => setTimeout(r, 2));
       assert(

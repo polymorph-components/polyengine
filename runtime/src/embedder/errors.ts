@@ -12,17 +12,17 @@
 // arrives from embedder code (issue #83).
 
 export {
+  ComponentException,
   DroppedError,
   InvalidHandleError,
+  isComponentException,
   isDroppedError,
   isInvalidHandleError,
   isPeerTrappedError,
   isStreamProducerError,
   isTrap,
-  isComponentException,
   PeerTrappedError,
   Trap,
-  ComponentException,
 } from "@polyengine/protocol";
 
 /**

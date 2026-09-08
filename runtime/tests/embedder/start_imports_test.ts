@@ -104,6 +104,9 @@ Deno.test({
     const { requiredImports } = await import("../../src/embedder/mod.ts");
     const leaves = requiredImports(await artifactsOf(FIXTURE));
     assertEq(leaves.map((l) => l.jsName).sort(), ["note", "tick"]);
-    assertEq(leaves.find((l) => l.jsName === "tick")?.type?.results[0].kind, "u64");
+    assertEq(
+      leaves.find((l) => l.jsName === "tick")?.type?.results[0].kind,
+      "u64",
+    );
   },
 });

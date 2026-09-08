@@ -91,22 +91,34 @@ async function instantiate() {
 // fails such a test with "Promise resolution is still pending", so awaiting the
 // call IS the assertion; the returned value pins that it resolved correctly
 // rather than merely resolving.
-Deno.test({ name: "jspi handshake: a parked caller is resumed by the scheduler (run1)", ignore: !ready, fn: async () => {
-  const handle = await instantiate();
-  const run1 = handle.exports.run1 as () => Promise<unknown> | unknown;
-  assertEquals(await run1(), 42);
-} });
+Deno.test({
+  name: "jspi handshake: a parked caller is resumed by the scheduler (run1)",
+  ignore: !ready,
+  fn: async () => {
+    const handle = await instantiate();
+    const run1 = handle.exports.run1 as () => Promise<unknown> | unknown;
+    assertEquals(await run1(), 42);
+  },
+});
 
-Deno.test({ name: "jspi handshake: a parked caller is resumed by the scheduler (run2)", ignore: !ready, fn: async () => {
-  const handle = await instantiate();
-  const run2 = handle.exports.run2 as () => Promise<unknown> | unknown;
-  assertEquals(await run2(), 42);
-} });
+Deno.test({
+  name: "jspi handshake: a parked caller is resumed by the scheduler (run2)",
+  ignore: !ready,
+  fn: async () => {
+    const handle = await instantiate();
+    const run2 = handle.exports.run2 as () => Promise<unknown> | unknown;
+    assertEquals(await run2(), 42);
+  },
+});
 
 // Both exports on ONE instance: the second call must not inherit a wedged
 // scheduler (a stale ambient claim or a memoized await tag) from the first.
-Deno.test({ name: "jspi handshake: consecutive parked calls on one instance", ignore: !ready, fn: async () => {
-  const handle = await instantiate();
-  assertEquals(await (handle.exports.run1 as () => unknown)(), 42);
-  assertEquals(await (handle.exports.run2 as () => unknown)(), 42);
-} });
+Deno.test({
+  name: "jspi handshake: consecutive parked calls on one instance",
+  ignore: !ready,
+  fn: async () => {
+    const handle = await instantiate();
+    assertEquals(await (handle.exports.run1 as () => unknown)(), 42);
+    assertEquals(await (handle.exports.run2 as () => unknown)(), 42);
+  },
+});

@@ -14,10 +14,10 @@
 
 import { assert_, Trap, trap, trapIf } from "./trap.ts";
 import {
+  entryRefusal,
   NeedsJspi,
   notifyInstancePoisoned,
   PendingCapability,
-  entryRefusal,
 } from "../task/scheduler.ts";
 import { COMPONENT_INSTANCE } from "./context.ts";
 import type {

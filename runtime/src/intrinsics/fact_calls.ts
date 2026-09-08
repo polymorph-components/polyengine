@@ -74,9 +74,10 @@ import {
   type BlockRequest,
   type Cancelled,
   ComponentInstanceState,
-  NeedsJspi,
   currentTask,
+  entryRefusal,
   maybeCurrentTask,
+  NeedsJspi,
   needsJspi,
   notifyInstancePoisoned,
   packSubtaskResult,
@@ -86,7 +87,6 @@ import {
   Task,
   type TaskOptions,
   Thread,
-  entryRefusal,
 } from "../task/mod.ts";
 import { blockCurrentActivation, enterWasm } from "../jspi/mod.ts";
 import {
@@ -250,8 +250,16 @@ export function createPrepareCall(
       args.length >= PREPARE_FIXED,
       `prepare-call: expected at least ${PREPARE_FIXED} arguments`,
     );
-    const [start, return_, callerI, calleeI, taskReturnType, calleeAsync, enc, rc_] =
-      args;
+    const [
+      start,
+      return_,
+      callerI,
+      calleeI,
+      taskReturnType,
+      calleeAsync,
+      enc,
+      rc_,
+    ] = args;
     assert_(
       typeof start === "function" && typeof return_ === "function",
       "prepare-call: start/return must be funcrefs",
@@ -359,8 +367,13 @@ function mkCalleeTask(input: {
    * `deliverResolve` releases them); sync-start-call passes a scope it
    * releases when the blocked caller frame gets its results.
    */
-  lenderScope: { addLender(h: import("../cabi/handles.ts").ResourceHandle): void };
-}): { task: Task; body: (t: Thread) => Generator<BlockRequest, void, Cancelled> } {
+  lenderScope: {
+    addLender(h: import("../cabi/handles.ts").ResourceHandle): void;
+  };
+}): {
+  task: Task;
+  body: (t: Thread) => Generator<BlockRequest, void, Cancelled>;
+} {
   const { prepared, callee, callback, postReturn, ctx, calleeUsesAsyncAbi } =
     input;
   // CONTRACT: default to `plain` when the context predates this field. Only

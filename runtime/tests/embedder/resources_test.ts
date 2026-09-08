@@ -20,7 +20,8 @@ async function counters(): Promise<any> {
 }
 
 Deno.test({
-  name: "resources: the interface exposes a PascalCase class and camelCase funcs",
+  name:
+    "resources: the interface exposes a PascalCase class and camelCase funcs",
   ignore: !ready,
   fn: async () => {
     const c = await counters();

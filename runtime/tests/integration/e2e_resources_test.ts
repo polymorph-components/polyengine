@@ -35,8 +35,10 @@ Deno.test("resources: instantiate + counter lifecycle + dtor observation", async
     adapters,
   });
 
-  const counters = component.exports["polyengine:resources/counters"] as
-    Record<string, (...args: unknown[]) => unknown>;
+  const counters = component.exports["polyengine:resources/counters"] as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
   assertEq(typeof counters, "object");
   const names = Object.keys(counters).sort();
   assertEq(names.includes("make-counter"), true, `exports: ${names}`);

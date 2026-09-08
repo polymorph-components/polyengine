@@ -11,7 +11,12 @@ import type { WirePlan } from "../plan/format.ts";
 import { loadPlan } from "../plan/loader.ts";
 import type { LoadedPlan } from "../plan/loader.ts";
 import type { ValType } from "../cabi/types.ts";
-import { camelCase, type LeafName, parseLeafName, pascalCase } from "./casing.ts";
+import {
+  camelCase,
+  type LeafName,
+  parseLeafName,
+  pascalCase,
+} from "./casing.ts";
 
 /** Function type summary of an import leaf (names are docs-only; §"Functions"). */
 export interface FuncSummary {

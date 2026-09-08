@@ -56,7 +56,8 @@ async function run(jspi: boolean): Promise<unknown> {
 }
 
 Deno.test({
-  name: "deadlock: an unprogressable sync-lowered call traps, and does not hang",
+  name:
+    "deadlock: an unprogressable sync-lowered call traps, and does not hang",
   ignore: !ready,
   fn: async () => {
     // A stall would fail this test by timing out / "promise never resolved"

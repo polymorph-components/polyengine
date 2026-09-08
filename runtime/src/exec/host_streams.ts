@@ -698,11 +698,15 @@ class DirectSession implements DirectBuffer {
   }
 
   read(_n: number): PayloadChunk {
-    throw new Error("internal: a direct session must go through the direct-access byte edge seam");
+    throw new Error(
+      "internal: a direct session must go through the direct-access byte edge seam",
+    );
   }
 
   write(_vs: PayloadChunk): void {
-    throw new Error("internal: a direct session must go through the direct-access byte edge seam");
+    throw new Error(
+      "internal: a direct session must go through the direct-access byte edge seam",
+    );
   }
 
   // --- the direct protocol ---
@@ -735,7 +739,9 @@ class DirectSession implements DirectBuffer {
       this.#fail(
         new TypeError(
           `a direct-access callback must return "more" or "done", got ` +
-            `${JSON.stringify(verdict)} (embedder-api.md §"Streams and futures" ("Direct-access byte edges"))`,
+            `${
+              JSON.stringify(verdict)
+            } (embedder-api.md §"Streams and futures" ("Direct-access byte edges"))`,
         ),
       );
       return "failed";

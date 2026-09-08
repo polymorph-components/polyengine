@@ -339,7 +339,9 @@ function despecializeUncached(t: ValType): DespecializedValType {
       return Object.freeze({
         kind: "record" as const,
         fields: Object.freeze(
-          t.elements.map((e, i) => Object.freeze({ label: String(i), type: e })),
+          t.elements.map((e, i) =>
+            Object.freeze({ label: String(i), type: e })
+          ),
         ) as FieldType[],
       });
     case "enum":
@@ -464,7 +466,6 @@ export function containsBorrow(t: ValType | null): boolean {
   return contains(t, (u) => u.kind === "borrow");
 }
 
-
 export function contains(
   t: ValType | null,
   p: (t: DespecializedValType) => boolean,
@@ -522,7 +523,8 @@ export function valTypeEqual(a: ValType, b: ValType): boolean {
       const bb = b as typeof a;
       return a.fields.length === bb.fields.length &&
         a.fields.every((f, i) =>
-          f.label === bb.fields[i].label && valTypeEqual(f.type, bb.fields[i].type)
+          f.label === bb.fields[i].label &&
+          valTypeEqual(f.type, bb.fields[i].type)
         );
     }
     case "tuple": {
@@ -536,7 +538,9 @@ export function valTypeEqual(a: ValType, b: ValType): boolean {
         a.cases.every((c, i) => {
           const other = bb.cases[i];
           if (c.label !== other.label) return false;
-          if (c.type === null || other.type === null) return c.type === other.type;
+          if (c.type === null || other.type === null) {
+            return c.type === other.type;
+          }
           return valTypeEqual(c.type, other.type);
         });
     }
@@ -594,12 +598,16 @@ export function fmtValType(t: ValType | null): string {
         ? `list<${fmtValType(t.element)}>`
         : `list<${fmtValType(t.element)}, ${t.length}>`;
     case "record":
-      return `record{${t.fields.map((f) => `${f.label}: ${fmtValType(f.type)}`).join(", ")}}`;
+      return `record{${
+        t.fields.map((f) => `${f.label}: ${fmtValType(f.type)}`).join(", ")
+      }}`;
     case "tuple":
       return `tuple<${t.elements.map(fmtValType).join(", ")}>`;
     case "variant":
       return `variant{${
-        t.cases.map((c) => c.type === null ? c.label : `${c.label}(${fmtValType(c.type)})`)
+        t.cases.map((c) =>
+          c.type === null ? c.label : `${c.label}(${fmtValType(c.type)})`
+        )
           .join(", ")
       }}`;
     case "enum":

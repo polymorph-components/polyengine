@@ -47,7 +47,10 @@ import {
   unpackSubtaskResult,
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
-import { BLOCKED, createSubtaskCancel } from "../src/intrinsics/async_builtins.ts";
+import {
+  BLOCKED,
+  createSubtaskCancel,
+} from "../src/intrinsics/async_builtins.ts";
 import {
   abortable,
   deferCancel,
@@ -213,7 +216,8 @@ Deno.test("cancellation discard: the SYNC cancel form under jspi also answers sy
   const rc = f.asGuest(() => cancel(subtaski));
   assert(typeof rc === "number", `expected a number, got ${typeof rc}`);
   assert(
-    !(rc !== null && typeof (rc as unknown as PromiseLike<unknown>) === "object"),
+    !(rc !== null &&
+      typeof (rc as unknown as PromiseLike<unknown>) === "object"),
     "the sync form did not park",
   );
   assertEq(rc, SubtaskState.CANCELLED_BEFORE_RETURNED);
@@ -308,7 +312,9 @@ Deno.test("cancellation discard: deferCancel() keeps run-to-completion — BLOCK
   const f = mkFixture(deferCancel(() => d.promise));
   const { subtaski, subtask } = inFlight(f);
 
-  const rc = f.asGuest(() => createSubtaskCancel({ async: true }, f.inst)(subtaski));
+  const rc = f.asGuest(() =>
+    createSubtaskCancel({ async: true }, f.inst)(subtaski)
+  );
   assertEq(rc, BLOCKED);
   assertEq(subtask.resolved(), false);
   assertEq(subtask.state, SubtaskState.STARTED);

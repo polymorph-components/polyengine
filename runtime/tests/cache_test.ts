@@ -107,7 +107,11 @@ async function roundTrip(cache: ArtifactCache, label: string) {
     adapters: second.adapters,
   });
   const greet = component.exports.greet as (name: string) => string;
-  assertEq(greet("cache"), "Hello, cache!", `${label}: cached artifacts still work`);
+  assertEq(
+    greet("cache"),
+    "Hello, cache!",
+    `${label}: cached artifacts still work`,
+  );
 }
 
 Deno.test("dirCache: round-trip, cache hit skips the translator entirely", async () => {
@@ -317,7 +321,10 @@ class FaultyCache implements ArtifactCache {
   failGet: boolean;
   failPut: boolean;
 
-  constructor(inner: ArtifactCache, opts: { failGet?: boolean; failPut?: boolean } = {}) {
+  constructor(
+    inner: ArtifactCache,
+    opts: { failGet?: boolean; failPut?: boolean } = {},
+  ) {
     this.#inner = inner;
     this.failGet = opts.failGet ?? false;
     this.failPut = opts.failPut ?? false;
@@ -355,7 +362,10 @@ Deno.test("translateCached: cache.get throwing reads as a miss, translation stil
   assertEq(result.fromCache, false, "get failure -> fresh translate");
   assertEq(spy.translateCalls, 1, "exactly one translation");
   assertEq(reportedOp, "get");
-  assert(reportedErr instanceof Error, "onCacheError received the original error");
+  assert(
+    reportedErr instanceof Error,
+    "onCacheError received the original error",
+  );
 });
 
 Deno.test("translateCached: cache.put throwing is swallowed, fresh result still returned", async () => {
@@ -375,7 +385,10 @@ Deno.test("translateCached: cache.put throwing is swallowed, fresh result still 
   assertEq(result.fromCache, false);
   assertEq(spy.translateCalls, 1, "exactly one translation");
   assertEq(reportedOp, "put");
-  assert(reportedErr instanceof Error, "onCacheError received the original error");
+  assert(
+    reportedErr instanceof Error,
+    "onCacheError received the original error",
+  );
   // The result artifacts themselves are still usable, despite the failed store.
   const component = await instantiateComponent({
     plan: result.plan,
@@ -389,7 +402,10 @@ Deno.test("translateCached: cache.put throwing is swallowed, fresh result still 
 Deno.test("translateCached: onCacheError itself throwing does not fail the translation", async () => {
   const translator = await Translator.create(shimWasm);
   const spy = new SpyTranslator(translator);
-  const cache = new FaultyCache(dirCache(await tmpDir()), { failGet: true, failPut: true });
+  const cache = new FaultyCache(dirCache(await tmpDir()), {
+    failGet: true,
+    failPut: true,
+  });
 
   const result = await translateCached(spy, helloWasm, cache, {
     onCacheError: () => {
@@ -430,7 +446,12 @@ Deno.test("dirCache: put against an ENOTDIR root still throws (backend stays hon
 
   let threw = false;
   try {
-    await cache.put(key, { plan: (await translateCached(translator, helloWasm, dirCache(await tmpDir()))).plan, adapters: new Map() });
+    await cache.put(key, {
+      plan:
+        (await translateCached(translator, helloWasm, dirCache(await tmpDir())))
+          .plan,
+      adapters: new Map(),
+    });
   } catch {
     threw = true;
   }
@@ -484,7 +505,11 @@ Deno.test("dirCache: read-only cache root (deployment recipe) still serves a war
 
     const spy = new SpyTranslator(translator);
     const result = await translateCached(spy, helloWasm, cache);
-    assertEq(result.fromCache, true, "warm hit must still work with a read-only root");
+    assertEq(
+      result.fromCache,
+      true,
+      "warm hit must still work with a read-only root",
+    );
     assertEq(spy.translateCalls, 0);
 
     const direct = await cache.get(key);

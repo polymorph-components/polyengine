@@ -32,9 +32,9 @@ import {
   ErrorContext,
   ReadableFutureEnd,
   ReadableStreamEnd,
+  sameElemType,
   type SharedBase,
   SharedFutureImpl,
-  sameElemType,
   SharedStreamImpl,
 } from "../task/streams.ts";
 
@@ -88,8 +88,15 @@ function liftAsyncValue(
   assert_(inst !== null, `${what} lift requires a component instance`);
   const e = inst!.handles.remove(i);
   trapIf(!(e instanceof EndT), `${what} lift: handle is not a ${what} end`);
-  const end = e as { shared: SharedBase; state: CopyState; inWaitableSet(): boolean };
-  trapIf(!sameElemType(end.shared.t, elem), `${what} lift: element type mismatch`);
+  const end = e as {
+    shared: SharedBase;
+    state: CopyState;
+    inWaitableSet(): boolean;
+  };
+  trapIf(
+    !sameElemType(end.shared.t, elem),
+    `${what} lift: element type mismatch`,
+  );
   trapIf(
     end.state === CopyState.DONE,
     what === "future"
