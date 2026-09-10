@@ -23,7 +23,7 @@ import {
 import {
   CopyResult,
   dropSharedForTeardown,
-  ErrorContext as InternalErrorContext,
+  type ErrorContext as InternalErrorContext,
   poisonFailureOf,
 } from "../task/mod.ts";
 import {
@@ -365,18 +365,17 @@ export class Stream<T> implements ProtocolStream<T> {
 
   /** Web-native view: `ReadableStream<Chunk<T>>`. */
   readable(): ReadableStream<Chunk<T>> {
-    const self = this;
     return new ReadableStream<Chunk<T>>({
-      async pull(controller) {
-        const chunk = await self.read(READ_CHUNK);
+      pull: async (controller) => {
+        const chunk = await this.read(READ_CHUNK);
         if ((chunk as { length: number }).length === 0) {
           controller.close();
           return;
         }
         controller.enqueue(chunk);
       },
-      cancel() {
-        self.drop();
+      cancel: () => {
+        this.drop();
       },
     });
   }

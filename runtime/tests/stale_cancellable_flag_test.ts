@@ -33,13 +33,12 @@ function spawn(
   task: Task,
   body: (t: Thread) => Generator<BlockRequest, void, Cancelled>,
 ): Thread {
-  let thread!: Thread;
-  thread = new Thread(
-    task,
-    (function* (): Generator<BlockRequest, void, Cancelled> {
-      yield* body(thread);
-    })(),
-  );
+  // Forward reference: the generator body only runs once `thread` below
+  // is assigned (spawn returns before the body executes).
+  function* threadBody(): Generator<BlockRequest, void, Cancelled> {
+    yield* body(thread);
+  }
+  const thread: Thread = new Thread(task, threadBody());
   return thread;
 }
 

@@ -24,10 +24,6 @@ import { assertEq } from "./support/asserts.ts";
 import { driveStoreAsync } from "../src/exec/mod.ts";
 import { markHostActivityArm, Store } from "../src/task/mod.ts";
 
-function assert(cond: boolean, msg: string): asserts cond {
-  if (!cond) throw new Error(`assertion failed: ${msg}`);
-}
-
 /** The slice of `ComponentInstance` that `Store.tick` touches. */
 function fakeInst() {
   return {};

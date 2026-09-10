@@ -215,7 +215,7 @@ function canonExportItem(
 }
 
 function canonFuncType(
-  plan: WirePlan,
+  _plan: WirePlan,
   decl: WireTypeDecl,
   resourceNames: Map<number, string>,
 ): Canon {

@@ -28,7 +28,7 @@ import {
   abandonReasonOf,
   BUFFER_MAX_LENGTH,
   type ComponentInstanceState,
-  CopyEnd,
+  type CopyEnd,
   CopyResult,
   CopyState,
   currentInstance,

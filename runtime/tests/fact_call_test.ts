@@ -17,9 +17,13 @@ import { assertEq } from "./support/asserts.ts";
 import {
   createAsyncStartCall,
   createPrepareCall,
+  type FactCallContext,
   type PreparedCall,
 } from "../src/intrinsics/fact_calls.ts";
-import { createTaskReturn } from "../src/intrinsics/async_builtins.ts";
+import {
+  type AsyncTrampolineContext,
+  createTaskReturn,
+} from "../src/intrinsics/async_builtins.ts";
 import { newStats, type ResolvedOptions } from "../src/exec/boundary.ts";
 import {
   ComponentInstanceState,
@@ -94,12 +98,13 @@ function runPrepared(input: {
       ? input.calleeResults[0]
       : input.calleeResults;
 
-  // deno-lint-ignore no-explicit-any
-  const prep = createPrepareCall({ memory: null }, ctx as any);
-  // deno-lint-ignore no-explicit-any
+  const prep = createPrepareCall(
+    { memory: null },
+    ctx as unknown as FactCallContext,
+  );
   const startCall = createAsyncStartCall(
     { callback: null, postReturn: null },
-    ctx as any,
+    ctx as unknown as FactCallContext,
   );
 
   prep(
@@ -214,12 +219,11 @@ Deno.test("FACT: task.return preserves float lanes on the passthrough", () => {
     // plan v3: `results` = raw wasmtime TypeTupleIndex, `resultType` = the
     // interned plan.types entry (here: the empty tuple, type 0).
     { results: 0, resultType: 0, options: 0 },
-    // deno-lint-ignore no-explicit-any
     {
       componentInstance: () => inst,
       options: () => opts,
       resultTypes: () => [],
-    } as any,
+    } as unknown as AsyncTrampolineContext,
   );
   const thread = new Thread(task, (function* () {})());
   pushCurrentThread(thread);

@@ -39,7 +39,7 @@ import {
   popCurrentThread,
   pushCurrentThread,
   Store,
-  Subtask,
+  type Subtask,
   SubtaskState,
   Task,
   type TaskOptions,

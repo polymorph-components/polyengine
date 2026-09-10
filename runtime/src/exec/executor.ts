@@ -9,7 +9,7 @@
 //     ops (contracts/intrinsics.md)
 //   - component hash verification against plan.component
 
-import type { ComponentValue, FuncType, ValType } from "../cabi/types.ts";
+import type { FuncType, ValType } from "../cabi/types.ts";
 import { Trap } from "../cabi/trap.ts";
 import { ComponentInstanceState, Store } from "../task/mod.ts";
 import {
@@ -27,7 +27,6 @@ import {
   trampolineNeedsSuspension,
 } from "../jspi/mod.ts";
 import { loadPlan, PlanError, resourceIndexOfDefined } from "../plan/loader.ts";
-import { PendingCapability } from "../task/mod.ts";
 import type {
   WireCanonicalOptions,
   WireCoreDef,

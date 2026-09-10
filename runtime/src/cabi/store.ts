@@ -1,6 +1,6 @@
 // Storing component values into linear memory (definitions.py `## Storing`).
 
-import { assert_, NotImplemented, trapIf } from "./trap.ts";
+import { assert_, trapIf } from "./trap.ts";
 import { bytesOf, storeInt, storePtr } from "./memory.ts";
 import { tryStoreNumericList } from "./bulk_lists.ts";
 import { encodeFloatAsI32, encodeFloatAsI64 } from "./float.ts";

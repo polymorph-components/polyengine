@@ -43,7 +43,6 @@ import {
   Store,
   Task,
   Thread,
-  WaitableSet,
 } from "../src/task/mod.ts";
 import type { ResolvedOptions } from "../src/exec/boundary.ts";
 

@@ -53,7 +53,7 @@ import type { SuspensionPoint } from "../src/jspi/mod.ts";
 import {
   canonResourceDrop,
   canonResourceNew,
-  ResourceHandle,
+  type ResourceHandle,
   ResourceTableInfo,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";

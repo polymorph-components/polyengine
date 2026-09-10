@@ -6,7 +6,7 @@ import {
   canonResourceNew,
   canonResourceRep,
   LiftLowerContext,
-  ResourceHandle,
+  type ResourceHandle,
   ResourceTableInfo,
   ResourceTypeInfo,
   Trap,
@@ -33,7 +33,7 @@ import {
 } from "../src/exec/boundary.ts";
 import {
   ComponentInstanceState,
-  CopyEnd,
+  type CopyEnd,
   CopyState,
   popCurrentThread,
   pushCurrentThread,

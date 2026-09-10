@@ -24,7 +24,7 @@ import { NeedsJspi } from "../src/task/scheduler.ts";
 import {
   canonResourceDrop,
   canonResourceNew,
-  ResourceHandle,
+  type ResourceHandle,
   ResourceTableInfo,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";

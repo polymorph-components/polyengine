@@ -33,6 +33,7 @@ import {
   createAsyncStartCall,
   createPrepareCall,
   createSyncStartCall,
+  type FactCallContext,
   type PreparedCall,
 } from "../src/intrinsics/fact_calls.ts";
 import type { FactStartScope } from "../src/intrinsics/mod.ts";
@@ -46,7 +47,7 @@ import type { SuspensionPoint } from "../src/jspi/mod.ts";
 import {
   canonResourceDrop,
   canonResourceNew,
-  ResourceHandle,
+  type ResourceHandle,
   ResourceTableInfo,
   ResourceTypeInfo,
 } from "../src/cabi/mod.ts";
@@ -130,15 +131,18 @@ function mkHarness(): Harness {
       };
       const return_ = () => undefined as unknown as CoreValue;
 
-      // deno-lint-ignore no-explicit-any
-      const prep = createPrepareCall({ memory: null }, ctx as any);
+      const prep = createPrepareCall(
+        { memory: null },
+        ctx as unknown as FactCallContext,
+      );
       const startCall = kind === "sync"
-        // deno-lint-ignore no-explicit-any
-        ? createSyncStartCall({ callback: null }, ctx as any)
-        // deno-lint-ignore no-explicit-any
+        ? createSyncStartCall(
+          { callback: null },
+          ctx as unknown as FactCallContext,
+        )
         : createAsyncStartCall(
           { callback: null, postReturn: null },
-          ctx as any,
+          ctx as unknown as FactCallContext,
         );
 
       prep(
