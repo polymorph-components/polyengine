@@ -41,7 +41,6 @@ import { type ImportLeaf, requiredImports } from "./imports.ts";
 import { hostDtorCall } from "../exec/boundary.ts";
 import {
   buildGuestResourceClass,
-  type ExportWrapper,
   type GuestResourceSpec,
   HostResourceRegistry,
   invalidateWrapper,
@@ -59,7 +58,7 @@ import {
 } from "./values.ts";
 import { ImportResolver } from "./version.ts";
 import { type ElemCodec, Future, Stream } from "./streams.ts";
-import { markSyncCallable, syncPayloadOf } from "./sync.ts";
+import { markSyncCallable } from "./sync.ts";
 
 /**
  * Preserve declaration-level suspension/cancellation marks through every
@@ -404,59 +403,58 @@ class Facade {
   // -- the value bridge ------------------------------------------------------
 
   #makeBridge(): ValueBridge {
-    const self = this;
     return {
-      liftOwn(rep, t) {
-        const b = self.#binding(t.rt.resource);
+      liftOwn: (rep, t) => {
+        const b = this.#binding(t.rt.resource);
         // Host-implemented R: "the host's own instance back; the guest's
         // handle is gone; no dispose call" (contract 2x4 table).
         if (b.kind === "host") return b.registry.release(rep);
-        return makeWrapper(self.#guestClass(b), rep, t.rt.resource, true);
+        return makeWrapper(this.#guestClass(b), rep, t.rt.resource, true);
       },
-      liftBorrow(rep, t, scope) {
-        const b = self.#binding(t.rt.resource);
+      liftBorrow: (rep, t, scope) => {
+        const b = this.#binding(t.rt.resource);
         // Host-implemented R: "the host's own instance; borrow scoping is
         // guest-side bookkeeping" — the mapping is kept.
         if (b.kind === "host") return b.registry.lookup(rep);
-        const w = makeWrapper(self.#guestClass(b), rep, t.rt.resource, false);
+        const w = makeWrapper(this.#guestClass(b), rep, t.rt.resource, false);
         scope.add(() => invalidateWrapper(w));
         return w;
       },
-      lowerOwn(v, t) {
-        const b = self.#binding(t.rt.resource);
+      lowerOwn: (v, t) => {
+        const b = this.#binding(t.rt.resource);
         if (b.kind === "host") return b.registry.repFor(v);
         return takeRep(v, t.rt.resource, true, `own<${b.name}>`);
       },
-      lowerBorrow(v, t) {
-        const b = self.#binding(t.rt.resource);
+      lowerBorrow: (v, t) => {
+        const b = this.#binding(t.rt.resource);
         if (b.kind === "host") {
           // Each overlapping call retains the rep; the final borrow release
           // removes only temporary mappings, never a guest-owned registration.
           const { rep, release } = b.registry.borrowFor(v);
-          if (self.#lowerScope === null) release();
-          else self.#lowerScope.push(release);
+          if (this.#lowerScope === null) release();
+          else this.#lowerScope.push(release);
           return rep;
         }
         // Retain the rep until this call ends; explicit/GC drop must not
         // destroy it while borrowed (lift_borrow -> Subtask.add_lender).
         const rep = takeRep(v, t.rt.resource, false, `borrow<${b.name}>`);
         const release = lendWrapper(v as object);
-        if (self.#lowerScope === null) {
+        if (this.#lowerScope === null) {
           // No enclosing lowering scope (a raw/one-off lowering): the lend
           // has no observable window, so it must not be left dangling.
           release();
         } else {
-          self.#lowerScope.push(release);
+          this.#lowerScope.push(release);
         }
         return rep;
       },
-      dropOwn(rep, t) {
+      dropOwn: (rep, t) => {
         // resource stream: a lowered `own` the guest will never take (an un-taken
         // stream element). Destroy it exactly as a guest-side drop would:
         // host-implemented R runs the instance's [Symbol.dispose] through
         // the registry; guest-implemented R runs the guest dtor via the
         // gated path (a host-initiated drop, `caller = None`).
-        const b = self.#binding(t.rt.resource);
+        const b = this.#binding(t.rt.resource);
         if (b.kind === "host") {
           b.registry.dtor(rep);
           return;
@@ -825,7 +823,6 @@ class Facade {
     return out;
   }
 
-  // deno-lint-ignore no-explicit-any
   #buildInterface(
     id: string,
     exps: WireExport[],
@@ -1014,9 +1011,11 @@ class Facade {
     } catch (e) {
       try {
         release();
-      } finally {
-        throw e;
+      } catch {
+        // The original error wins; a secondary failure of the unwind is
+        // not the story.
       }
+      throw e;
     } finally {
       this.#lowerScope = outer;
     }

@@ -9,10 +9,10 @@ default:
 ci: (gha::core) (gha::browser)
 
 # Full pre-commit gates, including local consumer smokes (docs/consumers.md).
-gates: version-guard-local fmt-check build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle test-version-guard publish-check test-npm examples test-translate conformance sched-seeds shells browsers smoke-tls smoke-c0
+gates: version-guard-local fmt-check lint build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle test-version-guard publish-check test-npm examples test-translate conformance sched-seeds shells browsers smoke-tls smoke-c0
 
 # Fast sanity: builds + native tests + type-checks, no suites.
-check: fmt-check build test-rust
+check: fmt-check lint build test-rust
     cd protocol && deno task check
     cd runtime && deno task check
     cd wasi && deno task check
@@ -21,6 +21,11 @@ check: fmt-check build test-rust
 # Runtime formatting; generated files are excluded by runtime/deno.json.
 fmt-check:
     cd runtime && deno fmt --check
+
+# The runtime package is lint-clean (`deno lint`, stock rules; generated
+# artifacts excluded in runtime/deno.json alongside fmt).
+lint:
+    cd runtime && deno lint
 
 # ----- builders ---------------------------------------------------------------
 

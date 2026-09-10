@@ -45,6 +45,7 @@ core:
     @just gha::_step version-guard-local
     @just gha::_step version-guard-pr
     @just gha::_step fmt-check
+    @just gha::_step lint
     @just gha::_step build
     @just gha::_step test-rust
     @just gha::_step shim

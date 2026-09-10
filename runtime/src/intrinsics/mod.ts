@@ -14,12 +14,7 @@ import { trapIf } from "../cabi/trap.ts";
 import { assert_ } from "../cabi/trap.ts";
 import type { ResourceTableInfo } from "../cabi/types.ts";
 import type { ComponentInstanceState } from "../task/mod.ts";
-import {
-  dbgId,
-  entryRefusal,
-  maybeCurrentTask,
-  maybeCurrentThread,
-} from "../task/mod.ts";
+import { dbgId, entryRefusal, maybeCurrentThread } from "../task/mod.ts";
 import type { WireTrampoline } from "../plan/format.ts";
 import type { CoreFn, ExecutionStats } from "../exec/boundary.ts";
 import { UnsupportedFeatureError } from "./errors.ts";
@@ -334,7 +329,6 @@ function declaredInstance(
   return ctx.componentInstance(instance);
 }
 
-// deno-lint-ignore no-explicit-any
 const SCOPE_TRACE = (() => {
   try {
     return Deno.env.get("CE_SCOPE_TRACE") === "1";
@@ -347,9 +341,9 @@ const SCOPE_TRACE = (() => {
  * Brackets belong to the running thread because activations can interleave.
  * Instantiation-time start functions have no thread and use the executor stack.
  */
-function syncScopes(ctx: TrampolineContext, site = "?"): any[] {
+function syncScopes(ctx: TrampolineContext, site = "?"): SyncCallScope[] {
   const thread = maybeCurrentThread() as
-    | { syncCallStack: any[] }
+    | { syncCallStack: SyncCallScope[] }
     | undefined;
   const scopes = thread?.syncCallStack ?? ctx.syncCallStack;
   if (SCOPE_TRACE) {

@@ -102,7 +102,7 @@ Deno.test({
   name:
     "conventions/g: isErrorContext accepts a hand-rolled carrier, rejects a husk",
   fn: async () => {
-    await transcript("g-error-context-predicate", async (t) => {
+    await transcript("g-error-context-predicate", (t) => {
       // The vocabulary claim on its own: recognition is brand + string
       // `message`, in any copy, hand-rolled or not.
       t.note("hand-rolled", {
@@ -113,6 +113,7 @@ Deno.test({
       husk[Symbol.for(ERROR_CONTEXT_KEY)] = true;
       t.note("branded-non-string-message", { classified: classify(husk) });
       t.note("unbranded", { classified: classify({ message: "m" }) });
+      return Promise.resolve();
     });
   },
 });

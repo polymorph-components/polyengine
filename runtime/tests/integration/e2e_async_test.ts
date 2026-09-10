@@ -18,8 +18,7 @@
 import { assertEq } from "../support/asserts.ts";
 import { Translator } from "../../src/shim/mod.ts";
 import { instantiateComponent } from "../../src/exec/mod.ts";
-import { PendingCapability } from "../../src/task/mod.ts";
-import { AssertionError, NotImplemented, Trap } from "../../src/cabi/mod.ts";
+import { AssertionError } from "../../src/cabi/mod.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error(`assertion failed: ${msg}`);

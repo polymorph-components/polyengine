@@ -736,7 +736,7 @@ Deno.test("#100: a host peer parked on a poisoned guest's end is still notified"
 
 for (const future of [false, true]) {
   for (const writable of [false, true]) {
-    Deno.test(`removed busy ${future ? "future" : "stream"} ${writable ? "writer" : "reader"} cannot copy stale guest bytes`, async () => {
+    Deno.test(`removed busy ${future ? "future" : "stream"} ${writable ? "writer" : "reader"} cannot copy stale guest bytes`, () => {
       const inst = new ComponentInstanceState(0, new Store());
       const { memory, view } = mkMemory();
       const u8 = { kind: "u8" } as const;

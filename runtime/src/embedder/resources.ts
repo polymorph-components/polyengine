@@ -349,18 +349,22 @@ export function buildGuestResourceClass(
       } catch (e) {
         try {
           release();
-        } finally {
-          throw e;
+        } catch {
+          // The original error wins; a secondary failure of the unwind is
+          // not the story.
         }
+        throw e;
       }
       try {
         release();
       } catch (e) {
         try {
           if (typeof rep === "number") hostDtorCall(rt, rep);
-        } finally {
-          throw e;
+        } catch {
+          // The original error wins; a secondary failure of the unwind is
+          // not the story.
         }
+        throw e;
       }
       if (rep !== null && typeof rep === "object" && "then" in rep) {
         throw new TypeError(

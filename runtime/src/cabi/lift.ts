@@ -1,7 +1,7 @@
 // Flat lifting (definitions.py `## Flat Lifting`): core values -> component
 // values.
 
-import { assert_, NotImplemented, trapIf } from "./trap.ts";
+import { assert_, trapIf } from "./trap.ts";
 import {
   canonicalizeNan32,
   canonicalizeNan64,

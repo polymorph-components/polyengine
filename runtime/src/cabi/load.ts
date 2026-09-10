@@ -1,6 +1,6 @@
 // Loading component values from linear memory (definitions.py `## Loading`).
 
-import { assert_, NotImplemented, trapIf } from "./trap.ts";
+import { assert_, trapIf } from "./trap.ts";
 import { bytesOf, loadIntS, loadIntU, loadPtr } from "./memory.ts";
 import { decodeI32AsFloat, decodeI64AsFloat } from "./float.ts";
 import { elemSizeFlags, layoutOf } from "./layout.ts";
@@ -8,12 +8,7 @@ import { convertI32ToChar, loadString } from "./strings.ts";
 import { type LiftLowerContext, requireMemory } from "./context.ts";
 import { tryLoadNumericList } from "./bulk_lists.ts";
 import { liftBorrow, liftOwn } from "./handles.ts";
-import {
-  type CaseType,
-  type ComponentValue,
-  type FieldType,
-  type ValType,
-} from "./types.ts";
+import type { CaseType, ComponentValue, FieldType, ValType } from "./types.ts";
 import { liftErrorContext, liftFuture, liftStream } from "./async_values.ts";
 
 export const MAX_LIST_BYTE_LENGTH = (1 << 28) - 1;

@@ -489,7 +489,6 @@ export function maybeCurrentThread(): CurrentThreadLike | undefined {
  * the brackets and claims. In definitions.py `canon_context_get` and
  * `canon_context_set`, identity comes directly from `current_thread`.
  */
-// deno-lint-ignore no-explicit-any
 export function currentThreadForInstance<T = CurrentThreadLike>(
   inst: unknown,
 ): T {

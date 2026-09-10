@@ -16,14 +16,14 @@ import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 import {
   Future,
   lowerFutureSource,
-  Stream,
+  type Stream,
 } from "../../src/embedder/streams.ts";
 import { hostFuture, hostFutureFor } from "../../src/exec/host_streams.ts";
-import { HostResourceRegistry } from "../../src/embedder/resources.ts";
+import type { HostResourceRegistry } from "../../src/embedder/resources.ts";
 import { INTERNAL_HOST_REGISTRIES } from "../../src/embedder/instantiate.ts";
 import { sync } from "../../src/embedder/sync.ts";
 import { StreamProducerError, Trap } from "@polyengine/protocol";
-import { SharedFutureImpl } from "../../src/task/mod.ts";
+import type { SharedFutureImpl } from "../../src/task/mod.ts";
 
 const turn = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const ownFixture = "runtime/tests/embedder/future-own.wasm";
@@ -218,8 +218,8 @@ for (const synchronous of [false, true]) {
           toHost: (v) => v as number,
           fromHost: (v) => v,
         });
-        let registry: HostResourceRegistry;
-        let rep: number;
+        // Forward reference: the closure runs later, after `registry`/`rep`
+        // below are filled in.
         const c = await instantiateFixture(cleanupFixture, {
           r: R,
           next: () => future,
@@ -228,12 +228,12 @@ for (const synchronous of [false, true]) {
             if (callFails) throw primary;
           },
         });
-        registry =
+        const registry =
           (c as unknown as Record<symbol, Map<number, HostResourceRegistry>>)[
             INTERNAL_HOST_REGISTRIES
           ].get(0)!;
         const cell = new R();
-        rep = registry.repFor(cell);
+        const rep = registry.repFor(cell);
         let observed: unknown;
         try {
           await (synchronous ? sync(c.exports.run)(cell) : c.exports.run(cell));

@@ -17,7 +17,7 @@
 // predicate. Trap MESSAGE text is diagnostic, not API — an engine-worded trap
 // (a raw `unreachable`) is recorded by brand alone (see support.ts).
 
-import { guest, haveFixture, instantiateFixture, testdata } from "./harness.ts";
+import { guest, haveFixture, instantiateFixture } from "./harness.ts";
 import { transcript } from "./support.ts";
 import { classify, ComponentException } from "./probe.ts";
 import { handRolledException } from "./probe_zero_import.ts";
@@ -143,7 +143,7 @@ Deno.test({
   name:
     "conventions/e: predicates recognize a hand-rolled exception, either copy",
   fn: async () => {
-    await transcript("e-brand-recognition", async (t) => {
+    await transcript("e-brand-recognition", (t) => {
       // No engine involved: the vocabulary claim itself. A hand-rolled brand
       // and the canonical class are the same thing to every predicate, because
       // the brand is a `Symbol.for` registry symbol.
@@ -157,6 +157,7 @@ Deno.test({
       // A payloadless err: `payload` is `undefined`, and the property is
       // PRESENT (the empty-side spelling), which normalize() records.
       t.note("payloadless", { value: new ComponentException(undefined) });
+      return Promise.resolve();
     });
   },
 });

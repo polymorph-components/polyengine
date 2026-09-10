@@ -20,6 +20,7 @@ import {
   createStreamNew,
   createStreamRead,
   createStreamWrite,
+  type StreamTrampolineContext,
 } from "../src/intrinsics/stream_builtins.ts";
 import {
   createLiftedFunction,
@@ -348,16 +349,14 @@ Deno.test("stream.cancel-write supersedes an undelivered COMPLETED", () => {
 
   // deno-lint-ignore no-explicit-any
   const newStream = createStreamNew({ streamTable: 0 }, ctx as any, inst);
-  // deno-lint-ignore no-explicit-any
   const write = createStreamWrite(
     { streamTable: 0, options: 0 },
-    ctx as any,
+    ctx as unknown as StreamTrampolineContext,
     inst,
   );
-  // deno-lint-ignore no-explicit-any
   const read = createStreamRead(
     { streamTable: 0, options: 0 },
-    ctx as any,
+    ctx as unknown as StreamTrampolineContext,
     inst,
   );
   const cancelWrite = createStreamCancelWrite(

@@ -1,7 +1,7 @@
 // Flat lowering (definitions.py `## Flat Lowering`): component values ->
 // core values.
 
-import { assert_, NotImplemented } from "./trap.ts";
+import { assert_ } from "./trap.ts";
 import {
   encodeFloatAsI32,
   encodeFloatAsI64,

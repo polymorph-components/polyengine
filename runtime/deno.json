@@ -20,6 +20,13 @@
       "tests/fixtures/"
     ]
   },
+  "lint": {
+    "exclude": [
+      "tests/bindgen/generated/",
+      "tests/bindgen/fixtures/",
+      "tests/fixtures/"
+    ]
+  },
   "publish": {
     "exclude": [
       "tests/"

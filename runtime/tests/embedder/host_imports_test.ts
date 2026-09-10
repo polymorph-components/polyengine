@@ -358,8 +358,8 @@ for (const mode of ["constructor", "promise", "sync"] as const) {
           throw boom;
         }
       }
-      let registry: HostResourceRegistry;
-      let rep: number;
+      // Forward reference: the closure runs later, after `registry`/`rep`
+      // below are filled in.
       const c = await instantiateFixture(overlapFixture, {
         "host:api/res": {
           R,
@@ -369,12 +369,12 @@ for (const mode of ["constructor", "promise", "sync"] as const) {
           },
         },
       });
-      registry =
+      const registry =
         (c as unknown as Record<symbol, Map<number, HostResourceRegistry>>)[
           INTERNAL_HOST_REGISTRIES
         ].get(0)!;
       const cell = new R();
-      rep = registry.repFor(cell);
+      const rep = registry.repFor(cell);
       const e = await caught(() =>
         mode === "constructor"
           ? new c.exports.Ticket(cell)
@@ -405,8 +405,8 @@ for (const mode of ["constructor", "promise", "sync"] as const) {
           throw new Error("secondary disposal");
         }
       }
-      let registry: HostResourceRegistry;
-      let rep: number;
+      // Forward reference: the closure runs later, after `registry`/`rep`
+      // below are filled in.
       const c = await instantiateFixture(overlapFixture, {
         "host:api/res": {
           R,
@@ -416,12 +416,12 @@ for (const mode of ["constructor", "promise", "sync"] as const) {
           },
         },
       });
-      registry =
+      const registry =
         (c as unknown as Record<symbol, Map<number, HostResourceRegistry>>)[
           INTERNAL_HOST_REGISTRIES
         ].get(0)!;
       const cell = new R();
-      rep = registry.repFor(cell);
+      const rep = registry.repFor(cell);
       const e = await caught(() =>
         mode === "constructor"
           ? new c.exports.Ticket(cell)
@@ -617,7 +617,7 @@ Deno.test({
       symbol,
       Map<number, HostResourceRegistry>
     >)[INTERNAL_HOST_REGISTRIES].get(0)!;
-    using ticket = new c.exports.Ticket(cell);
+    using _ticket = new c.exports.Ticket(cell);
     assertEq(seen === cell, true);
     assertEq(registry.liveCount, 0);
   },

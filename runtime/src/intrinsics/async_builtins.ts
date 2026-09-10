@@ -37,9 +37,8 @@ import {
   liftOptionsEqual,
   needsJspi,
   Subtask,
-  SubtaskState,
   type Task,
-  Thread,
+  type Thread,
   Waitable,
   WaitableSet,
 } from "../task/mod.ts";

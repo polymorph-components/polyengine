@@ -10,7 +10,7 @@
 
 import { defineBrand, ERROR_CONTEXT } from "@polyengine/protocol";
 import { assert_, Trap, trapIf } from "../cabi/trap.ts";
-import { LiftLowerContext } from "../cabi/context.ts";
+import type { LiftLowerContext } from "../cabi/context.ts";
 import { bytesOf } from "../cabi/memory.ts";
 import { loadListFromValidRange } from "../cabi/load.ts";
 import { storeListIntoValidRange } from "../cabi/store.ts";
