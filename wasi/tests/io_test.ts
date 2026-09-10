@@ -3,7 +3,7 @@
 
 import { assertEq, assertRejects, assertTrue } from "./asserts.ts";
 import { ComponentException } from "@polyengine/protocol";
-import { InputStream, io, OutputStream, Pollable, poll } from "../src/io.ts";
+import { InputStream, io, OutputStream, poll, Pollable } from "../src/io.ts";
 import type { StreamErrorValue } from "../src/io.ts";
 
 Deno.test("io: pollable is always ready (tier a) and block() is a no-op", () => {
@@ -44,7 +44,10 @@ Deno.test("io: writes after drop throw ComponentException<stream-error> 'closed'
     out.write(new Uint8Array([1]));
     throw new Error("expected a throw");
   } catch (e) {
-    assertTrue(e instanceof ComponentException, "closed write throws ComponentException");
+    assertTrue(
+      e instanceof ComponentException,
+      "closed write throws ComponentException",
+    );
     const payload = (e as ComponentException<StreamErrorValue>).payload;
     assertEq(payload.kind, "closed");
   }
@@ -58,7 +61,10 @@ Deno.test("io: checkWrite after drop also throws the closed stream-error", () =>
     throw new Error("expected a throw");
   } catch (e) {
     assertTrue(e instanceof ComponentException);
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
 });
 
@@ -76,8 +82,14 @@ Deno.test("io: InputStream.read reaches closed after the buffer drains (issue #1
     s.read(2n);
     throw new Error("expected a throw");
   } catch (e) {
-    assertTrue(e instanceof ComponentException, "drained read throws ComponentException");
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertTrue(
+      e instanceof ComponentException,
+      "drained read throws ComponentException",
+    );
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
   // Once closed at EOF, subsequent reads keep throwing closed (the loop
   // terminates, it doesn't oscillate).
@@ -85,7 +97,10 @@ Deno.test("io: InputStream.read reaches closed after the buffer drains (issue #1
     s.read(1n);
     throw new Error("expected a throw");
   } catch (e) {
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
 });
 
@@ -105,7 +120,10 @@ Deno.test("io: InputStream defaults to an empty buffer that is closed on first n
     throw new Error("expected a throw");
   } catch (e) {
     assertTrue(e instanceof ComponentException);
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
 });
 
@@ -117,13 +135,19 @@ Deno.test("io: reading a dropped input stream throws closed stream-error", () =>
     throw new Error("expected a throw");
   } catch (e) {
     assertTrue(e instanceof ComponentException);
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
 });
 
 Deno.test("io: blockingRead degenerates to read (tier b, never parks)", () => {
   const s = new InputStream(new Uint8Array([7, 8]));
-  assertEq(JSON.stringify([...(s.blockingRead(2n) as Uint8Array)]), JSON.stringify([7, 8]));
+  assertEq(
+    JSON.stringify([...(s.blockingRead(2n) as Uint8Array)]),
+    JSON.stringify([7, 8]),
+  );
 });
 
 // Issue #178: blockingRead inherits read's closed-at-EOF signal, so a
@@ -136,7 +160,10 @@ Deno.test("io: blockingRead reaches closed after the buffer drains (issue #178 l
     throw new Error("expected a throw");
   } catch (e) {
     assertTrue(e instanceof ComponentException);
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
 });
 
@@ -151,7 +178,10 @@ Deno.test("io: skip reaches closed after the buffer drains (issue #178 livelock)
     throw new Error("expected a throw");
   } catch (e) {
     assertTrue(e instanceof ComponentException);
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
 });
 
@@ -163,7 +193,10 @@ Deno.test("io: blockingSkip reaches closed after the buffer drains (issue #178 l
     throw new Error("expected a throw");
   } catch (e) {
     assertTrue(e instanceof ComponentException);
-    assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
+    assertEq(
+      (e as ComponentException<StreamErrorValue>).payload.kind,
+      "closed",
+    );
   }
 });
 
@@ -189,10 +222,12 @@ Deno.test("io: a closed-stream failure never leaks an unbranded throw type", asy
   const out = new OutputStream(() => {
     throw new Error("sink exploded");
   });
-  const rejected = await assertRejects(async () => {
+  const rejected = await assertRejects(() => {
     out.write(new Uint8Array([1]));
   });
-  assertTrue(rejected instanceof Error && !(rejected instanceof ComponentException));
+  assertTrue(
+    rejected instanceof Error && !(rejected instanceof ComponentException),
+  );
   // NOTE: this documents current behavior — a sink that itself throws
   // propagates its raw Error out of this synchronous host-import function.
   // Per contracts/embedder-api.md §"Error model", the *embedder facade*

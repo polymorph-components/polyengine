@@ -18,7 +18,10 @@ async function maybeRead(url: URL): Promise<Uint8Array | null> {
 }
 
 const trivial = await maybeRead(
-  new URL("../../crates/translator-shim/testdata/trivial.wasm", import.meta.url),
+  new URL(
+    "../../crates/translator-shim/testdata/trivial.wasm",
+    import.meta.url,
+  ),
 );
 const asset = await maybeRead(
   new URL("../translator_shim.wasm", import.meta.url),
@@ -26,7 +29,8 @@ const asset = await maybeRead(
 const ready = trivial !== null && asset !== null;
 
 Deno.test({
-  name: "defaultTranslator: loads, translates, and matches a bytes-built Translator",
+  name:
+    "defaultTranslator: loads, translates, and matches a bytes-built Translator",
   ignore: !ready,
   fn: async () => {
     const t = await defaultTranslator();

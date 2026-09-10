@@ -20,7 +20,8 @@ import { Translator } from "@polyengine/runtime/shim";
 import { instantiate } from "@polyengine/runtime/embedder";
 import { wasi } from "../src/mod.ts";
 
-const ARTIFACT = "/home/lmartin/p/polymorph/experiment-mosh/engine-go/main.wasm";
+const ARTIFACT =
+  "/home/lmartin/p/polymorph/experiment-mosh/engine-go/main.wasm";
 const SHIM_WASM = new URL(
   "../../target/wasm32-unknown-unknown/release/translator_shim.wasm",
   import.meta.url,
@@ -94,7 +95,9 @@ Deno.test({
     const version = await engine.version();
     assertTrue(
       typeof version === "string" && version.length > 0,
-      `version() should return a non-empty string, got: ${JSON.stringify(version)}`,
+      `version() should return a non-empty string, got: ${
+        JSON.stringify(version)
+      }`,
     );
     assertTrue(
       version.includes("engine"),

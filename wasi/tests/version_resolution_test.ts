@@ -59,7 +59,9 @@ Deno.test("virtualization: a spread-replaced track key serves the stub; siblings
   // The stubbed interface resolves to the stub — at any 0.2.x the guest asks.
   const stubbed = resolver.resolve("wasi:random/random@0.2.9");
   assertTrue(stubbed !== undefined);
-  const provider = stubbed!.value as { getRandomBytes(len: bigint): Uint8Array };
+  const provider = stubbed!.value as {
+    getRandomBytes(len: bigint): Uint8Array;
+  };
   assertEq(provider.getRandomBytes(4n), fixed);
   // Sibling interfaces from the SAME fragment are untouched.
   const sibling = resolver.resolve("wasi:random/insecure-seed@0.2.9");
@@ -72,7 +74,9 @@ Deno.test("virtualization: track + exact keys on one track are refused, loudly",
   // adding an exact-versioned sibling (ambiguous; refused at registration).
   const composed = {
     ...wasi(),
-    "wasi:random/random@0.2.9": { getRandomBytes: (): Uint8Array => new Uint8Array(0) },
+    "wasi:random/random@0.2.9": {
+      getRandomBytes: (): Uint8Array => new Uint8Array(0),
+    },
   };
   let threw: unknown;
   try {

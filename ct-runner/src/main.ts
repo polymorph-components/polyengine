@@ -104,7 +104,9 @@ function parseArgs(argv: string[]): Cli {
         positional.push(a);
     }
   }
-  if (positional.length !== 1) usageError("expected exactly one <suite.wasm> argument");
+  if (positional.length !== 1) {
+    usageError("expected exactly one <suite.wasm> argument");
+  }
   if (out === undefined) usageError("--out <results.jsonl> is required");
   return {
     suitePath: positional[0],
@@ -121,7 +123,9 @@ function parseArgs(argv: string[]): Cli {
   };
 }
 
-async function loadImportsModule(path: string): Promise<Record<string, unknown>> {
+async function loadImportsModule(
+  path: string,
+): Promise<Record<string, unknown>> {
   const mod = await import(
     path.startsWith(".") || path.startsWith("/")
       ? new URL(path, `file://${Deno.cwd()}/`).href
@@ -142,7 +146,8 @@ async function loadImportsModule(path: string): Promise<Record<string, unknown>>
  * `polyengine-translator-shim.wasm` asset instead. */
 async function loadTranslator(explicit?: string): Promise<Translator> {
   const fromEnv = Deno.env.get("POLYENGINE_TRANSLATOR");
-  const path = explicit ?? (fromEnv !== undefined && fromEnv !== "" ? fromEnv : undefined);
+  const path = explicit ??
+    (fromEnv !== undefined && fromEnv !== "" ? fromEnv : undefined);
   if (path !== undefined) {
     let bytes: Uint8Array;
     try {
@@ -150,7 +155,9 @@ async function loadTranslator(explicit?: string): Promise<Translator> {
     } catch (e) {
       console.error(
         `error: cannot read translator wasm at ${path}` +
-          ` (${explicit !== undefined ? "--translator" : "POLYENGINE_TRANSLATOR"}): ${e}`,
+          ` (${
+            explicit !== undefined ? "--translator" : "POLYENGINE_TRANSLATOR"
+          }): ${e}`,
       );
       Deno.exit(1);
     }

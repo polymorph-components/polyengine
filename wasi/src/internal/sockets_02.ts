@@ -227,21 +227,23 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
 
   /** Mint the wasi:io stream pair over a connection (module header). */
   const connStreams = (conn: TcpConn): [FedInputStream, SinkOutputStream] => {
-    const input = new FedInputStream((async function* (): AsyncGenerator<Uint8Array> {
-      for (;;) {
-        let chunk: Uint8Array | null;
-        try {
-          chunk = await conn.read(TCP_RECEIVE_CHUNK);
-        } catch (e) {
-          throw new SocketIoError(
-            toCode02(e, "input-stream (socket read)"),
-            e instanceof Error ? e.message : String(e),
-          );
+    const input = new FedInputStream(
+      (async function* (): AsyncGenerator<Uint8Array> {
+        for (;;) {
+          let chunk: Uint8Array | null;
+          try {
+            chunk = await conn.read(TCP_RECEIVE_CHUNK);
+          } catch (e) {
+            throw new SocketIoError(
+              toCode02(e, "input-stream (socket read)"),
+              e instanceof Error ? e.message : String(e),
+            );
+          }
+          if (chunk === null) return; // peer FIN: clean stream close
+          if (chunk.length > 0) yield chunk;
         }
-        if (chunk === null) return; // peer FIN: clean stream close
-        if (chunk.length > 0) yield chunk;
-      }
-    })());
+      })(),
+    );
     const output = new SinkOutputStream(async (chunk) => {
       try {
         let at = 0;
@@ -325,7 +327,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     finishBind(): void {
       onCall("tcp-socket.finish-bind");
       if (this.#state !== "bind-in-progress") {
-        throw err02("not-in-progress", "tcp-socket.finish-bind: no bind in progress");
+        throw err02(
+          "not-in-progress",
+          "tcp-socket.finish-bind: no bind in progress",
+        );
       }
       this.#state = "bound"; // recorded; deferred to listen/connect (header)
     }
@@ -341,7 +346,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       validateRemote(this.#family, remoteAddress, "tcp-socket.start-connect");
       const connect = tcpConnect();
       if (connect === undefined) {
-        throw err02("not-supported", "tcp-socket.start-connect: no TCP backend (no node:net)");
+        throw err02(
+          "not-supported",
+          "tcp-socket.start-connect: no TCP backend (no node:net)",
+        );
       }
       const local = this.#localRequest;
       const dial: DialState = { done: false, wait: Promise.resolve() };
@@ -373,10 +381,16 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       onCall("tcp-socket.finish-connect");
       const dial = this.#dial;
       if (this.#state !== "connect-in-progress" || dial === undefined) {
-        throw err02("not-in-progress", "tcp-socket.finish-connect: no connect in progress");
+        throw err02(
+          "not-in-progress",
+          "tcp-socket.finish-connect: no connect in progress",
+        );
       }
       if (!dial.done) {
-        throw err02("would-block", "tcp-socket.finish-connect: the dial has not settled");
+        throw err02(
+          "would-block",
+          "tcp-socket.finish-connect: the dial has not settled",
+        );
       }
       if (dial.error !== undefined || dial.conn === undefined) {
         // "After a failed connection attempt ... the only valid action
@@ -403,7 +417,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       }
       const listen = tcpListen();
       if (listen === undefined) {
-        throw err02("not-supported", "tcp-socket.start-listen: no TCP backend (no node:net)");
+        throw err02(
+          "not-supported",
+          "tcp-socket.start-listen: no TCP backend (no node:net)",
+        );
       }
       const local = this.#localRequest ?? wildcard(this.#family);
       const listener = listen({
@@ -412,7 +429,11 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
         port: local.value.port,
         ...(this.#backlog === undefined ? {} : { backlog: this.#backlog }),
       });
-      const state: ListenState = { listener, settled: false, wait: Promise.resolve() };
+      const state: ListenState = {
+        listener,
+        settled: false,
+        wait: Promise.resolve(),
+      };
       state.wait = listener.settled().then(
         () => {
           state.settled = true;
@@ -430,10 +451,16 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       onCall("tcp-socket.finish-listen");
       const state = this.#listen;
       if (this.#state !== "listen-in-progress" || state === undefined) {
-        throw err02("not-in-progress", "tcp-socket.finish-listen: no listen in progress");
+        throw err02(
+          "not-in-progress",
+          "tcp-socket.finish-listen: no listen in progress",
+        );
       }
       if (!state.settled) {
-        throw err02("would-block", "tcp-socket.finish-listen: the OS bind has not settled");
+        throw err02(
+          "would-block",
+          "tcp-socket.finish-listen: the OS bind has not settled",
+        );
       }
       if (state.error !== undefined) {
         state.listener.close();
@@ -448,7 +475,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       onCall("tcp-socket.accept");
       const state = this.#listen;
       if (this.#state !== "listening" || state === undefined) {
-        throw err02("invalid-state", "tcp-socket.accept: the socket is not listening");
+        throw err02(
+          "invalid-state",
+          "tcp-socket.accept: the socket is not listening",
+        );
       }
       let conn: TcpConn | undefined;
       try {
@@ -476,13 +506,19 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       if (this.#state === "bound" && this.#localRequest !== undefined) {
         return this.#localRequest;
       }
-      throw err02("invalid-state", "tcp-socket.local-address: the socket is not bound");
+      throw err02(
+        "invalid-state",
+        "tcp-socket.local-address: the socket is not bound",
+      );
     }
 
     remoteAddress(): IpSocketAddress {
       onCall("tcp-socket.remote-address");
       if (this.#state !== "connected" || this.#conn === undefined) {
-        throw err02("invalid-state", "tcp-socket.remote-address: not connected");
+        throw err02(
+          "invalid-state",
+          "tcp-socket.remote-address: not connected",
+        );
       }
       return parseNetAddr(this.#conn.remoteAddr);
     }
@@ -500,7 +536,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     setListenBacklogSize(value: bigint): void {
       onCall("tcp-socket.set-listen-backlog-size");
       if (value === 0n) {
-        throw err02("invalid-argument", "tcp-socket.set-listen-backlog-size: zero");
+        throw err02(
+          "invalid-argument",
+          "tcp-socket.set-listen-backlog-size: zero",
+        );
       }
       if (this.#state === "listening" || this.#state === "listen-in-progress") {
         throw err02(
@@ -536,7 +575,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     setKeepAliveIdleTime(value: bigint): void {
       onCall("tcp-socket.set-keep-alive-idle-time");
       if (value < 1n) {
-        throw err02("invalid-argument", "tcp-socket.set-keep-alive-idle-time: zero");
+        throw err02(
+          "invalid-argument",
+          "tcp-socket.set-keep-alive-idle-time: zero",
+        );
       }
       this.#keepAliveIdleNs = value;
       this.#applyKeepAlive();
@@ -608,7 +650,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     shutdown(shutdownType: ShutdownType): void {
       onCall("tcp-socket.shutdown");
       if (this.#state !== "connected" || this.#conn === undefined) {
-        throw err02("invalid-state", "tcp-socket.shutdown: the socket is not connected");
+        throw err02(
+          "invalid-state",
+          "tcp-socket.shutdown: the socket is not connected",
+        );
       }
       const conn = this.#conn;
       if (shutdownType === "receive" || shutdownType === "both") {
@@ -631,7 +676,9 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
         const p = (async (): Promise<void> => {
           try {
             let at = 0;
-            while (at < chunk.length) at += await conn.write(chunk.subarray(at));
+            while (at < chunk.length) {
+              at += await conn.write(chunk.subarray(at));
+            }
           } catch (e) {
             throw new SocketIoError(
               toCode02(e, "output-stream (socket write)"),
@@ -656,7 +703,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       const conn = this.#conn;
       if (this.#state !== "connected" || conn === undefined) return;
       try {
-        conn.setKeepAlive(this.#keepAliveEnabled, Number(this.#keepAliveIdleNs / 1_000_000n));
+        conn.setKeepAlive(
+          this.#keepAliveEnabled,
+          Number(this.#keepAliveIdleNs / 1_000_000n),
+        );
       } catch (e) {
         raise02(e, "tcp-socket (applying keep-alive)");
       }
@@ -691,7 +741,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
   const createTcpSocket = (addressFamily: IpAddressFamily): TcpSocket02 => {
     onCall("tcp-create-socket.create-tcp-socket");
     if (tcpConnect() === undefined) {
-      throw err02("not-supported", "create-tcp-socket: no TCP backend (no node:net)");
+      throw err02(
+        "not-supported",
+        "create-tcp-socket: no TCP backend (no node:net)",
+      );
     }
     return new TcpSocket02(addressFamily);
   };
@@ -730,7 +783,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       validateLocal(this.#family, localAddress, "udp-socket.start-bind");
       const listen = listenDatagram();
       if (listen === undefined) {
-        throw err02("not-supported", "udp-socket.start-bind: no datagram backend (no node:dgram)");
+        throw err02(
+          "not-supported",
+          "udp-socket.start-bind: no datagram backend (no node:dgram)",
+        );
       }
       try {
         this.#conn = listen({
@@ -748,7 +804,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     finishBind(): void {
       onCall("udp-socket.finish-bind");
       if (this.#state !== "bind-in-progress") {
-        throw err02("not-in-progress", "udp-socket.finish-bind: no bind in progress");
+        throw err02(
+          "not-in-progress",
+          "udp-socket.finish-bind: no bind in progress",
+        );
       }
       this.#state = "bound";
     }
@@ -770,7 +829,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     ): [IncomingDatagramStream02, OutgoingDatagramStream02] {
       onCall("udp-socket.stream");
       if (this.#state !== "bound" || this.#conn === undefined) {
-        throw err02("invalid-state", "udp-socket.stream: the socket is not bound");
+        throw err02(
+          "invalid-state",
+          "udp-socket.stream: the socket is not bound",
+        );
       }
       const conn = this.#conn;
       if (remoteAddress !== undefined) {
@@ -778,7 +840,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       }
       const wasConnected = this.#streams?.remote !== undefined;
       this.#generation++;
-      const streams: UdpStreams = { generation: this.#generation, remote: remoteAddress };
+      const streams: UdpStreams = {
+        generation: this.#generation,
+        remote: remoteAddress,
+      };
       this.#streams = streams;
       // OS-level (dis)connect, fire-and-forget: failures surface on the
       // first datagram op (doc comment above).
@@ -808,7 +873,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     localAddress(): IpSocketAddress {
       onCall("udp-socket.local-address");
       if (this.#conn === undefined) {
-        throw err02("invalid-state", "udp-socket.local-address: the socket is not bound");
+        throw err02(
+          "invalid-state",
+          "udp-socket.local-address: the socket is not bound",
+        );
       }
       return parseNetAddr(this.#conn.addr);
     }
@@ -817,7 +885,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       onCall("udp-socket.remote-address");
       const remote = this.#streams?.remote;
       if (remote === undefined) {
-        throw err02("invalid-state", "udp-socket.remote-address: the socket is not connected");
+        throw err02(
+          "invalid-state",
+          "udp-socket.remote-address: the socket is not connected",
+        );
       }
       return remote;
     }
@@ -835,7 +906,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     setUnicastHopLimit(value: number): void {
       onCall("udp-socket.set-unicast-hop-limit");
       if (value < 1) {
-        throw err02("invalid-argument", "udp-socket.set-unicast-hop-limit: below 1");
+        throw err02(
+          "invalid-argument",
+          "udp-socket.set-unicast-hop-limit: below 1",
+        );
       }
       this.#hopLimit = value;
       this.#applyCachedOptions();
@@ -843,13 +917,20 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
 
     receiveBufferSize(): bigint {
       onCall("udp-socket.receive-buffer-size");
-      return this.#bufferSize("receive", this.#recvBuffer, this.#conn?.getRecvBufferSize);
+      return this.#bufferSize(
+        "receive",
+        this.#recvBuffer,
+        this.#conn?.getRecvBufferSize,
+      );
     }
 
     setReceiveBufferSize(value: bigint): void {
       onCall("udp-socket.set-receive-buffer-size");
       if (value === 0n) {
-        throw err02("invalid-argument", "udp-socket.set-receive-buffer-size: zero");
+        throw err02(
+          "invalid-argument",
+          "udp-socket.set-receive-buffer-size: zero",
+        );
       }
       this.#recvBuffer = value;
       this.#applyCachedOptions();
@@ -857,13 +938,20 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
 
     sendBufferSize(): bigint {
       onCall("udp-socket.send-buffer-size");
-      return this.#bufferSize("send", this.#sendBuffer, this.#conn?.getSendBufferSize);
+      return this.#bufferSize(
+        "send",
+        this.#sendBuffer,
+        this.#conn?.getSendBufferSize,
+      );
     }
 
     setSendBufferSize(value: bigint): void {
       onCall("udp-socket.set-send-buffer-size");
       if (value === 0n) {
-        throw err02("invalid-argument", "udp-socket.set-send-buffer-size: zero");
+        throw err02(
+          "invalid-argument",
+          "udp-socket.set-send-buffer-size: zero",
+        );
       }
       this.#sendBuffer = value;
       this.#applyCachedOptions();
@@ -898,8 +986,12 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
       if (conn === undefined) return;
       try {
         if (this.#hopLimit !== undefined) conn.setTtl(this.#hopLimit);
-        if (this.#recvBuffer !== undefined) conn.setRecvBufferSize(Number(this.#recvBuffer));
-        if (this.#sendBuffer !== undefined) conn.setSendBufferSize(Number(this.#sendBuffer));
+        if (this.#recvBuffer !== undefined) {
+          conn.setRecvBufferSize(Number(this.#recvBuffer));
+        }
+        if (this.#sendBuffer !== undefined) {
+          conn.setSendBufferSize(Number(this.#sendBuffer));
+        }
       } catch (e) {
         raise02(e, "udp-socket (applying cached options)");
       }
@@ -925,7 +1017,11 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     #streams: UdpStreams;
     #live: (gen: number) => boolean;
 
-    constructor(conn: DatagramConn, streams: UdpStreams, live: (gen: number) => boolean) {
+    constructor(
+      conn: DatagramConn,
+      streams: UdpStreams,
+      live: (gen: number) => boolean,
+    ) {
       this.#conn = conn;
       this.#streams = streams;
       this.#live = live;
@@ -935,7 +1031,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     receive(maxResults: bigint): IncomingDatagram[] {
       onCall("incoming-datagram-stream.receive");
       if (!this.#live(this.#streams.generation)) {
-        throw err02("invalid-state", "incoming-datagram-stream.receive: stale stream");
+        throw err02(
+          "invalid-state",
+          "incoming-datagram-stream.receive: stale stream",
+        );
       }
       const out: IncomingDatagram[] = [];
       const max = Number(maxResults);
@@ -950,7 +1049,9 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
         const source = parseNetAddr(item[1]);
         // The connected-mode filter backstop (module header).
         const remote = this.#streams.remote;
-        if (remote !== undefined && !sameSocketAddress(source, remote)) continue;
+        if (remote !== undefined && !sameSocketAddress(source, remote)) {
+          continue;
+        }
         out.push({ data: item[0], remoteAddress: source });
       }
       return out;
@@ -1054,12 +1155,18 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
 
     #checkLive(what: string): void {
       if (!this.#live(this.#streams.generation)) {
-        throw err02("invalid-state", `outgoing-datagram-stream.${what}: stale stream`);
+        throw err02(
+          "invalid-state",
+          `outgoing-datagram-stream.${what}: stale stream`,
+        );
       }
       if (this.#failure !== undefined) {
         const code = this.#failure;
         this.#failure = undefined;
-        throw err02(code, `outgoing-datagram-stream.${what}: an earlier send failed`);
+        throw err02(
+          code,
+          `outgoing-datagram-stream.${what}: an earlier send failed`,
+        );
       }
     }
 
@@ -1071,7 +1178,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
   const createUdpSocket = (addressFamily: IpAddressFamily): UdpSocket02 => {
     onCall("udp-create-socket.create-udp-socket");
     if (listenDatagram() === undefined) {
-      throw err02("not-supported", "create-udp-socket: no datagram backend (no node:dgram)");
+      throw err02(
+        "not-supported",
+        "create-udp-socket: no datagram backend (no node:dgram)",
+      );
     }
     return new UdpSocket02(addressFamily);
   };
@@ -1116,15 +1226,17 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
         },
         (e) => {
           const code = (e as { code?: unknown } | null)?.code;
-          this.#error = code === "ENOTFOUND" || code === "EAI_NONAME" || code === "ENODATA"
-            ? "name-unresolvable"
-            : code === "EAI_AGAIN" || code === "ETIMEOUT" || code === "ETIMEDOUT"
-            ? "temporary-resolver-failure"
-            : code === "EACCES" || code === "EPERM"
-            ? "access-denied"
-            : toCode02(e, "resolve-addresses") === "access-denied"
-            ? "access-denied"
-            : "unknown";
+          this.#error =
+            code === "ENOTFOUND" || code === "EAI_NONAME" || code === "ENODATA"
+              ? "name-unresolvable"
+              : code === "EAI_AGAIN" || code === "ETIMEOUT" ||
+                  code === "ETIMEDOUT"
+              ? "temporary-resolver-failure"
+              : code === "EACCES" || code === "EPERM"
+              ? "access-denied"
+              : toCode02(e, "resolve-addresses") === "access-denied"
+              ? "access-denied"
+              : "unknown";
           this.#settled = true;
         },
       );
@@ -1138,7 +1250,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     resolveNextAddress(): IpAddress | undefined {
       onCall("resolve-address-stream.resolve-next-address");
       if (!this.#settled) {
-        throw err02("would-block", "resolve-next-address: the resolver has not answered");
+        throw err02(
+          "would-block",
+          "resolve-next-address: the resolver has not answered",
+        );
       }
       if (this.#error !== undefined) {
         throw err02(this.#error, "resolve-next-address: resolution failed");
@@ -1154,7 +1269,10 @@ export function sockets02(onCall: (call: string) => void): Sockets02Fragment {
     [Symbol.dispose](): void {}
   }
 
-  const resolveAddresses = (_network: Network, name: string): ResolveAddressStream02 => {
+  const resolveAddresses = (
+    _network: Network,
+    name: string,
+  ): ResolveAddressStream02 => {
     onCall("ip-name-lookup.resolve-addresses");
     if (name.length === 0) {
       throw err02("invalid-argument", "resolve-addresses: empty name");
@@ -1208,6 +1326,11 @@ function wildcard(family: IpAddressFamily): IpSocketAddress {
     ? { kind: "ipv4", value: { port: 0, address: [0, 0, 0, 0] } }
     : {
       kind: "ipv6",
-      value: { port: 0, flowInfo: 0, address: [0, 0, 0, 0, 0, 0, 0, 0], scopeId: 0 },
+      value: {
+        port: 0,
+        flowInfo: 0,
+        address: [0, 0, 0, 0, 0, 0, 0, 0],
+        scopeId: 0,
+      },
     };
 }

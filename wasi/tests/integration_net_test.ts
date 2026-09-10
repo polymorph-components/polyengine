@@ -45,7 +45,8 @@ const shimWasm = await readIfPresent(SHIM_WASM);
 const ready = componentBytes !== null && shimWasm !== null;
 
 Deno.test({
-  name: "integration: std::net battery over the 0.2 sockets track (self-echo + udp pair)",
+  name:
+    "integration: std::net battery over the 0.2 sockets track (self-echo + udp pair)",
   ignore: !ready,
   async fn() {
     const calls: string[] = [];
@@ -61,23 +62,25 @@ Deno.test({
     const summary = await c.exports.run() as string;
     assertEq(summary, "net probe ok");
     // The driving sequence proves the poll-shaped path was exercised.
-    for (const expected of [
-      "tcp-create-socket.create-tcp-socket",
-      "tcp-socket.start-bind",
-      "tcp-socket.finish-bind",
-      "tcp-socket.start-listen",
-      "tcp-socket.finish-listen",
-      "tcp-socket.start-connect",
-      "tcp-socket.finish-connect",
-      "tcp-socket.accept",
-      "tcp-socket.shutdown",
-      "udp-create-socket.create-udp-socket",
-      "udp-socket.start-bind",
-      "udp-socket.stream",
-      "incoming-datagram-stream.receive",
-      "outgoing-datagram-stream.check-send",
-      "outgoing-datagram-stream.send",
-    ]) {
+    for (
+      const expected of [
+        "tcp-create-socket.create-tcp-socket",
+        "tcp-socket.start-bind",
+        "tcp-socket.finish-bind",
+        "tcp-socket.start-listen",
+        "tcp-socket.finish-listen",
+        "tcp-socket.start-connect",
+        "tcp-socket.finish-connect",
+        "tcp-socket.accept",
+        "tcp-socket.shutdown",
+        "udp-create-socket.create-udp-socket",
+        "udp-socket.start-bind",
+        "udp-socket.stream",
+        "incoming-datagram-stream.receive",
+        "outgoing-datagram-stream.check-send",
+        "outgoing-datagram-stream.send",
+      ]
+    ) {
       assertTrue(calls.includes(expected), `${expected} dispatched`);
     }
   },

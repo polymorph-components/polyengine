@@ -15,25 +15,39 @@ import {
   type TcpSocket,
   type UdpSocket,
 } from "../src/sockets.ts";
-import { assertEq, assertRejects, assertThrows, assertTrue } from "./asserts.ts";
+import {
+  assertEq,
+  assertRejects,
+  assertThrows,
+  assertTrue,
+} from "./asserts.ts";
 
 const { UdpSocket, TcpSocket, resolveAddresses } = sockets();
 
-const v4 = (address: [number, number, number, number], port: number): IpSocketAddress => ({
+const v4 = (
+  address: [number, number, number, number],
+  port: number,
+): IpSocketAddress => ({
   kind: "ipv4",
   value: { port, address },
 });
 
 function errKind(fn: () => unknown): string {
   const e = assertThrows(fn);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-  return ((e as ComponentException<SocketErrorCode>).payload).kind;
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
+  return (e as ComponentException<SocketErrorCode>).payload.kind;
 }
 
 async function errKindAsync(p: Promise<unknown>): Promise<string> {
   const e = await assertRejects(() => p);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-  return ((e as ComponentException<SocketErrorCode>).payload).kind;
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
+  return (e as ComponentException<SocketErrorCode>).payload.kind;
 }
 
 function boundV4(): { socket: UdpSocket; addr: IpSocketAddress } {
@@ -48,7 +62,10 @@ Deno.test("udp connect: send with no remote reaches the connected peer", async (
   const peer = boundV4();
   const socket = UdpSocket.create("ipv4");
   await socket.connect(peer.addr); // implicit wildcard bind + OS connect
-  assertEq(JSON.stringify(socket.getRemoteAddress()), JSON.stringify(peer.addr));
+  assertEq(
+    JSON.stringify(socket.getRemoteAddress()),
+    JSON.stringify(peer.addr),
+  );
   await socket.send(Uint8Array.from([1, 2, 3]), undefined);
   const [payload, from] = await peer.socket.receive();
   assertEq([...payload].join(","), "1,2,3");
@@ -64,7 +81,10 @@ Deno.test("udp connect: an explicit remote on a connected socket is invalid-argu
   const peer = boundV4();
   const socket = UdpSocket.create("ipv4");
   await socket.connect(peer.addr);
-  assertEq(await errKindAsync(socket.send(new Uint8Array(1), peer.addr)), "invalid-argument");
+  assertEq(
+    await errKindAsync(socket.send(new Uint8Array(1), peer.addr)),
+    "invalid-argument",
+  );
   socket[Symbol.dispose]();
   peer.socket[Symbol.dispose]();
 });
@@ -93,7 +113,10 @@ Deno.test("udp disconnect: back to unconnected — sends need a remote again", a
   await socket.connect(peer.addr);
   socket.disconnect();
   assertEq(errKind(() => socket.getRemoteAddress()), "invalid-state");
-  assertEq(await errKindAsync(socket.send(new Uint8Array(1), undefined)), "invalid-argument");
+  assertEq(
+    await errKindAsync(socket.send(new Uint8Array(1), undefined)),
+    "invalid-argument",
+  );
   await socket.send(Uint8Array.from([4]), peer.addr); // explicit works again
   const [payload] = await peer.socket.receive();
   assertEq(payload.length, 1);
@@ -129,7 +152,10 @@ Deno.test("udp options: buffer sizes are live once bound; zero is invalid", () =
   const initial = socket.getReceiveBufferSize();
   assertTrue(initial > 0n, "a bound socket reports a real SO_RCVBUF");
   socket.setReceiveBufferSize(65536n);
-  assertTrue(socket.getReceiveBufferSize() >= 65536n, "kernel may double, never shrink below");
+  assertTrue(
+    socket.getReceiveBufferSize() >= 65536n,
+    "kernel may double, never shrink below",
+  );
   socket.setSendBufferSize(65536n);
   assertTrue(socket.getSendBufferSize() >= 65536n, "SO_SNDBUF applied");
   assertEq(errKind(() => socket.setSendBufferSize(0n)), "invalid-argument");
@@ -200,13 +226,19 @@ Deno.test("tcp options: the no-node-API set fails not-supported, never emulates"
 // --- ip-name-lookup --------------------------------------------------------------
 
 function lookupErrKind(e: unknown): NameLookupErrorCode["kind"] {
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-  return ((e as ComponentException<NameLookupErrorCode>).payload).kind;
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
+  return (e as ComponentException<NameLookupErrorCode>).payload.kind;
 }
 
 Deno.test("resolve-addresses: IP literals answer locally, both families", async () => {
   const [a] = await resolveAddresses("127.0.0.1");
-  assertEq(JSON.stringify(a), JSON.stringify({ kind: "ipv4", value: [127, 0, 0, 1] }));
+  assertEq(
+    JSON.stringify(a),
+    JSON.stringify({ kind: "ipv4", value: [127, 0, 0, 1] }),
+  );
   const [b] = await resolveAddresses("::1");
   assertEq(
     JSON.stringify(b),
@@ -227,10 +259,15 @@ Deno.test("resolve-addresses: localhost resolves to loopback(s)", async () => {
 });
 
 Deno.test("resolve-addresses: failures are branded with the lookup vocabulary", async () => {
-  assertEq(lookupErrKind(await assertRejects(() => resolveAddresses(""))), "invalid-argument");
+  assertEq(
+    lookupErrKind(await assertRejects(() => resolveAddresses(""))),
+    "invalid-argument",
+  );
   assertEq(
     lookupErrKind(
-      await assertRejects(() => resolveAddresses("definitely-not-a-real-host.invalid")),
+      await assertRejects(() =>
+        resolveAddresses("definitely-not-a-real-host.invalid")
+      ),
     ),
     "name-unresolvable",
   );

@@ -55,10 +55,13 @@ const ready = componentBytes !== null && shimWasm !== null;
 async function instantiateFixture(calls?: string[]): Promise<any> {
   const translator = await Translator.create(shimWasm!);
   const { plan, adapters } = translator.translate(componentBytes!);
-  return await instantiate({ plan, componentBytes: componentBytes!, adapters }, {
-    ...sockets(calls === undefined ? {} : { onCall: (c) => calls.push(c) })
-      .imports,
-  });
+  return await instantiate(
+    { plan, componentBytes: componentBytes!, adapters },
+    {
+      ...sockets(calls === undefined ? {} : { onCall: (c) => calls.push(c) })
+        .imports,
+    },
+  );
 }
 
 /** Write all of `bytes` to a raw conn. */
@@ -82,7 +85,11 @@ Deno.test({
   name: "integration: guest tcp client echoes through a live loopback server",
   ignore: !ready,
   async fn() {
-    const listener = Deno.listen({ transport: "tcp", hostname: "127.0.0.1", port: 0 });
+    const listener = Deno.listen({
+      transport: "tcp",
+      hostname: "127.0.0.1",
+      port: 0,
+    });
     const { port } = listener.addr as Deno.NetAddr;
     const serverDone = (async () => {
       const conn = await listener.accept();
@@ -144,7 +151,11 @@ Deno.test({
     // in flight while these echo (settlement pump + stream activity).
     const payloads = [[1, 2, 3], [4, 5, 6, 7]];
     for (const p of payloads) {
-      const conn = await Deno.connect({ transport: "tcp", hostname: "127.0.0.1", port });
+      const conn = await Deno.connect({
+        transport: "tcp",
+        hostname: "127.0.0.1",
+        port,
+      });
       await writeAll(conn, Uint8Array.from(p));
       await conn.closeWrite(); // FIN: the guest reads to end, echoes, FINs
       assertEq(JSON.stringify(await readToEnd(conn)), JSON.stringify(p));
@@ -160,11 +171,18 @@ Deno.test({
     // refuses a fresh dial.
     let refused = false;
     try {
-      const conn = await Deno.connect({ transport: "tcp", hostname: "127.0.0.1", port });
+      const conn = await Deno.connect({
+        transport: "tcp",
+        hostname: "127.0.0.1",
+        port,
+      });
       conn.close();
     } catch (e) {
       refused = e instanceof Deno.errors.ConnectionRefused;
     }
-    assertTrue(refused, "the listener's port refuses new dials after the guest quit");
+    assertTrue(
+      refused,
+      "the listener's port refuses new dials after the guest quit",
+    );
   },
 });

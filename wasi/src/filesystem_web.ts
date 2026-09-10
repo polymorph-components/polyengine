@@ -47,7 +47,6 @@ import {
   type FsStat,
   makeFilesystem,
   type Opened,
-  type OpenOptions,
 } from "./internal/fs_provider.ts";
 
 // --- the OPFS surface we consume (structural: works with fakes) -------------------
@@ -60,7 +59,9 @@ export interface OpfsFileLike {
 }
 
 export interface OpfsWritable {
-  write(params: { type: "write"; position: number; data: Uint8Array }): Promise<void>;
+  write(
+    params: { type: "write"; position: number; data: Uint8Array },
+  ): Promise<void>;
   truncate(size: number): Promise<void>;
   close(): Promise<void>;
 }
@@ -78,8 +79,14 @@ export interface OpfsFileHandle {
 export interface OpfsDirectoryHandle {
   readonly kind: "directory";
   readonly name: string;
-  getDirectoryHandle(name: string, opts?: { create?: boolean }): Promise<OpfsDirectoryHandle>;
-  getFileHandle(name: string, opts?: { create?: boolean }): Promise<OpfsFileHandle>;
+  getDirectoryHandle(
+    name: string,
+    opts?: { create?: boolean },
+  ): Promise<OpfsDirectoryHandle>;
+  getFileHandle(
+    name: string,
+    opts?: { create?: boolean },
+  ): Promise<OpfsFileHandle>;
   removeEntry(name: string, opts?: { recursive?: boolean }): Promise<void>;
   entries(): AsyncIterable<[string, OpfsDirectoryHandle | OpfsFileHandle]>;
   isSameEntry(other: OpfsFileHandle | OpfsDirectoryHandle): Promise<boolean>;
@@ -142,7 +149,8 @@ function makeWebBackend(): FsBackend<WebHandle> {
     return dir;
   };
 
-  const parentOf = (base: WebHandle, segments: string[]) => walk(base, segments.slice(0, -1));
+  const parentOf = (base: WebHandle, segments: string[]) =>
+    walk(base, segments.slice(0, -1));
 
   /** Resolve segments to a handle (file or directory), never creating. */
   const resolve = async (
@@ -172,7 +180,9 @@ function makeWebBackend(): FsBackend<WebHandle> {
     };
   };
 
-  const statOfHandle = (h: OpfsDirectoryHandle | OpfsFileHandle): Promise<FsStat> =>
+  const statOfHandle = (
+    h: OpfsDirectoryHandle | OpfsFileHandle,
+  ): Promise<FsStat> =>
     h.kind === "file" ? statOfFile(h) : Promise.resolve({
       type: "directory" as const,
       linkCount: 1n,
@@ -188,7 +198,11 @@ function makeWebBackend(): FsBackend<WebHandle> {
     return { a: h, b: BigInt(path.length) };
   };
 
-  const writeAt = async (file: OpfsFileHandle, data: Uint8Array, position: number): Promise<void> => {
+  const writeAt = async (
+    file: OpfsFileHandle,
+    data: Uint8Array,
+    position: number,
+  ): Promise<void> => {
     const w = await file.createWritable({ keepExistingData: true });
     try {
       await w.write({ type: "write", position, data });
@@ -204,21 +218,29 @@ function makeWebBackend(): FsBackend<WebHandle> {
       const tagged = (e as { fsCode?: FsErrorCode })?.fsCode;
       if (tagged !== undefined) return tagged;
       const name = (e as { name?: unknown })?.name;
-      return (typeof name === "string" ? DOM_ERROR_MAP[name] : undefined) ?? "io";
+      return (typeof name === "string" ? DOM_ERROR_MAP[name] : undefined) ??
+        "io";
     },
 
     async openAt(base, segments, opts): Promise<Opened<WebHandle>> {
       const path = childPath(base, segments);
       if (segments.length === 0) {
         // Opening "." — the base itself.
-        if (opts.exclusive && opts.create) throw domError("exist", `${path}: exists`);
-        return { handle: { handle: base.handle, path }, type: base.handle.kind === "file" ? "regular-file" : "directory" };
+        if (opts.exclusive && opts.create) {
+          throw domError("exist", `${path}: exists`);
+        }
+        return {
+          handle: { handle: base.handle, path },
+          type: base.handle.kind === "file" ? "regular-file" : "directory",
+        };
       }
       const parent = await parentOf(base, segments);
       const name = segments[segments.length - 1];
 
       if (opts.directory) {
-        const dir = await parent.getDirectoryHandle(name, { create: opts.create });
+        const dir = await parent.getDirectoryHandle(name, {
+          create: opts.create,
+        });
         return { handle: { handle: dir, path }, type: "directory" };
       }
 
@@ -228,12 +250,15 @@ function makeWebBackend(): FsBackend<WebHandle> {
         existing = await parent.getFileHandle(name);
       } catch (e) {
         const en = (e as { name?: string })?.name;
-        if (en === "TypeMismatchError") existing = await parent.getDirectoryHandle(name);
-        else if (en !== "NotFoundError") throw e;
+        if (en === "TypeMismatchError") {
+          existing = await parent.getDirectoryHandle(name);
+        } else if (en !== "NotFoundError") throw e;
       }
 
       if (existing?.kind === "directory") {
-        if (opts.create && opts.exclusive) throw domError("exist", `${path}: exists`);
+        if (opts.create && opts.exclusive) {
+          throw domError("exist", `${path}: exists`);
+        }
         return { handle: { handle: existing, path }, type: "directory" };
       }
       if (existing !== undefined && opts.create && opts.exclusive) {
@@ -305,7 +330,10 @@ function makeWebBackend(): FsBackend<WebHandle> {
     async readDirectory(h): Promise<{ name: string; type: DescriptorType }[]> {
       const out: { name: string; type: DescriptorType }[] = [];
       for await (const [name, handle] of requireDir(h).entries()) {
-        out.push({ name, type: handle.kind === "directory" ? "directory" : "regular-file" });
+        out.push({
+          name,
+          type: handle.kind === "directory" ? "directory" : "regular-file",
+        });
       }
       return out;
     },
@@ -322,7 +350,9 @@ function makeWebBackend(): FsBackend<WebHandle> {
         if ((e as { name?: string })?.name !== "NotFoundError") throw e;
         exists = false;
       }
-      if (exists) throw domError("exist", `${childPath(base, segments)}: exists`);
+      if (exists) {
+        throw domError("exist", `${childPath(base, segments)}: exists`);
+      }
       await parent.getDirectoryHandle(name, { create: true });
     },
 
@@ -340,7 +370,10 @@ function makeWebBackend(): FsBackend<WebHandle> {
         await parent.getFileHandle(name);
       } catch (e) {
         if ((e as { name?: string })?.name === "TypeMismatchError") {
-          throw domError("is-directory", `${childPath(base, segments)}: is a directory`);
+          throw domError(
+            "is-directory",
+            `${childPath(base, segments)}: is a directory`,
+          );
         }
         throw e;
       }
@@ -356,10 +389,15 @@ function makeWebBackend(): FsBackend<WebHandle> {
         return;
       }
       if (target.kind === "directory") {
-        throw domError("unsupported", "OPFS: directory rename requires FileSystemHandle.move");
+        throw domError(
+          "unsupported",
+          "OPFS: directory rename requires FileSystemHandle.move",
+        );
       }
       // Fallback: copy + delete (non-atomic, module header).
-      const bytes = new Uint8Array(await (await target.getFile()).arrayBuffer());
+      const bytes = new Uint8Array(
+        await (await target.getFile()).arrayBuffer(),
+      );
       const dest = await newParent.getFileHandle(newName, { create: true });
       const w = await dest.createWritable({ keepExistingData: false });
       try {
@@ -404,11 +442,15 @@ export interface FilesystemWebOptions extends FilesystemAccessOptions {
  * `wasi:filesystem` over the Origin Private File System (module header).
  * Serves both the `@0.2` (parking, JSPI) and `@0.3` tracks.
  */
-export function filesystemWeb(options: FilesystemWebOptions): FilesystemFragment {
+export function filesystemWeb(
+  options: FilesystemWebOptions,
+): FilesystemFragment {
   const preopens: [WebHandle, string][] = Object.entries(options.preopens).map(
     ([guestName, handle]) => {
       if (handle.kind !== "directory") {
-        throw new TypeError(`filesystemWeb: preopen ${guestName} is not a directory handle`);
+        throw new TypeError(
+          `filesystemWeb: preopen ${guestName} is not a directory handle`,
+        );
       }
       return [{ handle, path: guestName }, guestName];
     },

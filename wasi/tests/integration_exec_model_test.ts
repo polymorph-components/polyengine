@@ -10,7 +10,7 @@
 import { assertEq, assertTrue } from "./asserts.ts";
 import { Translator } from "@polyengine/runtime/shim";
 import { instantiate } from "@polyengine/runtime/embedder";
-import { Stream } from "@polyengine/protocol";
+import type { Stream } from "@polyengine/protocol";
 import { wasi } from "../src/mod.ts";
 
 const ARTIFACT =

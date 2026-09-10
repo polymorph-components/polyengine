@@ -6,7 +6,11 @@
 
 import { ComponentException } from "@polyengine/protocol";
 import type { Pollable } from "../src/io.ts";
-import { type IpSocketAddress, SocketIoError, sockets } from "../src/sockets.ts";
+import {
+  type IpSocketAddress,
+  SocketIoError,
+  sockets,
+} from "../src/sockets.ts";
 import { assertEq, assertThrows, assertTrue } from "./asserts.ts";
 
 const { imports } = sockets();
@@ -43,15 +47,25 @@ interface Udp02 {
   startBind(net: Net, addr: IpSocketAddress): void;
   finishBind(): void;
   stream(remote?: IpSocketAddress): [
-    { receive(max: bigint): { data: Uint8Array; remoteAddress: IpSocketAddress }[]; subscribe(): Pollable },
-    { checkSend(): bigint; send(d: { data: Uint8Array; remoteAddress?: IpSocketAddress }[]): bigint; subscribe(): Pollable },
+    {
+      receive(
+        max: bigint,
+      ): { data: Uint8Array; remoteAddress: IpSocketAddress }[];
+      subscribe(): Pollable;
+    },
+    {
+      checkSend(): bigint;
+      send(d: { data: Uint8Array; remoteAddress?: IpSocketAddress }[]): bigint;
+      subscribe(): Pollable;
+    },
   ];
   localAddress(): IpSocketAddress;
   [Symbol.dispose](): void;
 }
 
-const net = (imports["wasi:sockets/instance-network@0.2"] as { instanceNetwork(): Net })
-  .instanceNetwork();
+const net =
+  (imports["wasi:sockets/instance-network@0.2"] as { instanceNetwork(): Net })
+    .instanceNetwork();
 const { createTcpSocket } = imports["wasi:sockets/tcp-create-socket@0.2"] as {
   createTcpSocket(f: string): Tcp02;
 };
@@ -68,7 +82,10 @@ const nameLookup = imports["wasi:sockets/ip-name-lookup@0.2"] as {
   };
 };
 
-const v4 = (address: [number, number, number, number], port: number): IpSocketAddress => ({
+const v4 = (
+  address: [number, number, number, number],
+  port: number,
+): IpSocketAddress => ({
   kind: "ipv4",
   value: { port, address },
 });
@@ -77,9 +94,15 @@ const LOOPBACK = v4([127, 0, 0, 1], 0);
 /** 0.2 err payloads are BARE enum strings. */
 function errCode(fn: () => unknown): string {
   const e = assertThrows(fn);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
   const payload = (e as ComponentException).payload;
-  assertTrue(typeof payload === "string", `expected a bare enum string, got ${JSON.stringify(payload)}`);
+  assertTrue(
+    typeof payload === "string",
+    `expected a bare enum string, got ${JSON.stringify(payload)}`,
+  );
   return payload as string;
 }
 
@@ -157,7 +180,10 @@ Deno.test("tcp02: dial + accept + byte streams + FIN, poll-shaped end to end", a
       const next = inStream.read(64n);
       if (next.length > 0) inbound.push(...next);
     } catch (e) {
-      assertEq(((e as ComponentException).payload as { kind: string }).kind, "closed");
+      assertEq(
+        ((e as ComponentException).payload as { kind: string }).kind,
+        "closed",
+      );
       break;
     }
   }
@@ -209,7 +235,10 @@ Deno.test("udp02: sync bind, stream generations, connected-mode filter", async (
   const [bIn, bOut] = b.stream(aAddr); // b is connected to a
 
   assertTrue(aOut.checkSend() > 0n, "a send permit");
-  assertEq(aOut.send([{ data: Uint8Array.from([1]), remoteAddress: bAddr }]), 1n);
+  assertEq(
+    aOut.send([{ data: Uint8Array.from([1]), remoteAddress: bAddr }]),
+    1n,
+  );
   await settled(bIn.subscribe());
   const got = bIn.receive(8n);
   assertEq(got.length, 1);
@@ -218,7 +247,9 @@ Deno.test("udp02: sync bind, stream generations, connected-mode filter", async (
   // Connected sends omit the remote; a mismatched explicit one is invalid.
   assertEq(bOut.send([{ data: Uint8Array.from([2]) }]), 1n);
   assertEq(
-    errCode(() => bOut.send([{ data: new Uint8Array(1), remoteAddress: bAddr }])),
+    errCode(() =>
+      bOut.send([{ data: new Uint8Array(1), remoteAddress: bAddr }])
+    ),
     "invalid-argument",
   );
   await settled(aIn.subscribe());
@@ -239,22 +270,34 @@ Deno.test("udp02: unconnected send requires a remote (bare-string invalid-argume
   socket.startBind(net, LOOPBACK);
   socket.finishBind();
   const [, out] = socket.stream(undefined);
-  assertEq(errCode(() => out.send([{ data: new Uint8Array(1) }])), "invalid-argument");
+  assertEq(
+    errCode(() => out.send([{ data: new Uint8Array(1) }])),
+    "invalid-argument",
+  );
   socket[Symbol.dispose]();
 });
 
 Deno.test("ip-name-lookup02: literals answer synchronously; misses fail after the pollable", async () => {
   const literal = nameLookup.resolveAddresses(net, "127.0.0.1");
   const first = literal.resolveNextAddress();
-  assertEq(JSON.stringify(first), JSON.stringify({ kind: "ipv4", value: [127, 0, 0, 1] }));
+  assertEq(
+    JSON.stringify(first),
+    JSON.stringify({ kind: "ipv4", value: [127, 0, 0, 1] }),
+  );
   assertEq(literal.resolveNextAddress(), undefined); // end of stream
 
-  const miss = nameLookup.resolveAddresses(net, "definitely-not-a-real-host.invalid");
+  const miss = nameLookup.resolveAddresses(
+    net,
+    "definitely-not-a-real-host.invalid",
+  );
   await settled(miss.subscribe());
   assertEq(errCode(() => miss.resolveNextAddress()), "name-unresolvable");
 });
 
 Deno.test("network02: error-code downcast recognizes exactly our stream errors", () => {
-  assertEq(networkErrorCode(new SocketIoError("connection-reset", "peer reset")), "connection-reset");
+  assertEq(
+    networkErrorCode(new SocketIoError("connection-reset", "peer reset")),
+    "connection-reset",
+  );
   assertEq(networkErrorCode(new Error("random")), undefined);
 });

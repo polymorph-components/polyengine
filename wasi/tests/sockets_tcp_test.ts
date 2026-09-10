@@ -23,7 +23,10 @@ import { assertEq, assertThrows, assertTrue } from "./asserts.ts";
 
 const { TcpSocket } = sockets();
 
-const v4 = (address: [number, number, number, number], port: number): IpSocketAddress => ({
+const v4 = (
+  address: [number, number, number, number],
+  port: number,
+): IpSocketAddress => ({
   kind: "ipv4",
   value: { port, address },
 });
@@ -40,16 +43,22 @@ const v6 = (
 /** The payload kind of a thrown, branded socket error. */
 function errKind(fn: () => unknown): string {
   const e = assertThrows(fn);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-  return ((e as ComponentException<SocketErrorCode>).payload).kind;
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
+  return (e as ComponentException<SocketErrorCode>).payload.kind;
 }
 
 async function errKindAsync(p: Promise<unknown>): Promise<string> {
   try {
     await p;
   } catch (e) {
-    assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-    return ((e as ComponentException<SocketErrorCode>).payload).kind;
+    assertTrue(
+      e instanceof ComponentException,
+      `expected ComponentException, got ${e}`,
+    );
+    return (e as ComponentException<SocketErrorCode>).payload.kind;
   }
   throw new Error("expected a rejection");
 }
@@ -68,9 +77,13 @@ async function* chunksOf(...chunks: number[][]): AsyncGenerator<Uint8Array> {
   for (const c of chunks) yield Uint8Array.from(c);
 }
 
-async function collect(stream: AsyncIterable<Uint8Array> | Iterable<Uint8Array>): Promise<number[]> {
+async function collect(
+  stream: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+): Promise<number[]> {
   const out: number[] = [];
-  for await (const chunk of stream as AsyncIterable<Uint8Array>) out.push(...chunk);
+  for await (const chunk of stream as AsyncIterable<Uint8Array>) {
+    out.push(...chunk);
+  }
   return out;
 }
 
@@ -82,7 +95,11 @@ interface TestServer {
 
 /** A one-connection loopback server driving `handler` on the accepted conn. */
 function tcpServer(handler: (conn: Deno.TcpConn) => Promise<void>): TestServer {
-  const listener = Deno.listen({ transport: "tcp", hostname: "127.0.0.1", port: 0 });
+  const listener = Deno.listen({
+    transport: "tcp",
+    hostname: "127.0.0.1",
+    port: 0,
+  });
   const { port } = listener.addr as Deno.NetAddr;
   const done = (async () => {
     const conn = await listener.accept();
@@ -97,7 +114,11 @@ function tcpServer(handler: (conn: Deno.TcpConn) => Promise<void>): TestServer {
       listener.close();
     }
   })();
-  return { addr: v4([127, 0, 0, 1], port), done, close: () => listener.close() };
+  return {
+    addr: v4([127, 0, 0, 1], port),
+    done,
+    close: () => listener.close(),
+  };
 }
 
 /** Echo until EOF, then close (FIN back). */
@@ -131,7 +152,10 @@ Deno.test("tcp: connect / send / receive — loopback echo, both futures ok", as
     // the transmission report. Never awaited before the reads — the test
     // mirrors the guest's concurrent pumps.
     const txDone = socket.send(chunksOf([1, 2, 3], [4, 5]));
-    assertEq(JSON.stringify(await collect(rx)), JSON.stringify([1, 2, 3, 4, 5]));
+    assertEq(
+      JSON.stringify(await collect(rx)),
+      JSON.stringify([1, 2, 3, 4, 5]),
+    );
     assertEq((await txDone).kind, "ok");
     assertEq((await rxDone).kind, "ok");
     await server.done;
@@ -144,8 +168,14 @@ Deno.test("tcp: addresses report the real endpoints once connected", async () =>
   const { socket, server } = await connected(echoHandler);
   try {
     const local = socket.getLocalAddress();
-    assertTrue(local.kind === "ipv4" && local.value.port !== 0, "local port assigned");
-    assertEq(JSON.stringify(socket.getRemoteAddress()), JSON.stringify(server.addr));
+    assertTrue(
+      local.kind === "ipv4" && local.value.port !== 0,
+      "local port assigned",
+    );
+    assertEq(
+      JSON.stringify(socket.getRemoteAddress()),
+      JSON.stringify(server.addr),
+    );
     assertEq(socket.getAddressFamily(), "ipv4");
     assertEq(socket.getIsListening(), false);
     // End the exchange so the server task retires.
@@ -242,7 +272,8 @@ Deno.test("tcp: a write on a peer-closed connection settles the send future as e
     assertEq(result.kind, "err");
     const kind = resultErrKind(result);
     assertTrue(
-      kind === "connection-reset" || kind === "connection-broken" || kind === "invalid-state",
+      kind === "connection-reset" || kind === "connection-broken" ||
+        kind === "invalid-state",
       `a connection-failure kind, got ${kind}`,
     );
   } finally {
@@ -256,16 +287,29 @@ Deno.test("tcp: connect argument validation (branded)", async () => {
   const socket = TcpSocket.create("ipv4");
   const v6Socket = TcpSocket.create("ipv6");
   try {
-    assertEq(await errKindAsync(socket.connect(v6([0, 0, 0, 0, 0, 0, 0, 1], 9))), "invalid-argument");
-    assertEq(await errKindAsync(socket.connect(v4([0, 0, 0, 0], 9))), "invalid-argument");
-    assertEq(await errKindAsync(socket.connect(v4([127, 0, 0, 1], 0))), "invalid-argument");
     assertEq(
-      await errKindAsync(v6Socket.connect(v6([0xfe80, 0, 0, 0, 0, 0, 0, 1], 9, 3))),
+      await errKindAsync(socket.connect(v6([0, 0, 0, 0, 0, 0, 0, 1], 9))),
+      "invalid-argument",
+    );
+    assertEq(
+      await errKindAsync(socket.connect(v4([0, 0, 0, 0], 9))),
+      "invalid-argument",
+    );
+    assertEq(
+      await errKindAsync(socket.connect(v4([127, 0, 0, 1], 0))),
+      "invalid-argument",
+    );
+    assertEq(
+      await errKindAsync(
+        v6Socket.connect(v6([0xfe80, 0, 0, 0, 0, 0, 0, 1], 9, 3)),
+      ),
       "not-supported",
     );
     // An IPv4-mapped IPv6 address never crosses the family boundary.
     assertEq(
-      await errKindAsync(v6Socket.connect(v6([0, 0, 0, 0, 0, 0xffff, 0x7f00, 1], 9))),
+      await errKindAsync(
+        v6Socket.connect(v6([0, 0, 0, 0, 0, 0xffff, 0x7f00, 1], 9)),
+      ),
       "invalid-argument",
     );
   } finally {
@@ -276,15 +320,25 @@ Deno.test("tcp: connect argument validation (branded)", async () => {
 
 Deno.test("tcp: a refused dial closes the socket; only drop remains valid", async () => {
   // A port with no listener: bind one, note the port, close it.
-  const probe = Deno.listen({ transport: "tcp", hostname: "127.0.0.1", port: 0 });
+  const probe = Deno.listen({
+    transport: "tcp",
+    hostname: "127.0.0.1",
+    port: 0,
+  });
   const { port } = probe.addr as Deno.NetAddr;
   probe.close();
 
   const socket = TcpSocket.create("ipv4");
-  assertEq(await errKindAsync(socket.connect(v4([127, 0, 0, 1], port))), "connection-refused");
+  assertEq(
+    await errKindAsync(socket.connect(v4([127, 0, 0, 1], port))),
+    "connection-refused",
+  );
   // Failed connect -> closed: connect again is invalid-state, and so is the
   // rest of the surface.
-  assertEq(await errKindAsync(socket.connect(v4([127, 0, 0, 1], port))), "invalid-state");
+  assertEq(
+    await errKindAsync(socket.connect(v4([127, 0, 0, 1], port))),
+    "invalid-state",
+  );
   assertEq(resultErrKind(await socket.send(chunksOf([1]))), "invalid-state");
   assertEq(errKind(() => socket.getLocalAddress()), "invalid-state");
   dispose(socket);
@@ -315,7 +369,8 @@ Deno.test("tcp: getters demand the right state (branded)", () => {
 
 /** Hide the node builtins from detection (the only backend), restore after. */
 function withoutBuiltins<T>(fn: () => T): T {
-  const proc = (globalThis as { process?: { getBuiltinModule?: unknown } }).process!;
+  const proc = (globalThis as { process?: { getBuiltinModule?: unknown } })
+    .process!;
   const saved = proc.getBuiltinModule;
   proc.getBuiltinModule = undefined;
   try {
@@ -430,7 +485,10 @@ Deno.test("tcp: onCall records the driving sequence", async () => {
  * ref), and drop the handle. Uniform across generator states — never
  * started, parked in accept, or suspended at a yield.
  */
-async function retire(socket: TcpSocket, stream: TcpAcceptStream): Promise<void> {
+async function retire(
+  socket: TcpSocket,
+  stream: TcpAcceptStream,
+): Promise<void> {
   stream.cancel();
   for await (const straggler of stream) dispose(straggler);
   dispose(socket);
@@ -456,7 +514,10 @@ Deno.test("tcp listen: implicit ephemeral bind; an accepted socket serves a full
   const stream = await socket.listen();
   assertEq(socket.getIsListening(), true);
   const addr = socket.getLocalAddress();
-  assertTrue(addr.kind === "ipv4" && addr.value.port !== 0, "ephemeral port assigned");
+  assertTrue(
+    addr.kind === "ipv4" && addr.value.port !== 0,
+    "ephemeral port assigned",
+  );
 
   // Dial in from a raw client and speak both directions.
   const client = await Deno.connect({
@@ -508,7 +569,10 @@ Deno.test("tcp listen: bind picks the address; address-in-use surfaces at listen
   first.bind(v4([127, 0, 0, 1], 0));
   const stream = await first.listen();
   const addr = first.getLocalAddress();
-  assertTrue(addr.kind === "ipv4" && addr.value.address[0] === 127, "bound to loopback");
+  assertTrue(
+    addr.kind === "ipv4" && addr.value.address[0] === 127,
+    "bound to loopback",
+  );
 
   const second = TcpSocket.create("ipv4");
   second.bind(addr);
@@ -526,7 +590,10 @@ Deno.test("tcp listen: state machine (branded)", async () => {
   assertEq(errKind(() => socket.bind(v4([127, 0, 0, 1], 0))), "invalid-state");
   const stream = await socket.listen();
   assertEq(await errKindAsync(socket.listen()), "invalid-state");
-  assertEq(await errKindAsync(socket.connect(v4([127, 0, 0, 1], 9))), "invalid-state");
+  assertEq(
+    await errKindAsync(socket.connect(v4([127, 0, 0, 1], 9))),
+    "invalid-state",
+  );
   assertEq(errKind(() => socket.bind(v4([127, 0, 0, 1], 0))), "invalid-state");
   // send/receive on a listener: err futures, never throws.
   assertEq(resultErrKind(await socket.send(chunksOf([1]))), "invalid-state");
@@ -538,7 +605,10 @@ Deno.test("tcp listen: state machine (branded)", async () => {
 
 Deno.test("tcp listen: bind validation (branded)", () => {
   const socket = TcpSocket.create("ipv4");
-  assertEq(errKind(() => socket.bind(v6([0, 0, 0, 0, 0, 0, 0, 1], 0))), "invalid-argument");
+  assertEq(
+    errKind(() => socket.bind(v6([0, 0, 0, 0, 0, 0, 0, 1], 0))),
+    "invalid-argument",
+  );
   const v6Socket = TcpSocket.create("ipv6");
   assertEq(
     errKind(() => v6Socket.bind(v6([0xfe80, 0, 0, 0, 0, 0, 0, 1], 0, 3))),
@@ -556,7 +626,11 @@ Deno.test("tcp listen: the accept stream survives the dropped handle (shared own
   // Drop the guest handle FIRST: the listener must stay open for the
   // stream (WIT: "The stream returned by listen behaves similarly").
   dispose(socket);
-  const client = await Deno.connect({ transport: "tcp", hostname: "127.0.0.1", port });
+  const client = await Deno.connect({
+    transport: "tcp",
+    hostname: "127.0.0.1",
+    port,
+  });
   const { taken, it } = await acceptN(stream, 1);
   assertEq(taken.length, 1, "still accepting after the handle drop");
   client.close();
@@ -570,7 +644,11 @@ Deno.test("tcp listen: accepted sockets are independent of the listener", async 
   const stream = await socket.listen();
   const addr = socket.getLocalAddress();
   const port = addr.kind === "ipv4" ? addr.value.port : 0;
-  const client = await Deno.connect({ transport: "tcp", hostname: "127.0.0.1", port });
+  const client = await Deno.connect({
+    transport: "tcp",
+    hostname: "127.0.0.1",
+    port,
+  });
   const { taken, it } = await acceptN(stream, 1);
   const accepted = taken[0];
   void it;
@@ -629,7 +707,7 @@ Deno.test("tcp: connect from a bound socket dials with the chosen source port", 
     // FIN via the wrapper's close.
   });
   // Random high ports; retry the rare collision.
-  for (let attempt = 0; ; attempt++) {
+  for (let attempt = 0;; attempt++) {
     const want = 20000 + Math.floor(Math.random() * 30000);
     const socket = TcpSocket.create("ipv4");
     socket.bind(v4([127, 0, 0, 1], want));
@@ -638,15 +716,24 @@ Deno.test("tcp: connect from a bound socket dials with the chosen source port", 
     } catch (e) {
       dispose(socket);
       const kind = (e as ComponentException<SocketErrorCode>).payload?.kind;
-      if ((kind === "address-in-use" || kind === "address-not-bindable") && attempt < 4) continue;
+      if (
+        (kind === "address-in-use" || kind === "address-not-bindable") &&
+        attempt < 4
+      ) continue;
       throw e;
     }
     const local = socket.getLocalAddress();
-    assertTrue(local.kind === "ipv4" && local.value.port === want, "our own view shows the port");
+    assertTrue(
+      local.kind === "ipv4" && local.value.port === want,
+      "our own view shows the port",
+    );
     const [rx, rxDone] = socket.receive();
     const seen = await collect(rx);
-    assertEq(JSON.stringify(seen), JSON.stringify([want >> 8, want & 0xff]),
-      "the PEER observed the chosen source port");
+    assertEq(
+      JSON.stringify(seen),
+      JSON.stringify([want >> 8, want & 0xff]),
+      "the PEER observed the chosen source port",
+    );
     await rxDone;
     const txDone = socket.send(chunksOf());
     await txDone;

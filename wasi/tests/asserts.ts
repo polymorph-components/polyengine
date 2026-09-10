@@ -2,10 +2,13 @@
 
 export function assertEq<T>(actual: T, expected: T, msg?: string): void {
   const ok = Object.is(actual, expected) ||
-    (typeof actual === "bigint" && typeof expected === "bigint" && actual === expected);
+    (typeof actual === "bigint" && typeof expected === "bigint" &&
+      actual === expected);
   if (!ok) {
     throw new Error(
-      `${msg ?? "assertEq failed"}: expected ${describe(expected)}, got ${describe(actual)}`,
+      `${msg ?? "assertEq failed"}: expected ${describe(expected)}, got ${
+        describe(actual)
+      }`,
     );
   }
 }

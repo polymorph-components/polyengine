@@ -13,7 +13,6 @@ import {
   applies,
   collectTagsSections,
   firstExcluding,
-  loadTagsInventory,
   parseTagsRecords,
   TAGS_SECTION,
   tagsOf,
@@ -113,13 +112,27 @@ Deno.test("tags: scanner finds nested core-module sections and repairs newlines"
   // module) plus the concatenation/newline-repair path (inventory.rs).
   const coreCustom = customSection(TAGS_SECTION, enc.encode("m/core hsm"));
   const core = new Uint8Array([
-    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, // core preamble
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00, // core preamble
     ...coreCustom,
   ]);
   const moduleSection = new Uint8Array([0x01, ...leb(core.length), ...core]);
   const componentCustom = customSection(TAGS_SECTION, enc.encode("m/comp\n"));
   const component = new Uint8Array([
-    0x00, 0x61, 0x73, 0x6d, 0x0d, 0x00, 0x01, 0x00, // component preamble
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x0d,
+    0x00,
+    0x01,
+    0x00, // component preamble
     ...moduleSection,
     ...componentCustom,
   ]);
@@ -145,7 +158,8 @@ const RECORDS = "suite/basic/pass\n" +
   "suite/nested/deep/leaf\n";
 
 Deno.test({
-  name: "tags e2e: missing feature schedules the requiring case out (N/A row exact)",
+  name:
+    "tags e2e: missing feature schedules the requiring case out (N/A row exact)",
   ignore: !ready,
   fn: async () => {
     const bytes = withTags((await readArtifact(TEST_SUITE_WASM))!, RECORDS);
@@ -186,7 +200,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "tags e2e: gating is on whenever an inventory exists (decline case N/As)",
+  name:
+    "tags e2e: gating is on whenever an inventory exists (decline case N/As)",
   ignore: !ready,
   fn: async () => {
     const bytes = withTags((await readArtifact(TEST_SUITE_WASM))!, RECORDS);
@@ -283,7 +298,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "tags e2e: --missing without an inventory refuses (no silent feature-blind run)",
+  name:
+    "tags e2e: --missing without an inventory refuses (no silent feature-blind run)",
   ignore: !ready,
   fn: async () => {
     const bytes = (await readArtifact(TEST_SUITE_WASM))!; // no section

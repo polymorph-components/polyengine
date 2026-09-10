@@ -75,15 +75,22 @@ interface D03 {
   statAt(pf: Flags, path: string): Stat | Promise<Stat>;
   readViaStream(
     off: bigint,
-  ): [AsyncIterable<Uint8Array>, Promise<{ kind: string; value?: { kind: string } }>];
+  ): [
+    AsyncIterable<Uint8Array>,
+    Promise<{ kind: string; value?: { kind: string } }>,
+  ];
   writeViaStream(
     data: unknown,
     off: bigint,
   ): Promise<{ kind: string; value?: { kind: string } }>;
-  appendViaStream(data: unknown): Promise<{ kind: string; value?: { kind: string } }>;
+  appendViaStream(
+    data: unknown,
+  ): Promise<{ kind: string; value?: { kind: string } }>;
   readDirectory():
     | [Iterable<{ type: string; name: string }>, Promise<{ kind: string }>]
-    | Promise<[Iterable<{ type: string; name: string }>, Promise<{ kind: string }>]>;
+    | Promise<
+      [Iterable<{ type: string; name: string }>, Promise<{ kind: string }>]
+    >;
 }
 
 const FOLLOW: Flags = { symlinkFollow: true };
@@ -91,8 +98,14 @@ const NOFOLLOW: Flags = {};
 const RW: Flags = { read: true, write: true };
 
 function setup(): { root02: D02; root03: D03; dir: string } {
-  const dir = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-node-" });
-  const { imports } = filesystemNode({ preopens: { "/": dir }, writable: true });
+  const dir = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-node-",
+  });
+  const { imports } = filesystemNode({
+    preopens: { "/": dir },
+    writable: true,
+  });
   const p02 = imports["wasi:filesystem/preopens@0.2"] as {
     getDirectories(): [D02, string][];
   };
@@ -114,7 +127,10 @@ function plain<T>(v: T, what: string): T {
 
 function errPayload(f: () => unknown): unknown {
   const e = assertThrows(f);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
   return (e as ComponentException).payload;
 }
 
@@ -123,7 +139,10 @@ Deno.test("fs-node: preopens serve both tracks; flags reflect the grant", () => 
   assertEq(plain(root02.getType(), "get-type"), "directory");
   assertEq(root03.getType(), "directory");
   const flags = root02.getFlags();
-  assertTrue(flags.read && flags.write && flags.mutateDirectory, "preopen rw+mutate");
+  assertTrue(
+    flags.read && flags.write && flags.mutateDirectory,
+    "preopen rw+mutate",
+  );
 });
 
 Deno.test("fs-node 0.2: open/write/read positional, sync throughout", () => {
@@ -160,7 +179,10 @@ Deno.test("fs-node 0.2: via-stream read/write/append (sync streams)", () => {
   app.write(new TextEncoder().encode("-tail"));
 
   const src = plain(f.readViaStream(2n), "read-via-stream"); // offset 2
-  assertEq(new TextDecoder().decode(plain(src.blockingRead(4n), "blocking-read")), "cdef");
+  assertEq(
+    new TextDecoder().decode(plain(src.blockingRead(4n), "blocking-read")),
+    "cdef",
+  );
   assertEq(new TextDecoder().decode(src.read(64n)), "-tail");
   // Drained + EOF = the `closed` stream-error.
   const closed = errPayload(() => src.read(1n));
@@ -170,8 +192,14 @@ Deno.test("fs-node 0.2: via-stream read/write/append (sync streams)", () => {
 Deno.test("fs-node 0.2: error payloads are BARE enum strings", () => {
   const { root02 } = setup();
   assertEq(errPayload(() => root02.statAt(FOLLOW, "missing")), "no-entry");
-  assertEq(errPayload(() => root02.openAt(FOLLOW, "/etc/passwd", {}, RW)), "not-permitted");
-  assertEq(errPayload(() => root02.statAt(FOLLOW, "../escape")), "not-permitted");
+  assertEq(
+    errPayload(() => root02.openAt(FOLLOW, "/etc/passwd", {}, RW)),
+    "not-permitted",
+  );
+  assertEq(
+    errPayload(() => root02.statAt(FOLLOW, "../escape")),
+    "not-permitted",
+  );
   assertEq(errPayload(() => root02.statAt(FOLLOW, "a\0b")), "invalid");
   // ".." that stays inside resolves textually.
   root02.createDirectoryAt("sub");
@@ -184,7 +212,10 @@ Deno.test("fs-node 0.2: directory ops + listing", () => {
   root02.createDirectoryAt("d");
   const f = root02.openAt(FOLLOW, "d/x.txt", { create: true }, RW);
   f.write(new Uint8Array([1, 2, 3]), 0n);
-  const d = root02.openAt(FOLLOW, "d", { directory: true }, { read: true, mutateDirectory: true });
+  const d = root02.openAt(FOLLOW, "d", { directory: true }, {
+    read: true,
+    mutateDirectory: true,
+  });
   const listing = plain(d.readDirectory(), "read-directory");
   const first = listing.readDirectoryEntry();
   assertEq(first?.name, "x.txt");
@@ -219,9 +250,15 @@ Deno.test("fs-node 0.2: identity — metadata-hash and is-same-object", () => {
   assertEq(a1.isSameObject(b), false);
   const h1 = plain(a1.metadataHash(), "metadata-hash");
   const h2 = a2.metadataHash();
-  assertTrue(h1.lower === h2.lower && h1.upper === h2.upper, "same object, same hash");
+  assertTrue(
+    h1.lower === h2.lower && h1.upper === h2.upper,
+    "same object, same hash",
+  );
   const hb = b.metadataHash();
-  assertTrue(h1.lower !== hb.lower || h1.upper !== hb.upper, "different objects differ");
+  assertTrue(
+    h1.lower !== hb.lower || h1.upper !== hb.upper,
+    "different objects differ",
+  );
   const hAt = root02.metadataHashAt(FOLLOW, "a.txt");
   assertEq(hAt.lower, h1.lower);
 });
@@ -264,19 +301,30 @@ Deno.test("fs-node 0.3: stream tuples and variant error shapes", async () => {
     await root03.statAt(FOLLOW, "missing");
     throw new Error("expected a throw");
   } catch (e) {
-    assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-    assertEq(((e as ComponentException).payload as { kind: string }).kind, "no-entry");
+    assertTrue(
+      e instanceof ComponentException,
+      `expected ComponentException, got ${e}`,
+    );
+    assertEq(
+      ((e as ComponentException).payload as { kind: string }).kind,
+      "no-entry",
+    );
   }
 });
 
 Deno.test("fs-node: filesystem-error-code downcasts our stream errors only", () => {
   const { imports } = filesystemNode({
-    preopens: { "/": Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-node-" }) },
+    preopens: {
+      "/": Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-node-" }),
+    },
   });
   const types = imports["wasi:filesystem/types@0.2"] as {
     filesystemErrorCode(err: unknown): string | undefined;
   };
-  assertEq(types.filesystemErrorCode(new FsIoError("no-entry", "gone")), "no-entry");
+  assertEq(
+    types.filesystemErrorCode(new FsIoError("no-entry", "gone")),
+    "no-entry",
+  );
   assertEq(types.filesystemErrorCode(new Error("random")), undefined);
 });
 
@@ -292,30 +340,57 @@ Deno.test("fs-node: rejects opening through a guest-created absolute symlink", (
   root02.symlinkAt("/etc", "escape"); // creation itself stays permissive
   assertEq(root02.readlinkAt("escape"), "/etc");
   // follow=true: the chain resolves outside the root.
-  assertEq(errPayload(() => root02.openAt(FOLLOW, "escape/passwd", {}, { read: true })), "not-permitted");
-  assertEq(errPayload(() => root02.openAt(FOLLOW, "escape", {}, { read: true })), "not-permitted");
+  assertEq(
+    errPayload(() =>
+      root02.openAt(FOLLOW, "escape/passwd", {}, { read: true })
+    ),
+    "not-permitted",
+  );
+  assertEq(
+    errPayload(() => root02.openAt(FOLLOW, "escape", {}, { read: true })),
+    "not-permitted",
+  );
   // follow=false: the final component is refused as a symlink (ELOOP), and
   // an intermediate escaping component is refused outright.
-  assertEq(errPayload(() => root02.openAt(NOFOLLOW, "escape", {}, { read: true })), "loop");
   assertEq(
-    errPayload(() => root02.openAt(NOFOLLOW, "escape/passwd", {}, { read: true })),
+    errPayload(() => root02.openAt(NOFOLLOW, "escape", {}, { read: true })),
+    "loop",
+  );
+  assertEq(
+    errPayload(() =>
+      root02.openAt(NOFOLLOW, "escape/passwd", {}, { read: true })
+    ),
     "not-permitted",
   );
 });
 
 Deno.test("fs-node: rejects writes and creation through an escaping symlink", () => {
   const { root02, dir } = setup();
-  const outside = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-outside-" });
+  const outside = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-outside-",
+  });
   root02.symlinkAt(outside, "out");
   assertEq(
-    errPayload(() => root02.openAt(FOLLOW, "out/new.txt", { create: true }, RW)),
+    errPayload(() =>
+      root02.openAt(FOLLOW, "out/new.txt", { create: true }, RW)
+    ),
     "not-permitted",
   );
-  assertEq(errPayload(() => root02.createDirectoryAt("out/d")), "not-permitted");
+  assertEq(
+    errPayload(() => root02.createDirectoryAt("out/d")),
+    "not-permitted",
+  );
   assertEq(errPayload(() => root02.unlinkFileAt("out/x")), "not-permitted");
-  assertEq(errPayload(() => root02.renameAt("out/x", root02, "y")), "not-permitted");
+  assertEq(
+    errPayload(() => root02.renameAt("out/x", root02, "y")),
+    "not-permitted",
+  );
   assertEq(errPayload(() => root02.symlinkAt("t", "out/l")), "not-permitted");
-  assertTrue([...Deno.readDirSync(outside)].length === 0, "nothing was created outside");
+  assertTrue(
+    [...Deno.readDirSync(outside)].length === 0,
+    "nothing was created outside",
+  );
   // A dangling escaping link is refused too (create must not reach out).
   root02.symlinkAt(`${outside}/gone/x`, "dangling");
   // Containment is decided before existence, so a dangling ESCAPING
@@ -348,17 +423,24 @@ Deno.test("fs-node: confines but permits symlinks resolving inside the sandbox",
 
 Deno.test("fs-node: rejects opening or descending an escaping directory symlink", () => {
   const { root02 } = setup();
-  const outside = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-outside-" });
+  const outside = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-outside-",
+  });
   Deno.writeTextFileSync(`${outside}/secret.txt`, "secret");
   root02.symlinkAt(outside, "outdir");
   // Directory opens return a path handle before openSync — they get the
   // same containment check, so no handle is ever minted for the escape.
   assertEq(
-    errPayload(() => root02.openAt(FOLLOW, "outdir", { directory: true }, { read: true })),
+    errPayload(() =>
+      root02.openAt(FOLLOW, "outdir", { directory: true }, { read: true })
+    ),
     "not-permitted",
   );
   assertEq(
-    errPayload(() => root02.openAt(FOLLOW, "outdir/secret.txt", {}, { read: true })),
+    errPayload(() =>
+      root02.openAt(FOLLOW, "outdir/secret.txt", {}, { read: true })
+    ),
     "not-permitted",
   );
   // ".." laundering through the escaping link is refused as well.
@@ -371,9 +453,15 @@ Deno.test("fs-node: rejects opening or descending an escaping directory symlink"
 Deno.test("fs-node: rejects stat/readlink/metadata-hash through an escaping symlink", () => {
   const { root02, root03 } = setup();
   root02.symlinkAt("/etc", "e");
-  assertEq(errPayload(() => root02.statAt(FOLLOW, "e/passwd")), "not-permitted");
+  assertEq(
+    errPayload(() => root02.statAt(FOLLOW, "e/passwd")),
+    "not-permitted",
+  );
   assertEq(errPayload(() => root02.statAt(FOLLOW, "e")), "not-permitted");
-  assertEq(errPayload(() => root02.metadataHashAt(FOLLOW, "e")), "not-permitted");
+  assertEq(
+    errPayload(() => root02.metadataHashAt(FOLLOW, "e")),
+    "not-permitted",
+  );
   assertEq(errPayload(() => root02.readlinkAt("e/passwd")), "not-permitted");
   // nofollow stat sees the link itself — that entry IS inside the sandbox.
   assertEq(root02.statAt(NOFOLLOW, "e").type, "symbolic-link");
@@ -387,8 +475,14 @@ Deno.test("fs-node 0.3: rejects escaping symlink resolution with the variant sha
     await root03.statAt(FOLLOW, "e/passwd");
     throw new Error("expected a throw");
   } catch (e) {
-    assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-    assertEq(((e as ComponentException).payload as { kind: string }).kind, "not-permitted");
+    assertTrue(
+      e instanceof ComponentException,
+      `expected ComponentException, got ${e}`,
+    );
+    assertEq(
+      ((e as ComponentException).payload as { kind: string }).kind,
+      "not-permitted",
+    );
   }
 });
 
@@ -400,7 +494,10 @@ Deno.test("fs-node 0.3: rejects escaping symlink resolution with the variant sha
 
 Deno.test("fs-node: rejects a '..' chain laundered through an escaping symlink", () => {
   const { root02 } = setup();
-  const outside = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-outside-" });
+  const outside = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-outside-",
+  });
   Deno.mkdirSync(`${outside}/inner`);
   Deno.writeTextFileSync(`${outside}/secret.txt`, "secret payload");
   root02.symlinkAt(`${outside}/inner`, "esc"); // creation stays permissive
@@ -408,7 +505,10 @@ Deno.test("fs-node: rejects a '..' chain laundered through an escaping symlink",
   // the sandbox, physically it does not.
   root02.symlinkAt("esc/../secret.txt", "L");
   assertEq(errPayload(() => root02.statAt(FOLLOW, "L")), "not-permitted");
-  assertEq(errPayload(() => root02.metadataHashAt(FOLLOW, "L")), "not-permitted");
+  assertEq(
+    errPayload(() => root02.metadataHashAt(FOLLOW, "L")),
+    "not-permitted",
+  );
   assertEq(
     errPayload(() => root02.openAt(FOLLOW, "L", {}, { read: true })),
     "not-permitted",
@@ -435,14 +535,19 @@ Deno.test("fs-node: rejects a '..' chain laundered through an escaping symlink",
   // can only ever climb the guest-visible tree, never out of it — the
   // hazard was ".." inside symlink TARGETS, which parsePath never sees.
   assertEq(
-    errPayload(() => root02.openAt(FOLLOW, "esc/../secret.txt", {}, { read: true })),
+    errPayload(() =>
+      root02.openAt(FOLLOW, "esc/../secret.txt", {}, { read: true })
+    ),
     "no-entry",
   );
 });
 
 Deno.test("fs-node: rejects creating through a dangling '..'-laundered symlink", () => {
   const { root02 } = setup();
-  const outside = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-outside-" });
+  const outside = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-outside-",
+  });
   Deno.mkdirSync(`${outside}/inner`);
   root02.symlinkAt(`${outside}/inner`, "esc");
   root02.symlinkAt("esc/../planted.txt", "D"); // dangles, outside
@@ -472,25 +577,36 @@ Deno.test("fs-node: confines but permits an in-sandbox '..' link target", () => 
 
 Deno.test("fs-node: rejects listing and descending a laundered escaping directory link", () => {
   const { root02 } = setup();
-  const outside = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-outside-" });
+  const outside = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-outside-",
+  });
   Deno.mkdirSync(`${outside}/target`);
   Deno.writeTextFileSync(`${outside}/target/f.txt`, "x");
   root02.symlinkAt(`${outside}/target`, "esc");
   root02.symlinkAt("esc/../target", "LD"); // a DIRECTORY, laundered
   assertEq(
-    errPayload(() => root02.openAt(FOLLOW, "LD", { directory: true }, { read: true })),
+    errPayload(() =>
+      root02.openAt(FOLLOW, "LD", { directory: true }, { read: true })
+    ),
     "not-permitted",
   );
   assertEq(
     errPayload(() => root02.openAt(FOLLOW, "LD/f.txt", {}, { read: true })),
     "not-permitted",
   );
-  assertEq(errPayload(() => root02.statAt(FOLLOW, "LD/f.txt")), "not-permitted");
+  assertEq(
+    errPayload(() => root02.statAt(FOLLOW, "LD/f.txt")),
+    "not-permitted",
+  );
 });
 
 Deno.test("fs-node: confines symlink targets that are bare '..' components", () => {
   const { root02 } = setup();
-  const outside = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-outside-" });
+  const outside = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-outside-",
+  });
   Deno.mkdirSync(`${outside}/inner`);
   root02.createDirectoryAt("sub");
   root02.symlinkAt(`${outside}/inner`, "esc");
@@ -498,7 +614,9 @@ Deno.test("fs-node: confines symlink targets that are bare '..' components", () 
   root02.symlinkAt("esc/..", "up");
   assertEq(errPayload(() => root02.statAt(FOLLOW, "up")), "not-permitted");
   assertEq(
-    errPayload(() => root02.openAt(FOLLOW, "up", { directory: true }, { read: true })),
+    errPayload(() =>
+      root02.openAt(FOLLOW, "up", { directory: true }, { read: true })
+    ),
     "not-permitted",
   );
   // A climb out of the ROOT is refused (parsePath's underflow rule,

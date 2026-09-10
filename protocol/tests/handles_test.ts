@@ -57,5 +57,7 @@ Deno.test("isErrorContext requires the brand AND a string message", () => {
 Deno.test("the three stateful brands don't cross-talk", () => {
   assertFalse(isStream({ [FUTURE]: true }));
   assertFalse(isFuture({ [STREAM]: true }));
-  assertFalse(isStreamWriter({ [Symbol.for("polyengine.errorContext/1")]: true }));
+  assertFalse(
+    isStreamWriter({ [Symbol.for("polyengine.errorContext/1")]: true }),
+  );
 });

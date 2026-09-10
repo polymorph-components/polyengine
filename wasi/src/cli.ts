@@ -132,7 +132,9 @@ export function cli(options: CliOptions = {}): CliResult {
   ) =>
   async (data: CliByteSource): Promise<CliIoResult> => {
     for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
-      const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
+      const bytes = chunk instanceof Uint8Array
+        ? chunk
+        : Uint8Array.from(chunk);
       chunks.push(bytes);
       mirror?.(new TextDecoder().decode(bytes));
     }
@@ -141,7 +143,8 @@ export function cli(options: CliOptions = {}): CliResult {
 
   const imports: Record<string, unknown> = {
     "wasi:cli/environment@0.2": {
-      getEnvironment: (): [string, string][] => Object.entries(options.env ?? {}),
+      getEnvironment: (): [string, string][] =>
+        Object.entries(options.env ?? {}),
       getArguments: (): string[] => options.args ?? [],
       initialCwd: (): string | undefined => options.cwd,
     },
@@ -174,7 +177,8 @@ export function cli(options: CliOptions = {}): CliResult {
     // ---- the @0.3 track (WASI 0.3.1 shapes; module header) -------------------
     "wasi:cli/types@0.3": {},
     "wasi:cli/environment@0.3": {
-      getEnvironment: (): [string, string][] => Object.entries(options.env ?? {}),
+      getEnvironment: (): [string, string][] =>
+        Object.entries(options.env ?? {}),
       getArguments: (): string[] => options.args ?? [],
       getInitialCwd: (): string | undefined => options.cwd,
     },

@@ -8,7 +8,12 @@
 // where the subtask machinery lives (runtime/tests/host_import_cancel_test.ts).
 
 import { assert, assertEquals, assertFalse, assertThrows } from "./assert.ts";
-import { deferCancel, isDeferCancel, isSuspending, suspending } from "../src/mod.ts";
+import {
+  deferCancel,
+  isDeferCancel,
+  isSuspending,
+  suspending,
+} from "../src/mod.ts";
 
 Deno.test("deferCancel() marks in place and the brand reads back", () => {
   const fn = (a: number) => a;
@@ -48,7 +53,10 @@ Deno.test("the mark is non-enumerable (invisible to imports-record walks)", () =
   const fn = deferCancel(() => 1);
   assertEquals(Object.getOwnPropertySymbols(fn).length, 1);
   assertEquals(
-    Object.propertyIsEnumerable.call(fn, Symbol.for("polyengine.deferCancel/1")),
+    Object.propertyIsEnumerable.call(
+      fn,
+      Symbol.for("polyengine.deferCancel/1"),
+    ),
     false,
   );
   // Re-marking is a no-op, not a TypeError on a non-configurable property.
@@ -90,7 +98,8 @@ Deno.test("the legacy experimentalDecorators convention is refused with guidance
   // Under that convention the decorator receives the PROTOTYPE, not the
   // method: marking it would brand the wrong object AND corrupt the descriptor.
   const e = assertThrows(
-    () => deferCancel((() => 1) as CallableFunction, "flush", { value: () => 1 }),
+    () =>
+      deferCancel((() => 1) as CallableFunction, "flush", { value: () => 1 }),
     TypeError,
   );
   assert(e.message.includes("experimentalDecorators"));

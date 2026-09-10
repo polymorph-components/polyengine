@@ -73,7 +73,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "integration: a guest error path — err payloads survive the adapter round-trip",
+  name:
+    "integration: a guest error path — err payloads survive the adapter round-trip",
   ignore: !ready,
   async fn() {
     // No preopen named "/": wasi-libc can't resolve "/work", and the
@@ -93,8 +94,12 @@ Deno.test({
     }
     assertTrue(threw !== undefined, "the guest reported a failure");
     assertTrue(
-      String((threw as { payload?: unknown })?.payload ?? threw).includes("create_dir"),
-      `the first failing step is named, got: ${(threw as { payload?: unknown })?.payload}`,
+      String((threw as { payload?: unknown })?.payload ?? threw).includes(
+        "create_dir",
+      ),
+      `the first failing step is named, got: ${
+        (threw as { payload?: unknown })?.payload
+      }`,
     );
   },
 });

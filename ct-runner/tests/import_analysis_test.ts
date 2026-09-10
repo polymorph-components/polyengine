@@ -9,7 +9,10 @@ import {
   MissingImportsError,
   requireImportsResolved,
 } from "../src/import-analysis.ts";
-import { TEST_CONTEXT_INTERFACE, testContextImportRecord } from "../src/context.ts";
+import {
+  TEST_CONTEXT_INTERFACE,
+  testContextImportRecord,
+} from "../src/context.ts";
 import { artifactsOf, haveFixture, TEST_SUITE_WASM } from "./support.ts";
 
 const ready = await haveFixture(TEST_SUITE_WASM);
@@ -89,7 +92,9 @@ Deno.test({
     assertEq(
       analysis.missing.some((m) => m.includes("polymorph:websocket")),
       true,
-      `expected a polymorph:websocket leaf among: ${analysis.missing.join(", ")}`,
+      `expected a polymorph:websocket leaf among: ${
+        analysis.missing.join(", ")
+      }`,
     );
 
     let threw: unknown;

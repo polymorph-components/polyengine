@@ -76,7 +76,9 @@ Deno.test({
   name: "cli: POLYENGINE_TRANSLATOR env is honored",
   ignore: !ready,
   fn: async () => {
-    const { code, lines } = await runCli([], { POLYENGINE_TRANSLATOR: TRANSLATOR });
+    const { code, lines } = await runCli([], {
+      POLYENGINE_TRANSLATOR: TRANSLATOR,
+    });
     assertEq(code, 1);
     assertEq(lines!.length, 1 + 6 + 1);
   },

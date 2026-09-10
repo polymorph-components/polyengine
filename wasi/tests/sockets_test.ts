@@ -23,11 +23,19 @@ import {
   SOCKETS_TYPES_INTERFACE,
   type UdpSocket,
 } from "../src/sockets.ts";
-import { assertEq, assertRejects, assertThrows, assertTrue } from "./asserts.ts";
+import {
+  assertEq,
+  assertRejects,
+  assertThrows,
+  assertTrue,
+} from "./asserts.ts";
 
 const { UdpSocket } = sockets();
 
-const v4 = (address: [number, number, number, number], port: number): IpSocketAddress => ({
+const v4 = (
+  address: [number, number, number, number],
+  port: number,
+): IpSocketAddress => ({
   kind: "ipv4",
   value: { port, address },
 });
@@ -42,21 +50,31 @@ const v6 = (
 });
 
 /** Structural equality, the package test convention (io_test.ts). */
-function assertAddrEq(actual: IpSocketAddress, expected: IpSocketAddress, msg?: string): void {
+function assertAddrEq(
+  actual: IpSocketAddress,
+  expected: IpSocketAddress,
+  msg?: string,
+): void {
   assertEq(JSON.stringify(actual), JSON.stringify(expected), msg);
 }
 
 /** The payload kind of a thrown, branded socket error. */
 function errKind(fn: () => unknown): string {
   const e = assertThrows(fn);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-  return ((e as ComponentException<SocketErrorCode>).payload).kind;
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
+  return (e as ComponentException<SocketErrorCode>).payload.kind;
 }
 
 async function errKindAsync(p: Promise<unknown>): Promise<string> {
   const e = await assertRejects(() => p);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
-  return ((e as ComponentException<SocketErrorCode>).payload).kind;
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
+  return (e as ComponentException<SocketErrorCode>).payload.kind;
 }
 
 function dispose(socket: UdpSocket): void {
@@ -75,7 +93,10 @@ function boundV4(): { socket: UdpSocket; addr: IpSocketAddress } {
 Deno.test("codec: IPv4 round trip", () => {
   const addr = v4([127, 0, 0, 1], 4242);
   assertEq(ipHostname(addr), "127.0.0.1");
-  assertAddrEq(parseNetAddr({ transport: "udp", hostname: "127.0.0.1", port: 4242 }), addr);
+  assertAddrEq(
+    parseNetAddr({ transport: "udp", hostname: "127.0.0.1", port: 4242 }),
+    addr,
+  );
 });
 
 Deno.test("codec: IPv6 hostname spellings", () => {
@@ -89,7 +110,11 @@ Deno.test("codec: IPv6 hostname spellings", () => {
     v6([0, 0, 0, 0, 0, 0, 0, 0], port),
   );
   assertAddrEq(
-    parseNetAddr({ transport: "udp", hostname: "2001:db8::8a2e:370:7334", port }),
+    parseNetAddr({
+      transport: "udp",
+      hostname: "2001:db8::8a2e:370:7334",
+      port,
+    }),
     v6([0x2001, 0xdb8, 0, 0, 0, 0x8a2e, 0x370, 0x7334], port),
   );
   assertAddrEq(
@@ -127,7 +152,10 @@ Deno.test("bind: ephemeral IPv4 loopback, get-local-address reports the port", (
   try {
     assertEq(addr.kind, "ipv4");
     if (addr.kind !== "ipv4") return;
-    assertEq(JSON.stringify(addr.value.address), JSON.stringify([127, 0, 0, 1]));
+    assertEq(
+      JSON.stringify(addr.value.address),
+      JSON.stringify([127, 0, 0, 1]),
+    );
     assertTrue(addr.value.port !== 0, "an ephemeral port was assigned");
   } finally {
     dispose(socket);
@@ -141,7 +169,10 @@ Deno.test("bind: ephemeral IPv6 loopback", () => {
     const addr = socket.getLocalAddress();
     assertEq(addr.kind, "ipv6");
     if (addr.kind !== "ipv6") return;
-    assertEq(JSON.stringify(addr.value.address), JSON.stringify([0, 0, 0, 0, 0, 0, 0, 1]));
+    assertEq(
+      JSON.stringify(addr.value.address),
+      JSON.stringify([0, 0, 0, 0, 0, 0, 0, 1]),
+    );
     assertTrue(addr.value.port !== 0);
   } finally {
     dispose(socket);
@@ -199,7 +230,10 @@ Deno.test("send: implicit bind on an unbound socket", async () => {
   try {
     await sender.send(new Uint8Array([9]), listener.addr);
     const local = sender.getLocalAddress();
-    assertTrue(local.kind === "ipv4" && local.value.port !== 0, "send bound the socket");
+    assertTrue(
+      local.kind === "ipv4" && local.value.port !== 0,
+      "send bound the socket",
+    );
     const [payload] = await listener.socket.receive();
     assertEq(JSON.stringify([...payload]), JSON.stringify([9]));
   } finally {
@@ -215,7 +249,9 @@ Deno.test("errors: the datagram-too-large ceiling, both detection paths", async 
   try {
     // Above the WIT ceiling: refused before the OS.
     assertEq(
-      await errKindAsync(socket.send(new Uint8Array(MAX_UDP_DATAGRAM_SIZE + 1), addr)),
+      await errKindAsync(
+        socket.send(new Uint8Array(MAX_UDP_DATAGRAM_SIZE + 1), addr),
+      ),
       "datagram-too-large",
     );
     // Under the ceiling but above the UDP payload maximum: the OS's
@@ -239,7 +275,10 @@ Deno.test("errors: bind is once-only and surfaces address-in-use", () => {
   const { socket, addr } = boundV4();
   const other = UdpSocket.create("ipv4");
   try {
-    assertEq(errKind(() => socket.bind(v4([127, 0, 0, 1], 0))), "invalid-state");
+    assertEq(
+      errKind(() => socket.bind(v4([127, 0, 0, 1], 0))),
+      "invalid-state",
+    );
     assertEq(errKind(() => other.bind(addr)), "address-in-use");
   } finally {
     dispose(socket);
@@ -257,7 +296,9 @@ Deno.test("errors: send argument validation", async () => {
     );
     // Family mismatch, unspecified address, port zero.
     assertEq(
-      await errKindAsync(socket.send(new Uint8Array([1]), v6([0, 0, 0, 0, 0, 0, 0, 1], 9))),
+      await errKindAsync(
+        socket.send(new Uint8Array([1]), v6([0, 0, 0, 0, 0, 0, 0, 1], 9)),
+      ),
       "invalid-argument",
     );
     assertEq(
@@ -265,14 +306,19 @@ Deno.test("errors: send argument validation", async () => {
       "invalid-argument",
     );
     assertEq(
-      await errKindAsync(socket.send(new Uint8Array([1]), v4([127, 0, 0, 1], 0))),
+      await errKindAsync(
+        socket.send(new Uint8Array([1]), v4([127, 0, 0, 1], 0)),
+      ),
       "invalid-argument",
     );
     // An IPv4-mapped IPv6 address never crosses the family boundary
     // (wasmtime-wasi parity).
     assertEq(
       await errKindAsync(
-        v6Socket.send(new Uint8Array([1]), v6([0, 0, 0, 0, 0, 0xffff, 0x7f00, 1], 9)),
+        v6Socket.send(
+          new Uint8Array([1]),
+          v6([0, 0, 0, 0, 0, 0xffff, 0x7f00, 1], 9),
+        ),
       ),
       "invalid-argument",
     );
@@ -296,7 +342,8 @@ Deno.test("errors: a non-zero scope-id is not-supported (recorded divergence)", 
 
 /** Hide the node builtins from detection (the only backend), restore after. */
 function withoutBuiltins<T>(fn: () => T): T {
-  const proc = (globalThis as { process?: { getBuiltinModule?: unknown } }).process!;
+  const proc = (globalThis as { process?: { getBuiltinModule?: unknown } })
+    .process!;
   const saved = proc.getBuiltinModule;
   proc.getBuiltinModule = undefined;
   try {
@@ -319,7 +366,10 @@ Deno.test("errors: capability re-detection at bind survives the error mapper", (
   const socket = UdpSocket.create("ipv4");
   try {
     withoutBuiltins(() => {
-      assertEq(errKind(() => socket.bind(v4([127, 0, 0, 1], 0))), "not-supported");
+      assertEq(
+        errKind(() => socket.bind(v4([127, 0, 0, 1], 0))),
+        "not-supported",
+      );
     });
   } finally {
     dispose(socket);
@@ -363,7 +413,11 @@ Deno.test("fragment: registered under the track key; onCall observes the driving
     socket.getLocalAddress();
     assertEq(
       JSON.stringify(calls),
-      JSON.stringify(["udp-socket.create", "udp-socket.bind", "udp-socket.get-local-address"]),
+      JSON.stringify([
+        "udp-socket.create",
+        "udp-socket.bind",
+        "udp-socket.get-local-address",
+      ]),
     );
   } finally {
     dispose(socket);

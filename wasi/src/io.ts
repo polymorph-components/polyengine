@@ -46,7 +46,7 @@
 // duck-typed async streams park through the resource types registered here.
 
 import { defineBrand, defineRealmLocal, POLLABLE } from "@polyengine/protocol";
-import { suspending, ComponentException } from "@polyengine/protocol";
+import { ComponentException, suspending } from "@polyengine/protocol";
 
 /** The engine setTimeout ceiling: delays above 2^31-1 ms are clamped to
  * ~0 (node/Deno warn and fire at 1 ms). `Pollable.timer` sleeps in
@@ -185,7 +185,9 @@ defineBrand(Pollable.prototype, POLLABLE);
  * The explicit annotation is JSR's no-slow-types rule (the `suspending`
  * wrapper would otherwise leave this public symbol's type inferred).
  */
-export const poll: (pollables: readonly Pollable[]) => number[] | Promise<number[]> = suspending(
+export const poll: (
+  pollables: readonly Pollable[],
+) => number[] | Promise<number[]> = suspending(
   (pollables: readonly Pollable[]): number[] | Promise<number[]> => {
     // io.wit: "poll [...] traps if the list [...] is empty". An unbranded
     // host throw is the embedder contract's spelling of a trap.
@@ -381,7 +383,10 @@ export class FedInputStream {
   /** Resumes a paused feed once the buffer drains. */
   #resume = (): void => {};
 
-  constructor(source: AsyncIterable<Uint8Array>, highWater = STREAM_HIGH_WATER) {
+  constructor(
+    source: AsyncIterable<Uint8Array>,
+    highWater = STREAM_HIGH_WATER,
+  ) {
     this.#highWater = highWater;
     this.#wakePromise = new Promise((r) => (this.#wake = r));
     void this.#feed(source);
@@ -440,7 +445,9 @@ export class FedInputStream {
       throw new ComponentException({
         kind: "last-operation-failed",
         value: this.#failure instanceof IoError ? this.#failure : new IoError(
-          this.#failure instanceof Error ? this.#failure.message : String(this.#failure),
+          this.#failure instanceof Error
+            ? this.#failure.message
+            : String(this.#failure),
         ),
       });
     }
@@ -531,7 +538,9 @@ export class SinkOutputStream {
       throw new ComponentException({
         kind: "last-operation-failed",
         value: this.#failure instanceof IoError ? this.#failure : new IoError(
-          this.#failure instanceof Error ? this.#failure.message : String(this.#failure),
+          this.#failure instanceof Error
+            ? this.#failure.message
+            : String(this.#failure),
         ),
       });
     }
@@ -590,7 +599,9 @@ export class SinkOutputStream {
 
   subscribe(): Pollable {
     return new Pollable(
-      () => this.#closed || this.#failure !== undefined || this.#queued < this.#highWater,
+      () =>
+        this.#closed || this.#failure !== undefined ||
+        this.#queued < this.#highWater,
       () => this.#wakePromise,
     );
   }

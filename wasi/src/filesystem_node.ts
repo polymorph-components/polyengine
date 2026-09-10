@@ -64,7 +64,6 @@ import {
   makeFilesystem,
   type MaybeAsync,
   type Opened,
-  type OpenOptions,
   type TimeSpec,
 } from "./internal/fs_provider.ts";
 
@@ -111,8 +110,20 @@ interface NodeFsModule {
   };
   openSync(path: string, flags: number): number;
   closeSync(fd: number): void;
-  readSync(fd: number, buffer: Uint8Array, offset: number, length: number, position: number): number;
-  writeSync(fd: number, buffer: Uint8Array, offset: number, length: number, position: number): number;
+  readSync(
+    fd: number,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number,
+  ): number;
+  writeSync(
+    fd: number,
+    buffer: Uint8Array,
+    offset: number,
+    length: number,
+    position: number,
+  ): number;
   fstatSync(fd: number, opts: { bigint: true }): NodeBigIntStats;
   statSync(path: string, opts: { bigint: true }): NodeBigIntStats;
   lstatSync(path: string, opts: { bigint: true }): NodeBigIntStats;
@@ -216,7 +227,10 @@ function direntType(d: {
   return "unknown";
 }
 
-function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<NodeHandle> {
+function makeNodeBackend(
+  fs: NodeFsModule,
+  path: NodePathModule,
+): FsBackend<NodeHandle> {
   const join = (base: NodeHandle, segments: string[]): string =>
     segments.length === 0 ? base.path : `${base.path}/${segments.join("/")}`;
 
@@ -229,7 +243,9 @@ function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<Node
   // is what we throw: mapError names it, so both WIT tracks shape it.
 
   const escape = (full: string): Error =>
-    Object.assign(new Error(`path escapes the preopen: ${full}`), { code: "EPERM" });
+    Object.assign(new Error(`path escapes the preopen: ${full}`), {
+      code: "EPERM",
+    });
 
   /** `real` must be the root itself or strictly beneath it. */
   const requireInside = (real: string, root: string, full: string): void => {
@@ -264,7 +280,12 @@ function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<Node
    * because `dir` is a realpath: it contains no symlinks and no `..`,
    * so its lexical parent IS its physical parent.
    */
-  const walkReal = (dir: string, rel: string, root: string, full: string): string => {
+  const walkReal = (
+    dir: string,
+    rel: string,
+    root: string,
+    full: string,
+  ): string => {
     let d = dir;
     for (const seg of rel.split(path.sep)) {
       if (seg === "" || seg === ".") continue;
@@ -333,7 +354,9 @@ function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<Node
         name = "";
       }
     }
-    throw Object.assign(new Error("too many symbolic links"), { code: "ELOOP" });
+    throw Object.assign(new Error("too many symbolic links"), {
+      code: "ELOOP",
+    });
   };
 
   /**
@@ -342,7 +365,11 @@ function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<Node
    * final component's link chain must stay contained too. Returns the
    * path to hand to node.
    */
-  const guard = (base: NodeHandle, segments: string[], follow: boolean): string => {
+  const guard = (
+    base: NodeHandle,
+    segments: string[],
+    follow: boolean,
+  ): string => {
     const full = join(base, segments);
     if (segments.length === 0) {
       // The base itself (no parent to check — its parent is typically the
@@ -359,7 +386,9 @@ function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<Node
   const requireFd = (h: NodeHandle): number => {
     if (h.fd === undefined) {
       // Directory handles carry no fd; byte ops on one are EISDIR.
-      throw Object.assign(new Error("descriptor is a directory"), { code: "EISDIR" });
+      throw Object.assign(new Error("descriptor is a directory"), {
+        code: "EISDIR",
+      });
     }
     return h.fd;
   };
@@ -374,7 +403,9 @@ function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<Node
   });
 
   const statHandle = (h: NodeHandle): NodeBigIntStats =>
-    h.fd === undefined ? fs.statSync(h.path, { bigint: true }) : fs.fstatSync(h.fd, { bigint: true });
+    h.fd === undefined
+      ? fs.statSync(h.path, { bigint: true })
+      : fs.fstatSync(h.fd, { bigint: true });
 
   /** node utimes take seconds (fractional); "no-change" re-applies the
    * current value (POSIX UTIME_OMIT has no node spelling). */
@@ -437,13 +468,18 @@ function makeNodeBackend(fs: NodeFsModule, path: NodePathModule): FsBackend<Node
         // permission (openSync then happily opens the link target). The
         // POSIX answer for a nofollow open of a symlink is ELOOP, so we
         // give it ourselves rather than trusting the flag.
-        throw Object.assign(new Error("nofollow open of a symbolic link"), { code: "ELOOP" });
+        throw Object.assign(new Error("nofollow open of a symbolic link"), {
+          code: "ELOOP",
+        });
       }
       if (existing?.isDirectory()) {
         if (opts.exclusive && opts.create) {
           throw Object.assign(new Error("exists"), { code: "EEXIST" });
         }
-        return { handle: { path: full, root, type: "directory" }, type: "directory" };
+        return {
+          handle: { path: full, root, type: "directory" },
+          type: "directory",
+        };
       }
       if (opts.directory && existing !== undefined) {
         throw Object.assign(new Error("not a directory"), { code: "ENOTDIR" });
@@ -597,7 +633,9 @@ export interface FilesystemNodeOptions extends FilesystemAccessOptions {
  * `wasi:filesystem` over node's `node:fs` builtin (module header).
  * Serves both the `@0.2` and `@0.3` tracks.
  */
-export function filesystemNode(options: FilesystemNodeOptions): FilesystemFragment {
+export function filesystemNode(
+  options: FilesystemNodeOptions,
+): FilesystemFragment {
   const fs = nodeBuiltin("node:fs") as NodeFsModule | undefined;
   const path = nodeBuiltin("node:path") as NodePathModule | undefined;
   if (fs === undefined || path === undefined) {
@@ -611,7 +649,9 @@ export function filesystemNode(options: FilesystemNodeOptions): FilesystemFragme
     ([guestName, hostPath]) => {
       const real = fs.realpathSync(hostPath);
       if (!fs.statSync(real, { bigint: true }).isDirectory()) {
-        throw new TypeError(`filesystemNode: preopen ${hostPath} is not a directory`);
+        throw new TypeError(
+          `filesystemNode: preopen ${hostPath} is not a directory`,
+        );
       }
       return [{ path: real, root: real, type: "directory" }, guestName];
     },

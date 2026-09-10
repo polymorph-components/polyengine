@@ -111,7 +111,9 @@ interface NodeProcess {
 
 function hostProcess(): NodeProcess | undefined {
   const proc = (globalThis as { process?: unknown }).process;
-  return typeof proc === "object" && proc !== null ? (proc as NodeProcess) : undefined;
+  return typeof proc === "object" && proc !== null
+    ? (proc as NodeProcess)
+    : undefined;
 }
 
 function processSink(stream: NodeProcessStream): ByteSink {
@@ -135,7 +137,10 @@ export function cliStdio(options: CliStdioOptions = {}): CliStdio {
     (proc?.stdout === undefined ? undefined : processSink(proc.stdout));
   const stderrSink = options.stderr ??
     (proc?.stderr === undefined ? undefined : processSink(proc.stderr));
-  if (stdinSource === undefined || stdoutSink === undefined || stderrSink === undefined) {
+  if (
+    stdinSource === undefined || stdoutSink === undefined ||
+    stderrSink === undefined
+  ) {
     throw new TypeError(
       "cliStdio: no host process stdio and no injected replacement — " +
         "on hosts without `process` (browsers), inject sources/sinks or " +
@@ -143,14 +148,17 @@ export function cliStdio(options: CliStdioOptions = {}): CliStdio {
     );
   }
   const tty = {
-    stdin: options.isTty?.stdin ?? (proc?.stdin as { isTTY?: boolean } | undefined)?.isTTY ?? false,
+    stdin: options.isTty?.stdin ??
+      (proc?.stdin as { isTTY?: boolean } | undefined)?.isTTY ?? false,
     stdout: options.isTty?.stdout ?? proc?.stdout?.isTTY ?? false,
     stderr: options.isTty?.stderr ?? proc?.stderr?.isTTY ?? false,
   };
   const env = (): [string, string][] => {
     if (options.env !== undefined) return Object.entries(options.env);
     const e = proc?.env ?? {};
-    return Object.entries(e).filter((kv): kv is [string, string] => kv[1] !== undefined);
+    return Object.entries(e).filter((kv): kv is [string, string] =>
+      kv[1] !== undefined
+    );
   };
   const args = (): string[] => options.args ?? proc?.argv?.slice(2) ?? [];
   const cwd = (): string | undefined => options.cwd ?? proc?.cwd?.();
@@ -170,20 +178,28 @@ export function cliStdio(options: CliStdioOptions = {}): CliStdio {
 
   // 0.3 write-via-stream: drain the guest's stream to the sink; the
   // promise is the future source (embedder-api.md §"Streams and futures").
-  const writeViaStream = (sink: ByteSink) => async (data: CliByteSource): Promise<CliIoResult> => {
-    try {
-      for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
-        await sink(chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk));
+  const writeViaStream =
+    (sink: ByteSink) => async (data: CliByteSource): Promise<CliIoResult> => {
+      try {
+        for await (
+          const chunk of data as AsyncIterable<Uint8Array | number[]>
+        ) {
+          await sink(
+            chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk),
+          );
+        }
+        return OK;
+      } catch (e) {
+        if (isStream(data)) data.drop(); // the guest's writer must not hang
+        return { kind: "err", value: ioErrorCode(e) };
       }
-      return OK;
-    } catch (e) {
-      if (isStream(data)) data.drop(); // the guest's writer must not hang
-      return { kind: "err", value: ioErrorCode(e) };
-    }
-  };
+    };
 
   // 0.3 read-via-stream: the tcp-receive tuple over the shared source.
-  const readViaStream = (): [AsyncIterable<Uint8Array>, Promise<CliIoResult>] => {
+  const readViaStream = (): [
+    AsyncIterable<Uint8Array>,
+    Promise<CliIoResult>,
+  ] => {
     let settle!: (r: CliIoResult) => void;
     const done = new Promise<CliIoResult>((r) => (settle = r));
     const source = (async function* (): AsyncGenerator<Uint8Array> {
@@ -215,7 +231,8 @@ export function cliStdio(options: CliStdioOptions = {}): CliStdio {
       },
     },
     "wasi:cli/stdin@0.2": {
-      getStdin: (): FedInputStream => (p2Stdin ??= new FedInputStream(stdinSource)),
+      getStdin:
+        (): FedInputStream => (p2Stdin ??= new FedInputStream(stdinSource)),
     },
     "wasi:cli/stdout@0.2": { getStdout: (): SinkOutputStream => p2Stdout },
     "wasi:cli/stderr@0.2": { getStderr: (): SinkOutputStream => p2Stderr },

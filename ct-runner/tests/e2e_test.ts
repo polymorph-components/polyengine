@@ -6,7 +6,12 @@
 
 import { assertEq } from "../../runtime/tests/support/asserts.ts";
 import { runSuite } from "../src/mod.ts";
-import { artifactsOf, FULL_RUN_COUNTS, haveFixture, TEST_SUITE_WASM } from "./support.ts";
+import {
+  artifactsOf,
+  FULL_RUN_COUNTS,
+  haveFixture,
+  TEST_SUITE_WASM,
+} from "./support.ts";
 
 const ready = await haveFixture(TEST_SUITE_WASM);
 
@@ -139,7 +144,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "e2e: freshCases=false still runs to completion (single shared instance)",
+  name:
+    "e2e: freshCases=false still runs to completion (single shared instance)",
   ignore: !ready,
   fn: async () => {
     const artifacts = await artifactsOf(TEST_SUITE_WASM);

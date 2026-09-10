@@ -28,6 +28,7 @@
 // which is a worse footgun than brand-based recognition would create.
 
 import {
+  COMPONENT_EXCEPTION,
   defineBrand,
   DROPPED,
   hasBrand,
@@ -35,7 +36,6 @@ import {
   PEER_TRAPPED,
   STREAM_PRODUCER,
   TRAP,
-  COMPONENT_EXCEPTION,
 } from "./brands.ts";
 
 /** A WIT `result<T, E>` err value, branded. `payload` is shaped per the value table. */

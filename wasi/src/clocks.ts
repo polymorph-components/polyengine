@@ -19,8 +19,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** `wasi:clocks@0.2` + `wasi:clocks@0.3` provider fragment (two track keys). */
-export function clocks(options: ClocksOptions = {}): { imports: Record<string, unknown> } {
-  const nowFn = options.now ?? ((): bigint => BigInt(Math.round(performance.now() * 1e6)));
+export function clocks(
+  options: ClocksOptions = {},
+): { imports: Record<string, unknown> } {
+  const nowFn = options.now ??
+    ((): bigint => BigInt(Math.round(performance.now() * 1e6)));
   // A coarse but honest resolution: this clock is JS-timer-backed, not a
   // real hardware tick; 1 microsecond avoids claiming false precision.
   const RESOLUTION_NS = 1_000n;
