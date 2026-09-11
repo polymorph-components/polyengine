@@ -214,10 +214,9 @@ Deno.test("producer failure: a COMPLETED future payload wins a later pump failur
   const error = producerFailure(store.hostFailure);
   release.resolve();
   assertEq(await completed, 7);
-  assertEq(
-    await rejected(Future.fromLifted<number>(asValue(raw), codec)),
-    error,
-  );
+  const reread = await rejected(Future.fromLifted<number>(asValue(raw), codec));
+  assertEq(reread instanceof TypeError, true, `single-use reread: ${reread}`);
+  assertEq(store.hostFailure, error, "the later producer failure is preserved");
 });
 
 Deno.test("producer failure: pending read, iterator, and readable reject", async () => {

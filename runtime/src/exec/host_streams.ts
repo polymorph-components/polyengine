@@ -817,7 +817,11 @@ function bindOnLower(
 function mkStreamEnds<T>(
   shared: SharedStreamImpl,
   activity: HostActivity,
-): { readable: HostReadableEnd<T>; writable: HostWritableEnd<T> } {
+): {
+  readable: HostReadableEnd<T>;
+  writable: HostWritableEnd<T>;
+  readableBusy: () => boolean;
+} {
   // Distinct rendezvous identities per end — see `hostEndInstance`.
   const writeInst = hostEndInstance("write");
   const readInst = hostEndInstance("read");
@@ -966,6 +970,7 @@ function mkStreamEnds<T>(
     });
   };
   return {
+    readableBusy: () => parked.read,
     writable: {
       write(values: T[], info?: { progress: number }): Promise<number> {
         // One operation per direction prevents write-against-write rendezvous.
@@ -1135,14 +1140,42 @@ function mkStreamEnds<T>(
  */
 const streamWrappers = new WeakMap<object, HostStream<unknown>>();
 const futureWrappers = new WeakMap<object, HostFuture<unknown>>();
+const streamReadableStates = new WeakMap<HostStream<unknown>, () => boolean>();
+const futureReadableStates = new WeakMap<
+  HostFuture<unknown>,
+  () => "idle" | "busy" | "done"
+>();
+
+/** @internal — facade transfer exclusion without widening the end interfaces. */
+export function hostStreamReadableBusy(host: HostStream<unknown>): boolean {
+  return streamReadableStates.get(host)?.() ?? false;
+}
+
+/** @internal — facade transfer/single-consumption state. */
+export function hostFutureReadableState(
+  host: HostFuture<unknown>,
+): "idle" | "busy" | "done" {
+  return futureReadableStates.get(host)?.() ?? "idle";
+}
 
 /** Create a host-owned stream of `element` (`null` = zero-width payload). */
 export function hostStream<T>(element: ValType | null): HostStream<T> {
   const shared = new SharedStreamImpl(element);
   const activity = new HostActivity();
   bindOnLower(shared, activity, "created");
-  const ends = mkStreamEnds<T>(shared, activity);
-  const wrapper = { ...ends, value: shared as unknown as ComponentValue };
+  const { readable, writable, readableBusy } = mkStreamEnds<T>(
+    shared,
+    activity,
+  );
+  const wrapper = {
+    readable,
+    writable,
+    value: shared as unknown as ComponentValue,
+  };
+  streamReadableStates.set(
+    wrapper as HostStream<unknown>,
+    readableBusy,
+  );
   streamWrappers.set(shared, wrapper as HostStream<unknown>);
   return wrapper;
 }
@@ -1162,8 +1195,15 @@ export function hostStreamFor<T>(value: ComponentValue): HostStream<T> {
   if (cached !== undefined) return cached as HostStream<T>;
   const activity = new HostActivity();
   bindOnLower(shared, activity, "lifted");
-  const ends = mkStreamEnds<T>(shared, activity);
-  const wrapper = { ...ends, value };
+  const { readable, writable, readableBusy } = mkStreamEnds<T>(
+    shared,
+    activity,
+  );
+  const wrapper = { readable, writable, value };
+  streamReadableStates.set(
+    wrapper as HostStream<unknown>,
+    readableBusy,
+  );
   streamWrappers.set(shared, wrapper as HostStream<unknown>);
   return wrapper;
 }
@@ -1310,6 +1350,11 @@ function mkFuture<T>(
             "await it or cancel() first",
         );
       }
+      if (delivered) {
+        throw new TypeError(
+          "this future's single value has already been consumed",
+        );
+      }
       // definitions.py `SharedFutureImpl.read` asserts `not self.dropped`, so
       // a read after the write end went away must be answered here rather
       // than by tripping an internal assertion.
@@ -1382,6 +1427,10 @@ function mkFuture<T>(
     },
     value,
   };
+  futureReadableStates.set(
+    self as HostFuture<unknown>,
+    () => parked.read ? "busy" : delivered ? "done" : "idle",
+  );
   return self;
 }
 
