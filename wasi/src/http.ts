@@ -68,7 +68,11 @@
 // Fetch failures are TypeErrors with prose; a small sniff table maps the
 // recognizable ones and everything else is `internal-error(message)`.
 
-import { ComponentException, isComponentException, type Stream } from "@polyengine/protocol";
+import {
+  ComponentException,
+  isComponentException,
+  type Stream,
+} from "@polyengine/protocol";
 
 /**
  * The compatibility track the fragment registers on by default.
@@ -132,7 +136,10 @@ export type HttpResult = { kind: "ok" } | { kind: "err"; value: ErrorCode };
 
 const OK: HttpResult = { kind: "ok" };
 
-function httpError(payload: ErrorCode, detail: string): ComponentException<ErrorCode> {
+function httpError(
+  payload: ErrorCode,
+  detail: string,
+): ComponentException<ErrorCode> {
   return new ComponentException<ErrorCode>(payload, `wasi:http: ${detail}`);
 }
 
@@ -140,7 +147,10 @@ function headerError(
   kind: "invalid-syntax" | "forbidden" | "immutable" | "size-exceeded",
   detail: string,
 ): ComponentException<HeaderError> {
-  return new ComponentException<HeaderError>({ kind }, `wasi:http/types: ${detail}`);
+  return new ComponentException<HeaderError>(
+    { kind },
+    `wasi:http/types: ${detail}`,
+  );
 }
 
 /**
@@ -154,14 +164,24 @@ export function mapFetchError(e: unknown): ErrorCode {
   // whole chain, report the top-level message.
   let message = e instanceof Error ? e.message : String(e);
   const parts: string[] = [];
-  for (let at: unknown = e; at instanceof Error; at = at.cause) parts.push(at.message);
+  for (let at: unknown = e; at instanceof Error; at = at.cause) {
+    parts.push(at.message);
+  }
   const m = parts.join(" | ").toLowerCase();
   message = parts[0] ?? message;
   if (m.includes("refused")) return { kind: "connection-refused" };
-  if (m.includes("dns error") || m.includes("name not resolved") || m.includes("getaddrinfo")) {
-    return { kind: "DNS-error", value: { rcode: undefined, infoCode: undefined } };
+  if (
+    m.includes("dns error") || m.includes("name not resolved") ||
+    m.includes("getaddrinfo")
+  ) {
+    return {
+      kind: "DNS-error",
+      value: { rcode: undefined, infoCode: undefined },
+    };
   }
-  if (m.includes("timed out") || m.includes("timeout")) return { kind: "connection-timeout" };
+  if (m.includes("timed out") || m.includes("timeout")) {
+    return { kind: "connection-timeout" };
+  }
   if (m.includes("tls") || m.includes("certificate") || m.includes("ssl")) {
     return { kind: "TLS-protocol-error" };
   }
@@ -237,11 +257,13 @@ export interface HttpOptions {
    * distinct from `destination-IP-prohibited`, which names an address
    * judgement this fragment cannot make.
    */
-  allowRequest?: boolean | ((request: {
-    url: URL;
-    method: string;
-    headers: Headers;
-  }) => boolean | Promise<boolean>);
+  allowRequest?:
+    | boolean
+    | ((request: {
+      url: URL;
+      method: string;
+      headers: Headers;
+    }) => boolean | Promise<boolean>);
   /**
    * Injectable transport: replaces the `fetch(request)` call `client.send`
    * otherwise makes directly. Default (when omitted): `globalThis.fetch`,
@@ -386,10 +408,16 @@ export function http(options: HttpOptions = {}): HttpFragment {
       const f = internalFields([], true);
       for (const [name, value] of entries) {
         if (!FIELD_NAME.test(name)) {
-          throw headerError("invalid-syntax", `from-list: invalid field name ${JSON.stringify(name)}`);
+          throw headerError(
+            "invalid-syntax",
+            `from-list: invalid field name ${JSON.stringify(name)}`,
+          );
         }
         if (!validFieldValue(value)) {
-          throw headerError("invalid-syntax", `from-list: invalid value for ${JSON.stringify(name)}`);
+          throw headerError(
+            "invalid-syntax",
+            `from-list: invalid value for ${JSON.stringify(name)}`,
+          );
         }
         f.entries.push([name, value.slice()]);
       }
@@ -399,7 +427,9 @@ export function http(options: HttpOptions = {}): HttpFragment {
     get(name: string): Uint8Array[] {
       onCall("fields.get");
       const n = name.toLowerCase();
-      return this.entries.filter(([k]) => k.toLowerCase() === n).map(([, v]) => v.slice());
+      return this.entries.filter(([k]) => k.toLowerCase() === n).map(([, v]) =>
+        v.slice()
+      );
     }
 
     has(name: string): boolean {
@@ -412,11 +442,17 @@ export function http(options: HttpOptions = {}): HttpFragment {
       onCall("fields.set");
       requireMutableFields(this, "fields.set");
       if (!FIELD_NAME.test(name)) {
-        throw headerError("invalid-syntax", `set: invalid field name ${JSON.stringify(name)}`);
+        throw headerError(
+          "invalid-syntax",
+          `set: invalid field name ${JSON.stringify(name)}`,
+        );
       }
       for (const one of value) {
         if (!validFieldValue(one)) {
-          throw headerError("invalid-syntax", `set: invalid value for ${JSON.stringify(name)}`);
+          throw headerError(
+            "invalid-syntax",
+            `set: invalid value for ${JSON.stringify(name)}`,
+          );
         }
       }
       const n = name.toLowerCase();
@@ -435,7 +471,9 @@ export function http(options: HttpOptions = {}): HttpFragment {
       onCall("fields.get-and-delete");
       requireMutableFields(this, "fields.get-and-delete");
       const n = name.toLowerCase();
-      const out = this.entries.filter(([k]) => k.toLowerCase() === n).map(([, v]) => v);
+      const out = this.entries.filter(([k]) => k.toLowerCase() === n).map((
+        [, v],
+      ) => v);
       this.entries = this.entries.filter(([k]) => k.toLowerCase() !== n);
       return out;
     }
@@ -444,10 +482,16 @@ export function http(options: HttpOptions = {}): HttpFragment {
       onCall("fields.append");
       requireMutableFields(this, "fields.append");
       if (!FIELD_NAME.test(name)) {
-        throw headerError("invalid-syntax", `append: invalid field name ${JSON.stringify(name)}`);
+        throw headerError(
+          "invalid-syntax",
+          `append: invalid field name ${JSON.stringify(name)}`,
+        );
       }
       if (!validFieldValue(value)) {
-        throw headerError("invalid-syntax", `append: invalid value for ${JSON.stringify(name)}`);
+        throw headerError(
+          "invalid-syntax",
+          `append: invalid value for ${JSON.stringify(name)}`,
+        );
       }
       this.entries.push([name, value.slice()]);
     }
@@ -475,7 +519,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
   }
 
   /** Mint a Fields without the WIT constructor's onCall. */
-  function internalFields(entries: [string, Uint8Array][], mutable: boolean): Fields {
+  function internalFields(
+    entries: [string, Uint8Array][],
+    mutable: boolean,
+  ): Fields {
     const f = Object.create(Fields.prototype) as Fields;
     f.entries = entries;
     f.mutable = mutable;
@@ -602,7 +649,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
     setMethod(method: Method): void {
       onCall("request.set-method");
       if (method.kind === "other" && !FIELD_NAME.test(method.value)) {
-        throw new ComponentException<null>(null, "wasi:http/types: set-method: invalid method token");
+        throw new ComponentException<null>(
+          null,
+          "wasi:http/types: set-method: invalid method token",
+        );
       }
       this.method = method;
     }
@@ -613,7 +663,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
     setPathWithQuery(pathWithQuery: string | undefined): void {
       onCall("request.set-path-with-query");
       if (pathWithQuery !== undefined && /[ \t\r\n#]/.test(pathWithQuery)) {
-        throw new ComponentException<null>(null, "wasi:http/types: set-path-with-query: invalid path");
+        throw new ComponentException<null>(
+          null,
+          "wasi:http/types: set-path-with-query: invalid path",
+        );
       }
       this.pathWithQuery = pathWithQuery;
     }
@@ -623,8 +676,14 @@ export function http(options: HttpOptions = {}): HttpFragment {
     }
     setScheme(scheme: Scheme | undefined): void {
       onCall("request.set-scheme");
-      if (scheme?.kind === "other" && !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme.value)) {
-        throw new ComponentException<null>(null, "wasi:http/types: set-scheme: invalid scheme");
+      if (
+        scheme?.kind === "other" &&
+        !/^[A-Za-z][A-Za-z0-9+.-]*$/.test(scheme.value)
+      ) {
+        throw new ComponentException<null>(
+          null,
+          "wasi:http/types: set-scheme: invalid scheme",
+        );
       }
       this.scheme = scheme;
     }
@@ -634,8 +693,14 @@ export function http(options: HttpOptions = {}): HttpFragment {
     }
     setAuthority(authority: string | undefined): void {
       onCall("request.set-authority");
-      if (authority !== undefined && /[ \t\r\n/#?@]/.test(authority.replace(/@/, ""))) {
-        throw new ComponentException<null>(null, "wasi:http/types: set-authority: invalid authority");
+      if (
+        authority !== undefined &&
+        /[ \t\r\n/#?@]/.test(authority.replace(/@/, ""))
+      ) {
+        throw new ComponentException<null>(
+          null,
+          "wasi:http/types: set-authority: invalid authority",
+        );
       }
       this.authority = authority;
     }
@@ -645,7 +710,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
     }
     getHeaders(): Fields {
       onCall("request.get-headers");
-      return internalFields(this.headers.entries.map(([k, v]) => [k, v.slice()]), false);
+      return internalFields(
+        this.headers.entries.map(([k, v]) => [k, v.slice()]),
+        false,
+      );
     }
 
     static consumeBody(
@@ -663,7 +731,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
       if (!this.sent && !this.consumed) {
         this.settleTransmission({
           kind: "err",
-          value: { kind: "internal-error", value: "request dropped without being sent" },
+          value: {
+            kind: "internal-error",
+            value: "request dropped without being sent",
+          },
         });
       }
     }
@@ -705,7 +776,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
     }
 
     /** A response wrapping a live fetch result (internal). */
-    static fromFetch(resp: globalThis.Response, options: RequestOptions | undefined): Response {
+    static fromFetch(
+      resp: globalThis.Response,
+      options: RequestOptions | undefined,
+    ): Response {
       const r = new Response();
       r.statusCode = resp.status;
       r.headers = fieldsFromFetchHeaders(resp.headers);
@@ -721,14 +795,22 @@ export function http(options: HttpOptions = {}): HttpFragment {
     }
     setStatusCode(statusCode: number): void {
       onCall("response.set-status-code");
-      if (!Number.isInteger(statusCode) || statusCode < 100 || statusCode > 999) {
-        throw new ComponentException<null>(null, "wasi:http/types: set-status-code: invalid status code");
+      if (
+        !Number.isInteger(statusCode) || statusCode < 100 || statusCode > 999
+      ) {
+        throw new ComponentException<null>(
+          null,
+          "wasi:http/types: set-status-code: invalid status code",
+        );
       }
       this.statusCode = statusCode;
     }
     getHeaders(): Fields {
       onCall("response.get-headers");
-      return internalFields(this.headers.entries.map(([k, v]) => [k, v.slice()]), false);
+      return internalFields(
+        this.headers.entries.map(([k, v]) => [k, v.slice()]),
+        false,
+      );
     }
 
     static consumeBody(
@@ -736,7 +818,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
       res: FutureLike<HttpResult>,
     ): [AsyncIterable<Uint8Array>, Promise<TrailersResult>] {
       onCall("response.consume-body");
-      if (response.fetchBody !== null || (response.contents === undefined && response.trailers === undefined)) {
+      if (
+        response.fetchBody !== null ||
+        (response.contents === undefined && response.trailers === undefined)
+      ) {
         return consumeFetchBody(response, res);
       }
       return consumeStoredBody(response, res);
@@ -751,7 +836,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
       if (this.settleTransmission !== undefined && !this.consumed) {
         this.settleTransmission({
           kind: "err",
-          value: { kind: "internal-error", value: "response dropped without being sent" },
+          value: {
+            kind: "internal-error",
+            value: "response dropped without being sent",
+          },
         });
       }
     }
@@ -789,12 +877,18 @@ export function http(options: HttpOptions = {}): HttpFragment {
     if (settle !== undefined) {
       Promise.resolve(res).then(
         (r) => settle(r),
-        () => settle({ kind: "err", value: { kind: "internal-error", value: "consumer failed" } }),
+        () =>
+          settle({
+            kind: "err",
+            value: { kind: "internal-error", value: "consumer failed" },
+          }),
       );
     }
     const source = (async function* (): AsyncGenerator<Uint8Array> {
       if (contents === undefined) return;
-      for await (const chunk of contents as AsyncIterable<Uint8Array | number[]>) {
+      for await (
+        const chunk of contents as AsyncIterable<Uint8Array | number[]>
+      ) {
         yield chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
       }
     })();
@@ -838,7 +932,11 @@ export function http(options: HttpOptions = {}): HttpFragment {
             settle({
               kind: "err",
               value: e === TIMED_OUT
-                ? { kind: first ? "HTTP-response-timeout" : "connection-read-timeout" }
+                ? {
+                  kind: first
+                    ? "HTTP-response-timeout"
+                    : "connection-read-timeout",
+                }
                 : mapFetchError(e),
             });
             return;
@@ -909,15 +1007,23 @@ export function http(options: HttpOptions = {}): HttpFragment {
       : request.scheme.kind.toLowerCase();
     if (scheme !== "http" && scheme !== "https") {
       throw httpError(
-        { kind: "internal-error", value: `fetch cannot carry scheme '${scheme}'` },
+        {
+          kind: "internal-error",
+          value: `fetch cannot carry scheme '${scheme}'`,
+        },
         `client.send: unsupported scheme '${scheme}'`,
       );
     }
     if (request.authority === undefined) {
-      throw httpError({ kind: "HTTP-request-URI-invalid" }, "client.send: no authority");
+      throw httpError(
+        { kind: "HTTP-request-URI-invalid" },
+        "client.send: no authority",
+      );
     }
     const path = request.pathWithQuery ?? "";
-    const url = `${scheme}://${request.authority}${path.startsWith("/") || path === "" ? path : "/" + path}`;
+    const url = `${scheme}://${request.authority}${
+      path.startsWith("/") || path === "" ? path : "/" + path
+    }`;
 
     const method = request.method.kind === "other"
       ? request.method.value.toUpperCase()
@@ -929,7 +1035,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
         headers.append(name, decoder.decode(value));
       } catch (e) {
         throw httpError(
-          { kind: "internal-error", value: `header '${name}' refused by the platform` },
+          {
+            kind: "internal-error",
+            value: `header '${name}' refused by the platform`,
+          },
           `client.send: ${e}`,
         );
       }
@@ -943,8 +1052,14 @@ export function http(options: HttpOptions = {}): HttpFragment {
     // guest's body stream.
     if (allowRequest !== undefined && allowRequest !== true) {
       if (allowRequest === false) {
-        request.settleTransmission({ kind: "err", value: { kind: "HTTP-request-denied" } });
-        throw httpError({ kind: "HTTP-request-denied" }, "client.send: request denied (allowRequest: false)");
+        request.settleTransmission({
+          kind: "err",
+          value: { kind: "HTTP-request-denied" },
+        });
+        throw httpError(
+          { kind: "HTTP-request-denied" },
+          "client.send: request denied (allowRequest: false)",
+        );
       }
       let parsed: URL;
       try {
@@ -952,7 +1067,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
       } catch {
         // A malformed authority is not a policy decision — the existing
         // HTTP-request-URI-invalid case at line ~858 covers this.
-        throw httpError({ kind: "HTTP-request-URI-invalid" }, "client.send: url could not be parsed for policy check");
+        throw httpError(
+          { kind: "HTTP-request-URI-invalid" },
+          "client.send: url could not be parsed for policy check",
+        );
       }
       let allowed: boolean;
       try {
@@ -961,15 +1079,26 @@ export function http(options: HttpOptions = {}): HttpFragment {
         // Fail closed: a throwing/rejecting predicate denies. The thrown
         // message goes into the ComponentException's DETAIL string only,
         // never the WIT payload.
-        request.settleTransmission({ kind: "err", value: { kind: "HTTP-request-denied" } });
+        request.settleTransmission({
+          kind: "err",
+          value: { kind: "HTTP-request-denied" },
+        });
         throw httpError(
           { kind: "HTTP-request-denied" },
-          `client.send: allowRequest threw: ${e instanceof Error ? e.message : String(e)}`,
+          `client.send: allowRequest threw: ${
+            e instanceof Error ? e.message : String(e)
+          }`,
         );
       }
       if (!allowed) {
-        request.settleTransmission({ kind: "err", value: { kind: "HTTP-request-denied" } });
-        throw httpError({ kind: "HTTP-request-denied" }, "client.send: request denied by allowRequest");
+        request.settleTransmission({
+          kind: "err",
+          value: { kind: "HTTP-request-denied" },
+        });
+        throw httpError(
+          { kind: "HTTP-request-denied" },
+          "client.send: request denied by allowRequest",
+        );
       }
     }
 
@@ -985,7 +1114,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
       // here, the request is never transmitted.
       const err: HttpResult = { kind: "err", value: trailersResult.value };
       request.settleTransmission(err);
-      throw httpError(trailersResult.value, "client.send: request trailers resolved to an error");
+      throw httpError(
+        trailersResult.value,
+        "client.send: request trailers resolved to an error",
+      );
     }
     if (trailersResult.value !== undefined) {
       const err: ErrorCode = {
@@ -993,7 +1125,10 @@ export function http(options: HttpOptions = {}): HttpFragment {
         value: "fetch cannot transmit request trailers",
       };
       request.settleTransmission({ kind: "err", value: err });
-      throw httpError(err, "client.send: request trailers are not transmissible over fetch");
+      throw httpError(
+        err,
+        "client.send: request trailers are not transmissible over fetch",
+      );
     }
 
     let resp: globalThis.Response;
@@ -1012,19 +1147,26 @@ export function http(options: HttpOptions = {}): HttpFragment {
       // Resolved at call time (not captured at http() construction), so
       // a test stubbing globalThis.fetch after the fragment exists still
       // takes effect.
-      const transport = options.fetch ?? ((r: globalThis.Request) => globalThis.fetch(r));
+      const transport = options.fetch ??
+        ((r: globalThis.Request) => globalThis.fetch(r));
       resp = await transport(req);
     } catch (e) {
       if (isComponentException(e)) {
         // Branded exception passthrough: the transport named the
         // guest-visible WIT error-code itself; do not run it through
         // mapFetchError's prose sniffing, and rethrow unchanged.
-        request.settleTransmission({ kind: "err", value: e.payload as ErrorCode });
+        request.settleTransmission({
+          kind: "err",
+          value: e.payload as ErrorCode,
+        });
         throw e;
       }
       const code = mapFetchError(e);
       request.settleTransmission({ kind: "err", value: code });
-      throw httpError(code, `client.send: ${e instanceof Error ? e.message : String(e)}`);
+      throw httpError(
+        code,
+        `client.send: ${e instanceof Error ? e.message : String(e)}`,
+      );
     }
     request.settleTransmission(OK);
     return Response.fromFetch(resp, request.options);

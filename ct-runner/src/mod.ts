@@ -7,11 +7,7 @@
 // provider, never composing wasm for L2. See src/run-suite.ts for the case
 // loop and src/context.ts for the host resource.
 
-export {
-  type RunCounts,
-  runSuite,
-  type RunSuiteOptions,
-} from "./run-suite.ts";
+export { type RunCounts, runSuite, type RunSuiteOptions } from "./run-suite.ts";
 
 export {
   analyzeImports,

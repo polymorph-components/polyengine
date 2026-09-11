@@ -76,7 +76,10 @@ Deno.test("cli-stdio: the registered io prototypes carry the suspending marks (t
     );
   }
   // The buffer-backed bases keep their sync fast path: no Promise returns.
-  assertTrue(!(new InputStream(text("x")).blockingRead(8n) instanceof Promise), "base is sync");
+  assertTrue(
+    !(new InputStream(text("x")).blockingRead(8n) instanceof Promise),
+    "base is sync",
+  );
 });
 
 // Issue #178: `cli()`'s capture-stdin path (src/cli.ts:150) backs
@@ -93,7 +96,10 @@ Deno.test("cli-stdio stdin (capture-stdin buffer): guest-visible stream reaches 
   const stdin = stdinIface.getStdin();
   assertEq(utf8(stdin.read(16n)), "hi", "serves the configured buffer");
   const e = assertThrows(() => stdin.read(1n));
-  assertTrue(e instanceof ComponentException, "drained capture-stdin buffer is branded closed");
+  assertTrue(
+    e instanceof ComponentException,
+    "drained capture-stdin buffer is branded closed",
+  );
   assertEq((e as ComponentException<StreamErrorValue>).payload.kind, "closed");
 });
 
@@ -111,7 +117,10 @@ Deno.test("cli-stdio stdin: sync reads never park; empty-open is empty, drained-
   f.end();
   await new Promise((r) => setTimeout(r, 0));
   const e = assertThrows(() => stdin.read(1n));
-  assertTrue(e instanceof ComponentException, "drained + ended = branded closed");
+  assertTrue(
+    e instanceof ComponentException,
+    "drained + ended = branded closed",
+  );
   stdin[Symbol.dispose]();
 });
 
@@ -161,7 +170,10 @@ Deno.test("cli-stdio stdin: the feed pauses past the high-water mark (no unbound
   const stdin = new FedInputStream(endless);
   await new Promise((r) => setTimeout(r, 10));
   const afterFill = pulled;
-  assertTrue(afterFill <= 6, `the feed paused near the mark (pulled ${afterFill})`);
+  assertTrue(
+    afterFill <= 6,
+    `the feed paused near the mark (pulled ${afterFill})`,
+  );
   await new Promise((r) => setTimeout(r, 10));
   assertEq(pulled, afterFill, "…and stays paused while nobody reads");
   stdin.read(BigInt(STREAM_HIGH_WATER)); // drain -> resume
@@ -182,7 +194,11 @@ Deno.test("cli-stdio stdout: budgeted writes; blocking-flush parks until the sin
   });
   assertEq(out.checkWrite(), BigInt(STREAM_HIGH_WATER));
   out.write(text("queued"));
-  assertEq(out.checkWrite(), BigInt(STREAM_HIGH_WATER - 6), "the permit shrinks by queued bytes");
+  assertEq(
+    out.checkWrite(),
+    BigInt(STREAM_HIGH_WATER - 6),
+    "the permit shrinks by queued bytes",
+  );
   const parked = out.blockingFlush();
   assertTrue(parked instanceof Promise, "undrained: the flush parks");
   const sub = out.subscribe();
@@ -190,13 +206,19 @@ Deno.test("cli-stdio stdout: budgeted writes; blocking-flush parks until the sin
   release();
   await parked;
   assertEq(JSON.stringify(drained), JSON.stringify(["queued"]));
-  assertEq(out.checkWrite(), BigInt(STREAM_HIGH_WATER), "drained: full permit back");
+  assertEq(
+    out.checkWrite(),
+    BigInt(STREAM_HIGH_WATER),
+    "drained: full permit back",
+  );
   out[Symbol.dispose]();
 });
 
 Deno.test("cli-stdio stdout: writing past the permit is a trap (unbranded), not a stream-error", () => {
   const out = new SinkOutputStream(() => {});
-  const e = assertThrows(() => out.write(new Uint8Array(STREAM_HIGH_WATER + 1)));
+  const e = assertThrows(() =>
+    out.write(new Uint8Array(STREAM_HIGH_WATER + 1))
+  );
   assertTrue(!(e instanceof ComponentException), "an unbranded throw = trap");
   out[Symbol.dispose]();
 });
@@ -209,7 +231,9 @@ Deno.test("cli-stdio stdout: a failed sink surfaces as last-operation-failed wit
   await new Promise((r) => setTimeout(r, 0));
   const e = assertThrows(() => out.checkWrite());
   assertTrue(e instanceof ComponentException, "branded stream-error");
-  const payload = (e as ComponentException<{ kind: string; value?: { toDebugString(): string } }>)
+  const payload = (e as ComponentException<
+    { kind: string; value?: { toDebugString(): string } }
+  >)
     .payload;
   assertEq(payload.kind, "last-operation-failed");
   assertTrue(
@@ -235,7 +259,10 @@ Deno.test("cli-stdio fragment: both tracks; injected stdio round-trips through 0
     cwd: "/tmp",
     isTty: { stdout: true },
   });
-  assertTrue("wasi:cli/stdin@0.2" in imports && "wasi:cli/stdin@0.3" in imports, "both tracks");
+  assertTrue(
+    "wasi:cli/stdin@0.2" in imports && "wasi:cli/stdin@0.3" in imports,
+    "both tracks",
+  );
 
   // 0.3 stdout: the guest's stream drains to the sink; the promise is the
   // future source (embedder-api.md §"Streams and futures").
@@ -266,16 +293,26 @@ Deno.test("cli-stdio fragment: both tracks; injected stdio round-trips through 0
     getEnvironment(): [string, string][];
     getInitialCwd(): string | undefined;
   };
-  assertEq(JSON.stringify(env03.getEnvironment()), JSON.stringify([["A", "1"]]));
+  assertEq(
+    JSON.stringify(env03.getEnvironment()),
+    JSON.stringify([["A", "1"]]),
+  );
   assertEq(env03.getInitialCwd(), "/tmp");
   const term = imports["wasi:cli/terminal-stdout@0.3"] as {
     getTerminalStdout(): unknown;
   };
-  assertTrue(term.getTerminalStdout() !== undefined, "isTty.stdout reports a terminal");
+  assertTrue(
+    term.getTerminalStdout() !== undefined,
+    "isTty.stdout reports a terminal",
+  );
   const termIn = imports["wasi:cli/terminal-stdin@0.3"] as {
     getTerminalStdin(): unknown;
   };
-  assertEq(termIn.getTerminalStdin(), undefined, "stdin is not a terminal here");
+  assertEq(
+    termIn.getTerminalStdin(),
+    undefined,
+    "stdin is not a terminal here",
+  );
 });
 
 Deno.test("cli-stdio exit: ExitError (branded unwind) with the 0.3 status code preserved", () => {
@@ -291,7 +328,10 @@ Deno.test("cli-stdio exit: ExitError (branded unwind) with the 0.3 status code p
   const e1 = assertThrows(() => exit03.exit({ kind: "ok" }));
   assertTrue(e1 instanceof ExitError && e1.ok, "exit(ok)");
   const e2 = assertThrows(() => exit03.exitWithCode(3));
-  assertTrue(e2 instanceof ExitError && !(e2 as ExitError).ok, "nonzero = failure");
+  assertTrue(
+    e2 instanceof ExitError && !(e2 as ExitError).ok,
+    "nonzero = failure",
+  );
   assertEq((e2 as ExitError).code, 3, "the code rides the error");
 });
 
@@ -299,5 +339,7 @@ Deno.test("cli-stdio defaults: the host process serves when nothing is injected"
   // Under Deno, `globalThis.process` exists (node compat) — construction
   // must succeed and register both tracks without touching the streams.
   const { imports } = cliStdio();
-  assertTrue("wasi:cli/stdout@0.2" in imports && "wasi:cli/stdout@0.3" in imports);
+  assertTrue(
+    "wasi:cli/stdout@0.2" in imports && "wasi:cli/stdout@0.3" in imports,
+  );
 });

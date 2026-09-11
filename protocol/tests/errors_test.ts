@@ -9,18 +9,18 @@
 
 import { assert, assertEquals, assertFalse } from "./assert.ts";
 import {
+  ComponentException,
   DroppedError,
   InvalidHandleError,
+  isComponentException,
   isDroppedError,
   isInvalidHandleError,
   isPeerTrappedError,
   isStreamProducerError,
   isTrap,
-  isComponentException,
   PeerTrappedError,
   StreamProducerError,
   Trap,
-  ComponentException,
 } from "../src/mod.ts";
 
 Deno.test("canonical classes are recognized by their own predicate", () => {
@@ -69,7 +69,11 @@ Deno.test("unbranded look-alikes are refused", () => {
   assertFalse(isComponentException("polyengine.componentException/1"));
   assertFalse(isComponentException(42));
   // Present but not exactly `true`: refused (no truthiness coercion).
-  assertFalse(isComponentException({ [Symbol.for("polyengine.componentException/1")]: 1 }));
+  assertFalse(
+    isComponentException({
+      [Symbol.for("polyengine.componentException/1")]: 1,
+    }),
+  );
 });
 
 Deno.test("predicates are NOT instanceof — a foreign prototype passes", () => {
@@ -88,7 +92,10 @@ Deno.test("predicates are NOT instanceof — a foreign prototype passes", () => 
     { value: true },
   );
   const e = new ForeignComponentException({ kind: "x" });
-  assertFalse(e instanceof ComponentException, "premise: class identity differs");
+  assertFalse(
+    e instanceof ComponentException,
+    "premise: class identity differs",
+  );
   assert(isComponentException(e), "brand identity holds");
 });
 

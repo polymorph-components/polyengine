@@ -5,7 +5,7 @@
 // The through-a-real-guest-frame pins live in blocking_guest_test.ts.
 
 import { assertEq, assertTrue } from "./asserts.ts";
-import { Pollable, poll } from "../src/io.ts";
+import { poll, Pollable } from "../src/io.ts";
 
 const nowNs = (): bigint => BigInt(Math.round(performance.now() * 1e6));
 
@@ -88,7 +88,8 @@ Deno.test("kernel: poll on an empty list traps (unbranded throw)", () => {
 });
 
 Deno.test({
-  name: "kernel: a timer's wait re-arms after an early fire (no resolved-promise spin)",
+  name:
+    "kernel: a timer's wait re-arms after an early fire (no resolved-promise spin)",
   // The re-armed 5ms sleep (and nothing to cancel it through the WIT
   // surface) outlives the test on purpose; timers are fire-and-forget.
   sanitizeOps: false,
@@ -112,7 +113,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "kernel: a far deadline sleeps in chunks instead of spinning on the clamp",
+  name:
+    "kernel: a far deadline sleeps in chunks instead of spinning on the clamp",
   // The in-flight ceiling-sized chunk sleep outlives the test on purpose.
   sanitizeOps: false,
   fn: async () => {

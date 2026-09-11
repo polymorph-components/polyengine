@@ -15,7 +15,13 @@
 // lib.dom/lib.esnext ambient types (`ReadableStream`, `Uint8Array`,
 // `PromiseLike`, `AsyncIterable`, `Iterable`).
 
-import { ERROR_CONTEXT, FUTURE, hasBrand, STREAM, STREAM_WRITER } from "./brands.ts";
+import {
+  ERROR_CONTEXT,
+  FUTURE,
+  hasBrand,
+  STREAM,
+  STREAM_WRITER,
+} from "./brands.ts";
 
 /** `Chunk<u8>` is a `Uint8Array`; every other element type chunks as `T[]`. */
 export type Chunk<T> = T extends number ? Uint8Array | T[] : T[];

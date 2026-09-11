@@ -15,15 +15,10 @@ import {
   type ComponentArtifacts,
   instantiate,
 } from "@polyengine/runtime/embedder";
-import { Trap, ComponentException } from "@polyengine/protocol";
+import { ComponentException, Trap } from "@polyengine/protocol";
 import { Context, testContextImportRecord } from "./context.ts";
-import { analyzeImports, requireImportsResolved } from "./import-analysis.ts";
-import {
-  applies,
-  firstExcluding,
-  loadTagsInventory,
-  tagsOf,
-} from "./tags.ts";
+import { requireImportsResolved } from "./import-analysis.ts";
+import { applies, firstExcluding, loadTagsInventory, tagsOf } from "./tags.ts";
 
 /**
  * The suite's `tests` interface id (wit/tests.wit `interface tests`, v0.1.0).
@@ -310,12 +305,15 @@ export async function runSuite(
       }
       if (!applies(tags, missing)) {
         counts.na++;
-        opts.emit(JSON.stringify({
-          case: name,
-          status: "not-applicable",
-          detail: firstExcluding(tags, missing),
-          "diagnostics-complete": true,
-        }), i);
+        opts.emit(
+          JSON.stringify({
+            case: name,
+            status: "not-applicable",
+            detail: firstExcluding(tags, missing),
+            "diagnostics-complete": true,
+          }),
+          i,
+        );
         opts.log?.(`${name} … not-applicable`);
         continue;
       }
@@ -329,11 +327,14 @@ export async function runSuite(
     // `only <filter>` detail — no other fields.
     if (!isSelected) {
       counts.deselected++;
-      opts.emit(JSON.stringify({
-        case: name,
-        status: "deselected",
-        detail: `only ${opts.only}`,
-      }), i);
+      opts.emit(
+        JSON.stringify({
+          case: name,
+          status: "deselected",
+          detail: `only ${opts.only}`,
+        }),
+        i,
+      );
       opts.log?.(`${name} … deselected`);
       continue;
     }
@@ -479,8 +480,13 @@ export async function runSuite(
   return counts;
 }
 
-// deno-lint-ignore no-explicit-any
-async function findByName(list: any[], name: string, hint?: number): Promise<any> {
+async function findByName(
+  // deno-lint-ignore no-explicit-any
+  list: any[],
+  name: string,
+  hint?: number,
+  // deno-lint-ignore no-explicit-any
+): Promise<any> {
   // Same-index fast path. Enumeration order is a hint, not a contract: real
   // suites enumerate deterministically, so the re-enumerated case is
   // virtually always at its census index — one name() round-trip instead of

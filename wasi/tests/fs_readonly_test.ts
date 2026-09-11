@@ -32,7 +32,12 @@ import { ComponentException } from "@polyengine/protocol";
 import { filesystemNode } from "../src/filesystem_node.ts";
 import { filesystemWeb } from "../src/filesystem_web.ts";
 import { FakeDirectoryHandle } from "./support/opfs_fake.ts";
-import { assertEq, assertRejects, assertThrows, assertTrue } from "./asserts.ts";
+import {
+  assertEq,
+  assertRejects,
+  assertThrows,
+  assertTrue,
+} from "./asserts.ts";
 
 type Flags = Record<string, boolean>;
 
@@ -74,7 +79,12 @@ interface D03 {
   appendViaStream(data: unknown): Promise<Res03>;
   setSize(n: bigint): void | Promise<void>;
   setTimes(a: unknown, m: unknown): void | Promise<void>;
-  setTimesAt(pf: Flags, p: string, a: unknown, m: unknown): void | Promise<void>;
+  setTimesAt(
+    pf: Flags,
+    p: string,
+    a: unknown,
+    m: unknown,
+  ): void | Promise<void>;
   createDirectoryAt(p: string): void | Promise<void>;
   removeDirectoryAt(p: string): void | Promise<void>;
   unlinkFileAt(p: string): void | Promise<void>;
@@ -92,7 +102,10 @@ const NOW = { kind: "now" };
 /** A tree with content to mutate: the read-only cases must find their
  * targets present (so a refusal is a refusal, not a missing file). */
 function seedTree(): string {
-  const dir = Deno.makeTempDirSync({ dir: "/tmp", prefix: "polyengine-fs-ro-" });
+  const dir = Deno.makeTempDirSync({
+    dir: "/tmp",
+    prefix: "polyengine-fs-ro-",
+  });
   Deno.writeTextFileSync(`${dir}/seed.txt`, "seed");
   Deno.writeTextFileSync(`${dir}/other.txt`, "other");
   Deno.mkdirSync(`${dir}/sub`);
@@ -120,13 +133,19 @@ function setup(writable: boolean): Setup {
 
 function payload(f: () => unknown): unknown {
   const e = assertThrows(f);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
   return (e as ComponentException).payload;
 }
 
 async function rejectedPayload(f: () => unknown): Promise<unknown> {
   const e = await assertRejects(f);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
   return (e as ComponentException).payload;
 }
 
@@ -150,12 +169,21 @@ function assertReadOnlyResult03(r: Res03): void {
 
 /** Leaves reachable from the preopen directory descriptor alone. */
 const DIR_LEAVES_02: [string, (s: Setup) => unknown][] = [
-  ["set-times-at", ({ root02 }) => root02.setTimesAt(FOLLOW, "seed.txt", NOW, NOW)],
+  [
+    "set-times-at",
+    ({ root02 }) => root02.setTimesAt(FOLLOW, "seed.txt", NOW, NOW),
+  ],
   ["create-directory-at", ({ root02 }) => root02.createDirectoryAt("made")],
   ["remove-directory-at", ({ root02 }) => root02.removeDirectoryAt("empty")],
   ["unlink-file-at", ({ root02 }) => root02.unlinkFileAt("seed.txt")],
-  ["rename-at", ({ root02 }) => root02.renameAt("seed.txt", root02, "moved.txt")],
-  ["link-at", ({ root02 }) => root02.linkAt({}, "seed.txt", root02, "linked.txt")],
+  [
+    "rename-at",
+    ({ root02 }) => root02.renameAt("seed.txt", root02, "moved.txt"),
+  ],
+  [
+    "link-at",
+    ({ root02 }) => root02.linkAt({}, "seed.txt", root02, "linked.txt"),
+  ],
   ["symlink-at", ({ root02 }) => root02.symlinkAt("seed.txt", "alias.txt")],
 ];
 
@@ -195,16 +223,31 @@ for (const [name, op] of FILE_LEAVES_02) {
 
 Deno.test("fs-readonly 0.2: open-at refuses create/truncate/exclusive and write flags", () => {
   const { root02 } = setup(false);
-  assertReadOnly02(() => root02.openAt(FOLLOW, "new.txt", { create: true }, READ));
-  assertReadOnly02(() => root02.openAt(FOLLOW, "seed.txt", { truncate: true }, READ));
-  assertReadOnly02(() => root02.openAt(FOLLOW, "new.txt", { exclusive: true }, READ));
+  assertReadOnly02(() =>
+    root02.openAt(FOLLOW, "new.txt", { create: true }, READ)
+  );
+  assertReadOnly02(() =>
+    root02.openAt(FOLLOW, "seed.txt", { truncate: true }, READ)
+  );
+  assertReadOnly02(() =>
+    root02.openAt(FOLLOW, "new.txt", { exclusive: true }, READ)
+  );
   assertReadOnly02(() => root02.openAt(FOLLOW, "seed.txt", {}, RW));
   assertReadOnly02(() =>
-    root02.openAt(FOLLOW, "sub", { directory: true }, { read: true, mutateDirectory: true })
+    root02.openAt(FOLLOW, "sub", { directory: true }, {
+      read: true,
+      mutateDirectory: true,
+    })
   );
   // ...and the read-only opens it must still allow.
-  assertEq(root02.openAt(FOLLOW, "seed.txt", {}, READ).getType(), "regular-file");
-  assertEq(root02.openAt(FOLLOW, "sub", { directory: true }, READ).getType(), "directory");
+  assertEq(
+    root02.openAt(FOLLOW, "seed.txt", {}, READ).getType(),
+    "regular-file",
+  );
+  assertEq(
+    root02.openAt(FOLLOW, "sub", { directory: true }, READ).getType(),
+    "directory",
+  );
 });
 
 Deno.test("fs-readonly 0.2: non-mutating leaves stay available", () => {
@@ -220,12 +263,21 @@ Deno.test("fs-readonly 0.2: non-mutating leaves stay available", () => {
 // --- 0.3: the same enumeration, variant-shaped errors -----------------------------
 
 const DIR_LEAVES_03: [string, (s: Setup) => unknown][] = [
-  ["set-times-at", ({ root03 }) => root03.setTimesAt(FOLLOW, "seed.txt", NOW, NOW)],
+  [
+    "set-times-at",
+    ({ root03 }) => root03.setTimesAt(FOLLOW, "seed.txt", NOW, NOW),
+  ],
   ["create-directory-at", ({ root03 }) => root03.createDirectoryAt("made")],
   ["remove-directory-at", ({ root03 }) => root03.removeDirectoryAt("empty")],
   ["unlink-file-at", ({ root03 }) => root03.unlinkFileAt("seed.txt")],
-  ["rename-at", ({ root03 }) => root03.renameAt("seed.txt", root03, "moved.txt")],
-  ["link-at", ({ root03 }) => root03.linkAt({}, "seed.txt", root03, "linked.txt")],
+  [
+    "rename-at",
+    ({ root03 }) => root03.renameAt("seed.txt", root03, "moved.txt"),
+  ],
+  [
+    "link-at",
+    ({ root03 }) => root03.linkAt({}, "seed.txt", root03, "linked.txt"),
+  ],
   ["symlink-at", ({ root03 }) => root03.symlinkAt("seed.txt", "alias.txt")],
 ];
 
@@ -275,16 +327,28 @@ Deno.test("fs-readonly 0.3: append-via-stream refuses with read-only", async () 
 Deno.test("fs-readonly 0.3: the stream writers work with writable: true", async () => {
   const s = setup(true);
   const f = await s.root03.openAt(FOLLOW, "seed.txt", {}, RW);
-  assertEq((await f.writeViaStream([new TextEncoder().encode("A")], 0n)).kind, "ok");
-  assertEq((await f.appendViaStream([new TextEncoder().encode("B")])).kind, "ok");
+  assertEq(
+    (await f.writeViaStream([new TextEncoder().encode("A")], 0n)).kind,
+    "ok",
+  );
+  assertEq(
+    (await f.appendViaStream([new TextEncoder().encode("B")])).kind,
+    "ok",
+  );
   assertEq(Deno.readTextFileSync(`${s.dir}/seed.txt`), "AeedB");
 });
 
 Deno.test("fs-readonly 0.3: open-at refuses create/truncate/exclusive and write", async () => {
   const { root03 } = setup(false);
-  assertReadOnly03(() => root03.openAt(FOLLOW, "new.txt", { create: true }, READ));
-  assertReadOnly03(() => root03.openAt(FOLLOW, "seed.txt", { truncate: true }, READ));
-  assertReadOnly03(() => root03.openAt(FOLLOW, "new.txt", { exclusive: true }, READ));
+  assertReadOnly03(() =>
+    root03.openAt(FOLLOW, "new.txt", { create: true }, READ)
+  );
+  assertReadOnly03(() =>
+    root03.openAt(FOLLOW, "seed.txt", { truncate: true }, READ)
+  );
+  assertReadOnly03(() =>
+    root03.openAt(FOLLOW, "new.txt", { exclusive: true }, READ)
+  );
   assertReadOnly03(() => root03.openAt(FOLLOW, "seed.txt", {}, RW));
   assertEq((await root03.statAt(FOLLOW, "seed.txt")).type, "regular-file");
 });
@@ -296,11 +360,17 @@ Deno.test("fs-readonly: preopen descriptors advertise no write/mutate-directory"
   for (const flags of [ro.root02.getFlags(), ro.root03.getFlags()]) {
     assertTrue(flags.read, "read-only preopens are still readable");
     assertTrue(!flags.write, "read-only preopen must not advertise write");
-    assertTrue(!flags.mutateDirectory, "read-only preopen must not advertise mutate-directory");
+    assertTrue(
+      !flags.mutateDirectory,
+      "read-only preopen must not advertise mutate-directory",
+    );
   }
   const rw = setup(true);
   for (const flags of [rw.root02.getFlags(), rw.root03.getFlags()]) {
-    assertTrue(flags.read && flags.write && flags.mutateDirectory, "writable preopen: rw+mutate");
+    assertTrue(
+      flags.read && flags.write && flags.mutateDirectory,
+      "writable preopen: rw+mutate",
+    );
   }
 });
 
@@ -310,7 +380,10 @@ Deno.test("fs-readonly: get-flags on an opened descriptor tells the same story",
   // flags it hands back can never carry write.
   const f = ro.root02.openAt(FOLLOW, "seed.txt", {}, READ);
   const flags = f.getFlags();
-  assertTrue(flags.read && !flags.write && !flags.mutateDirectory, "read-only open: read only");
+  assertTrue(
+    flags.read && !flags.write && !flags.mutateDirectory,
+    "read-only open: read only",
+  );
 
   const rw = setup(true);
   const g = rw.root02.openAt(FOLLOW, "seed.txt", {}, RW);
@@ -324,7 +397,10 @@ Deno.test("fs-readonly: link-at/rename-at/symlink-at bridge nowhere by default",
   const sub = root02.openAt(FOLLOW, "sub", { directory: true }, READ);
   // Every combination of source/destination descriptor: both ends refuse,
   // so there is no "writable cell" to reach from a read-only one.
-  const pairs = [[root02, root02], [root02, sub], [sub, root02], [sub, sub]] as [D02, D02][];
+  const pairs = [[root02, root02], [root02, sub], [sub, root02], [
+    sub,
+    sub,
+  ]] as [D02, D02][];
   for (const [a, b] of pairs) {
     assertReadOnly02(() => a.renameAt("seed.txt", b, "moved.txt"));
     assertReadOnly02(() => a.linkAt({}, "seed.txt", b, "linked.txt"));
@@ -356,10 +432,22 @@ const DIR_FLAG_LEAVES: [string, (root: D02, ro: D02) => unknown][] = [
   ["unlink-file-at", (_r, ro) => ro.unlinkFileAt("inner.txt")],
   ["set-times-at", (_r, ro) => ro.setTimesAt(FOLLOW, "inner.txt", NOW, NOW)],
   ["symlink-at", (_r, ro) => ro.symlinkAt("inner.txt", "alias")],
-  ["rename-at (source side)", (root, ro) => ro.renameAt("inner.txt", root, "pulled.txt")],
-  ["rename-at (destination side)", (root, ro) => root.renameAt("seed.txt", ro, "pushed.txt")],
-  ["link-at (source side)", (root, ro) => ro.linkAt({}, "inner.txt", root, "pulled.txt")],
-  ["link-at (destination side)", (root, ro) => root.linkAt({}, "seed.txt", ro, "pushed.txt")],
+  [
+    "rename-at (source side)",
+    (root, ro) => ro.renameAt("inner.txt", root, "pulled.txt"),
+  ],
+  [
+    "rename-at (destination side)",
+    (root, ro) => root.renameAt("seed.txt", ro, "pushed.txt"),
+  ],
+  [
+    "link-at (source side)",
+    (root, ro) => ro.linkAt({}, "inner.txt", root, "pulled.txt"),
+  ],
+  [
+    "link-at (destination side)",
+    (root, ro) => root.linkAt({}, "seed.txt", ro, "pushed.txt"),
+  ],
 ];
 
 /** Seed `sub` with the targets DIR_FLAG_LEAVES names, then open it with
@@ -368,7 +456,11 @@ function subDescriptor(df: Flags): { root02: D02; sub: D02; dir: string } {
   const { root02, dir } = setup(true);
   Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
   Deno.mkdirSync(`${dir}/sub/nested`);
-  return { root02, sub: root02.openAt(FOLLOW, "sub", { directory: true }, df), dir };
+  return {
+    root02,
+    sub: root02.openAt(FOLLOW, "sub", { directory: true }, df),
+    dir,
+  };
 }
 
 for (const [name, op] of DIR_FLAG_LEAVES) {
@@ -394,7 +486,10 @@ Deno.test("fs-descriptor-flags 0.2: a mutate-directory descriptor still works", 
   });
   rw.createDirectoryAt("made");
   rw.unlinkFileAt("inner.txt");
-  assertEq([...Deno.readDirSync(`${dir}/sub`)].map((e) => e.name).join(","), "made");
+  assertEq(
+    [...Deno.readDirSync(`${dir}/sub`)].map((e) => e.name).join(","),
+    "made",
+  );
 });
 
 // --- open-at escalation: "obtain another handle which would permit any of those" ---
@@ -406,18 +501,32 @@ Deno.test("fs-descriptor-flags 0.2: open-at refuses to escalate through a read-o
   const ro = root02.openAt(FOLLOW, "sub", { directory: true }, READ);
   assertEq(payload(() => ro.openAt(FOLLOW, "inner.txt", {}, RW)), "read-only");
   assertEq(
-    payload(() => ro.openAt(FOLLOW, "nested", { directory: true }, {
-      read: true,
-      mutateDirectory: true,
-    })),
+    payload(() =>
+      ro.openAt(FOLLOW, "nested", { directory: true }, {
+        read: true,
+        mutateDirectory: true,
+      })
+    ),
     "read-only",
   );
-  assertEq(payload(() => ro.openAt(FOLLOW, "new.txt", { create: true }, READ)), "read-only");
-  assertEq(payload(() => ro.openAt(FOLLOW, "inner.txt", { truncate: true }, READ)), "read-only");
-  assertEq(payload(() => ro.openAt(FOLLOW, "new.txt", { exclusive: true }, READ)), "read-only");
+  assertEq(
+    payload(() => ro.openAt(FOLLOW, "new.txt", { create: true }, READ)),
+    "read-only",
+  );
+  assertEq(
+    payload(() => ro.openAt(FOLLOW, "inner.txt", { truncate: true }, READ)),
+    "read-only",
+  );
+  assertEq(
+    payload(() => ro.openAt(FOLLOW, "new.txt", { exclusive: true }, READ)),
+    "read-only",
+  );
   // Plain reads through the same descriptor stay allowed.
   assertEq(ro.openAt(FOLLOW, "inner.txt", {}, READ).getType(), "regular-file");
-  assertEq(ro.openAt(FOLLOW, "nested", { directory: true }, READ).getType(), "directory");
+  assertEq(
+    ro.openAt(FOLLOW, "nested", { directory: true }, READ).getType(),
+    "directory",
+  );
 });
 
 Deno.test("fs-descriptor-flags 0.2: a mutate-directory child is not escalation-blocked", () => {
@@ -430,7 +539,10 @@ Deno.test("fs-descriptor-flags 0.2: a mutate-directory child is not escalation-b
   assertEq(rw.openAt(FOLLOW, "inner.txt", {}, RW).getType(), "regular-file");
   rw.openAt(FOLLOW, "fresh.txt", { create: true }, RW);
   rw.createDirectoryAt("made");
-  assertTrue(Deno.statSync(`${dir}/sub/made`).isDirectory, "the child dir was created");
+  assertTrue(
+    Deno.statSync(`${dir}/sub/made`).isDirectory,
+    "the child dir was created",
+  );
 });
 
 // --- set-times: the type dispatch -------------------------------------------------
@@ -454,7 +566,10 @@ Deno.test("fs-descriptor-flags 0.2: path ops on a file descriptor say not-direct
   assertEq(payload(() => f.unlinkFileAt("other.txt")), "not-directory");
   // Two-descriptor op, wrong-kind DESTINATION: still not-directory, and
   // reported before any permission verdict.
-  assertEq(payload(() => root02.renameAt("seed.txt", f, "moved.txt")), "not-directory");
+  assertEq(
+    payload(() => root02.renameAt("seed.txt", f, "moved.txt")),
+    "not-directory",
+  );
 });
 
 Deno.test("fs-descriptor-flags 0.2: a write-only file descriptor still writes", () => {
@@ -470,18 +585,24 @@ Deno.test("fs-descriptor-flags 0.2: a write-only file descriptor still writes", 
 Deno.test("fs-descriptor-flags 0.3: the same refusals, variant-shaped", async () => {
   const { root03, dir } = setup(true);
   Deno.writeTextFileSync(`${dir}/sub/inner.txt`, "inner");
-  const ro = (await root03.openAt(FOLLOW, "sub", { directory: true }, READ)) as D03;
+  const ro =
+    (await root03.openAt(FOLLOW, "sub", { directory: true }, READ)) as D03;
   assertReadOnly03(() => ro.createDirectoryAt("made"));
   assertReadOnly03(() => ro.openAt(FOLLOW, "inner.txt", {}, RW));
   // set-times dispatch: directory -> read-only, file -> bad-descriptor.
   assertReadOnly03(() => ro.setTimes(NOW, NOW));
   const roFile = (await root03.openAt(FOLLOW, "seed.txt", {}, READ)) as D03;
-  assertEq((payload(() => roFile.setTimes(NOW, NOW)) as { kind: string }).kind, "bad-descriptor");
+  assertEq(
+    (payload(() => roFile.setTimes(NOW, NOW)) as { kind: string }).kind,
+    "bad-descriptor",
+  );
 });
 
 // --- the async backend inherits the same refusals ---------------------------------
 
-function setupWeb(writable: boolean): { root02: D02; root03: D03; fake: FakeDirectoryHandle } {
+function setupWeb(
+  writable: boolean,
+): { root02: D02; root03: D03; fake: FakeDirectoryHandle } {
   const fake = new FakeDirectoryHandle("");
   const { imports } = filesystemWeb({ preopens: { "/": fake }, writable });
   const [[root02]] = (imports["wasi:filesystem/preopens@0.2"] as {
@@ -498,13 +619,23 @@ Deno.test("fs-readonly (web backend): refusals come from the provider", async ()
   // 0.2 on an async backend: the methods are suspending-marked, so the
   // refusal surfaces as a rejection rather than a throw.
   assertEq(
-    await rejectedPayload(() => root02.openAt(FOLLOW, "x.txt", { create: true }, RW)),
+    await rejectedPayload(() =>
+      root02.openAt(FOLLOW, "x.txt", { create: true }, RW)
+    ),
     "read-only",
   );
-  assertEq(await rejectedPayload(() => root02.createDirectoryAt("d")), "read-only");
-  assertEq(await rejectedPayload(() => root02.unlinkFileAt("x.txt")), "read-only");
   assertEq(
-    ((await rejectedPayload(() => root03.createDirectoryAt("d"))) as { kind: string }).kind,
+    await rejectedPayload(() => root02.createDirectoryAt("d")),
+    "read-only",
+  );
+  assertEq(
+    await rejectedPayload(() => root02.unlinkFileAt("x.txt")),
+    "read-only",
+  );
+  assertEq(
+    ((await rejectedPayload(() => root03.createDirectoryAt("d"))) as {
+      kind: string;
+    }).kind,
     "read-only",
   );
   assertTrue(!root02.getFlags().write, "web preopen: no write when read-only");
@@ -512,7 +643,20 @@ Deno.test("fs-readonly (web backend): refusals come from the provider", async ()
 
 Deno.test("fs-readonly (web backend): writable: true restores the writes", async () => {
   const { root02, fake } = setupWeb(true);
-  const f = await (root02.openAt(FOLLOW, "x.txt", { create: true }, RW) as unknown as Promise<D02>);
-  assertEq(await (f.write(new TextEncoder().encode("hi"), 0n) as unknown as Promise<bigint>), 2n);
-  assertTrue((await fake.getFileHandle("x.txt")) !== undefined, "the file exists");
+  const f = await (root02.openAt(
+    FOLLOW,
+    "x.txt",
+    { create: true },
+    RW,
+  ) as unknown as Promise<D02>);
+  assertEq(
+    await (f.write(new TextEncoder().encode("hi"), 0n) as unknown as Promise<
+      bigint
+    >),
+    2n,
+  );
+  assertTrue(
+    (await fake.getFileHandle("x.txt")) !== undefined,
+    "the file exists",
+  );
 });

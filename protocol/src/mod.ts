@@ -15,9 +15,10 @@
 
 export {
   ABORTABLE,
+  COMPONENT_EXCEPTION,
+  DEFER_CANCEL,
   defineBrand,
   defineRealmLocal,
-  DEFER_CANCEL,
   DROPPED,
   ERROR_CONTEXT,
   FUTURE,
@@ -35,22 +36,21 @@ export {
   SUSPENDING,
   TRAP,
   WASI_EXIT,
-  COMPONENT_EXCEPTION,
 } from "./brands.ts";
 
 export {
+  ComponentException,
   DroppedError,
   InvalidHandleError,
+  isComponentException,
   isDroppedError,
   isInvalidHandleError,
   isPeerTrappedError,
   isStreamProducerError,
   isTrap,
-  isComponentException,
   PeerTrappedError,
   StreamProducerError,
   Trap,
-  ComponentException,
 } from "./errors.ts";
 
 // Stream/future handles (contracts/embedder-api.md §"Streams and futures";
@@ -93,6 +93,6 @@ export { anySuspendingImport, isSuspending, suspending } from "./suspending.ts";
 export {
   copyCensus,
   registerRuntimeCopy,
-  type RuntimeCopy,
   runtimeCopies,
+  type RuntimeCopy,
 } from "./registry.ts";

@@ -29,7 +29,10 @@ function checkProvenance(p: unknown): void {
   if (
     p !== null && typeof p === "object" && "limit-exceeded" in (p as object)
   ) {
-    assertEq(typeof (p as { "limit-exceeded": unknown })["limit-exceeded"], "string");
+    assertEq(
+      typeof (p as { "limit-exceeded": unknown })["limit-exceeded"],
+      "string",
+    );
     return;
   }
   throw new Error(`unrecognized provenance shape: ${JSON.stringify(p)}`);

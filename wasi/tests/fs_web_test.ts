@@ -45,7 +45,9 @@ interface D02 {
   statAt(pf: Flags, path: string): Promise<Stat>;
   readViaStream(off: bigint): InStream02;
   writeViaStream(off: bigint): OutStream02;
-  readDirectory(): Promise<{ readDirectoryEntry(): { name: string } | undefined }>;
+  readDirectory(): Promise<
+    { readDirectoryEntry(): { name: string } | undefined }
+  >;
   createDirectoryAt(p: string): Promise<void>;
   removeDirectoryAt(p: string): Promise<void>;
   unlinkFileAt(p: string): Promise<void>;
@@ -59,8 +61,13 @@ interface D02 {
 interface D03 {
   openAt(pf: Flags, path: string, of: Flags, df: Flags): Promise<D03>;
   statAt(pf: Flags, path: string): Promise<Stat>;
-  readViaStream(off: bigint): [AsyncIterable<Uint8Array>, Promise<{ kind: string }>];
-  writeViaStream(data: unknown, off: bigint): Promise<{ kind: string; value?: { kind: string } }>;
+  readViaStream(
+    off: bigint,
+  ): [AsyncIterable<Uint8Array>, Promise<{ kind: string }>];
+  writeViaStream(
+    data: unknown,
+    off: bigint,
+  ): Promise<{ kind: string; value?: { kind: string } }>;
 }
 
 const FOLLOW: Flags = { symlinkFollow: true };
@@ -68,7 +75,10 @@ const RW: Flags = { read: true, write: true };
 
 function setup(): { root02: D02; root03: D03; fake: FakeDirectoryHandle } {
   const fake = new FakeDirectoryHandle("");
-  const { imports } = filesystemWeb({ preopens: { "/": fake }, writable: true });
+  const { imports } = filesystemWeb({
+    preopens: { "/": fake },
+    writable: true,
+  });
   const [[root02]] = (imports["wasi:filesystem/preopens@0.2"] as {
     getDirectories(): [D02, string][];
   }).getDirectories();
@@ -80,14 +90,19 @@ function setup(): { root02: D02; root03: D03; fake: FakeDirectoryHandle } {
 
 async function rejectedPayload(f: () => unknown): Promise<unknown> {
   const e = await assertRejects(f);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
   return (e as ComponentException).payload;
 }
 
 Deno.test("fs-web: 0.2 descriptor methods carry the suspending marks", () => {
   const { root02 } = setup();
   const proto = Object.getPrototypeOf(root02) as Record<string, unknown>;
-  for (const name of ["openAt", "stat", "statAt", "read", "write", "readDirectory"]) {
+  for (
+    const name of ["openAt", "stat", "statAt", "read", "write", "readDirectory"]
+  ) {
     assertTrue(isSuspending(proto[name]), `${name} must be suspending-marked`);
   }
   // The node backend's prototype must NOT be marked (callback-mode pin) —
@@ -110,11 +125,15 @@ Deno.test("fs-web 0.2: open/write/read, parking path", async () => {
   const st = await f.stat();
   assertEq(st.type, "regular-file");
   assertEq(st.size, BigInt(data.length));
-  assertTrue(st.dataModificationTimestamp !== undefined, "mtime from File.lastModified");
+  assertTrue(
+    st.dataModificationTimestamp !== undefined,
+    "mtime from File.lastModified",
+  );
   await f.setSize(4n);
   assertEq((await f.stat()).size, 4n);
   // Committed to the fake's backing store, not a shadow copy.
-  const committed = (await (await fake.getFileHandle("hello.txt")).getFile()).size;
+  const committed =
+    (await (await fake.getFileHandle("hello.txt")).getFile()).size;
   assertEq(committed, 4);
 });
 
@@ -135,18 +154,34 @@ Deno.test("fs-web 0.2: async-backed via-streams (blocking ops park)", async () =
       if (r.length === 0) continue;
     }
   });
-  assertEq(((closed as ComponentException).payload as { kind: string }).kind, "closed");
+  assertEq(
+    ((closed as ComponentException).payload as { kind: string }).kind,
+    "closed",
+  );
 });
 
 Deno.test("fs-web: error shapes per track; unsupported families", async () => {
   const { root02, root03 } = setup();
-  assertEq(await rejectedPayload(() => root02.statAt(FOLLOW, "missing")), "no-entry");
   assertEq(
-    ((await rejectedPayload(() => root03.statAt(FOLLOW, "missing"))) as { kind: string }).kind,
+    await rejectedPayload(() => root02.statAt(FOLLOW, "missing")),
     "no-entry",
   );
-  assertEq(await rejectedPayload(() => root02.setTimes({ kind: "now" }, { kind: "now" })), "unsupported");
-  assertEq(await rejectedPayload(() => root02.symlinkAt("a", "b")), "unsupported");
+  assertEq(
+    ((await rejectedPayload(() => root03.statAt(FOLLOW, "missing"))) as {
+      kind: string;
+    }).kind,
+    "no-entry",
+  );
+  assertEq(
+    await rejectedPayload(() =>
+      root02.setTimes({ kind: "now" }, { kind: "now" })
+    ),
+    "unsupported",
+  );
+  assertEq(
+    await rejectedPayload(() => root02.symlinkAt("a", "b")),
+    "unsupported",
+  );
 });
 
 Deno.test("fs-web 0.2: directories, exclusive create, rename fallback", async () => {
@@ -156,21 +191,36 @@ Deno.test("fs-web 0.2: directories, exclusive create, rename fallback", async ()
   const f = await root02.openAt(FOLLOW, "d/x.txt", { create: true }, RW);
   await f.write(new Uint8Array([7, 8, 9]), 0n);
   assertEq(
-    await rejectedPayload(() => root02.openAt(FOLLOW, "d/x.txt", { create: true, exclusive: true }, RW)),
+    await rejectedPayload(() =>
+      root02.openAt(FOLLOW, "d/x.txt", { create: true, exclusive: true }, RW)
+    ),
     "exist",
   );
-  assertEq(await rejectedPayload(() => root02.removeDirectoryAt("d")), "not-empty");
+  assertEq(
+    await rejectedPayload(() => root02.removeDirectoryAt("d")),
+    "not-empty",
+  );
 
   // No move() on the fake: file rename takes the copy+delete fallback...
   await root02.renameAt("d/x.txt", root02, "y.txt");
   assertEq((await root02.statAt(FOLLOW, "y.txt")).size, 3n);
-  assertEq(await rejectedPayload(() => root02.statAt(FOLLOW, "d/x.txt")), "no-entry");
+  assertEq(
+    await rejectedPayload(() => root02.statAt(FOLLOW, "d/x.txt")),
+    "no-entry",
+  );
   // ...and directory rename is honestly unsupported.
-  assertEq(await rejectedPayload(() => root02.renameAt("d", root02, "e")), "unsupported");
+  assertEq(
+    await rejectedPayload(() => root02.renameAt("d", root02, "e")),
+    "unsupported",
+  );
 
   const listing = await root02.readDirectory();
   const names: string[] = [];
-  for (let e = listing.readDirectoryEntry(); e !== undefined; e = listing.readDirectoryEntry()) {
+  for (
+    let e = listing.readDirectoryEntry();
+    e !== undefined;
+    e = listing.readDirectoryEntry()
+  ) {
     names.push(e.name);
   }
   assertEq(names.sort().join(","), "d,y.txt");
@@ -185,7 +235,10 @@ Deno.test("fs-web: identity is path-derived; is-same-object via isSameEntry", as
   assertEq(await a1.isSameObject(root02), false);
   const h1 = await a1.metadataHash();
   const h2 = await a2.metadataHash();
-  assertTrue(h1.lower === h2.lower && h1.upper === h2.upper, "same path, same hash");
+  assertTrue(
+    h1.lower === h2.lower && h1.upper === h2.upper,
+    "same path, same hash",
+  );
 });
 
 Deno.test("fs-web 0.3: write-via-stream commits through the fake", async () => {

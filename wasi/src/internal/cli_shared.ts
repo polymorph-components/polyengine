@@ -25,7 +25,9 @@ export type CliByteSource =
 export class ExitError extends Error {
   constructor(readonly ok: boolean, readonly code?: number) {
     super(
-      `wasi:cli/exit#exit(${ok ? "success" : "failure"}${code === undefined ? "" : `, code ${code}`})`,
+      `wasi:cli/exit#exit(${ok ? "success" : "failure"}${
+        code === undefined ? "" : `, code ${code}`
+      })`,
     );
     this.name = "ExitError";
   }

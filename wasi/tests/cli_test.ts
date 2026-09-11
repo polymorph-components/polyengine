@@ -61,7 +61,10 @@ Deno.test("cli: get-environment / get-arguments / initial-cwd from options", () 
     getArguments(): string[];
     initialCwd(): string | undefined;
   };
-  assertEq(JSON.stringify(env.getEnvironment()), JSON.stringify([["FOO", "bar"]]));
+  assertEq(
+    JSON.stringify(env.getEnvironment()),
+    JSON.stringify([["FOO", "bar"]]),
+  );
   assertEq(JSON.stringify(env.getArguments()), JSON.stringify(["a", "b"]));
   assertEq(env.initialCwd(), "/work");
 });
@@ -111,18 +114,26 @@ Deno.test("cli: passthrough mirrors stdout/stderr to console on both tracks; off
   console.error = (...a: unknown[]) => errored.push(a.join(" "));
   try {
     const quiet = cli();
-    (quiet.imports["wasi:cli/stdout@0.2"] as { getStdout(): { write(c: Uint8Array): void } })
+    (quiet.imports["wasi:cli/stdout@0.2"] as {
+      getStdout(): { write(c: Uint8Array): void };
+    })
       .getStdout().write(new TextEncoder().encode("silent"));
     assertEq(logged.length, 0);
     assertEq(quiet.captured.stdoutText(), "silent");
 
     const { imports, captured } = cli({ passthrough: true });
-    (imports["wasi:cli/stdout@0.2"] as { getStdout(): { write(c: Uint8Array): void } })
+    (imports["wasi:cli/stdout@0.2"] as {
+      getStdout(): { write(c: Uint8Array): void };
+    })
       .getStdout().write(new TextEncoder().encode("out2"));
-    (imports["wasi:cli/stderr@0.2"] as { getStderr(): { write(c: Uint8Array): void } })
+    (imports["wasi:cli/stderr@0.2"] as {
+      getStderr(): { write(c: Uint8Array): void };
+    })
       .getStderr().write(new TextEncoder().encode("err2"));
     await (imports["wasi:cli/stderr@0.3"] as {
-      writeViaStream(data: AsyncIterable<Uint8Array>): Promise<{ kind: string }>;
+      writeViaStream(
+        data: AsyncIterable<Uint8Array>,
+      ): Promise<{ kind: string }>;
     }).writeViaStream((async function* () {
       yield new TextEncoder().encode("err3");
     })());
@@ -139,7 +150,9 @@ Deno.test("cli: passthrough mirrors stdout/stderr to console on both tracks; off
 // --- the @0.3 track (capture impl) ---------------------------------------------
 
 Deno.test("cli@0.3: write-via-stream captures; read-via-stream serves the buffer", async () => {
-  const { imports, captured } = cli({ stdinBuffer: new TextEncoder().encode("in") });
+  const { imports, captured } = cli({
+    stdinBuffer: new TextEncoder().encode("in"),
+  });
   const stdout = imports["wasi:cli/stdout@0.3"] as {
     writeViaStream(data: AsyncIterable<Uint8Array>): Promise<{ kind: string }>;
   };
@@ -162,11 +175,15 @@ Deno.test("cli@0.3: write-via-stream captures; read-via-stream serves the buffer
 
 Deno.test("cli@0.3: exit-with-code records; get-initial-cwd is the renamed leaf", () => {
   const { imports, captured } = cli({ cwd: "/w" });
-  const exit = imports["wasi:cli/exit@0.3"] as { exitWithCode(code: number): void };
+  const exit = imports["wasi:cli/exit@0.3"] as {
+    exitWithCode(code: number): void;
+  };
   exit.exitWithCode(7);
   assertEq(captured.exited(), true);
   assertEq(captured.exitOk(), false);
   assertEq(captured.exitCode(), 7);
-  const env = imports["wasi:cli/environment@0.3"] as { getInitialCwd(): string | undefined };
+  const env = imports["wasi:cli/environment@0.3"] as {
+    getInitialCwd(): string | undefined;
+  };
   assertEq(env.getInitialCwd(), "/w");
 });

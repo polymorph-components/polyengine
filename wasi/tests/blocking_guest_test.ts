@@ -60,7 +60,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "blocking guest: poll parks, wakes, and lowers its ready list through guest realloc",
+  name:
+    "blocking guest: poll parks, wakes, and lowers its ready list through guest realloc",
   ignore: !ready,
   fn: async () => {
     const c = await boot();
@@ -75,7 +76,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "blocking guest: jspi:false refuses the park cleanly instead of livelocking",
+  name:
+    "blocking guest: jspi:false refuses the park cleanly instead of livelocking",
   ignore: !ready,
   fn: async () => {
     const c = await boot({ jspi: false });

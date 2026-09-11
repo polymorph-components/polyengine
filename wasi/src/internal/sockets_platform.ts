@@ -244,7 +244,11 @@ interface NodeUdpSocket {
   ): void;
   /** Connected-mode overload (after `connect`). */
   send(msg: Uint8Array, cb: (err: Error | null) => void): void;
-  connect(port: number, address: string, cb: (err?: Error | null) => void): void;
+  connect(
+    port: number,
+    address: string,
+    cb: (err?: Error | null) => void,
+  ): void;
   disconnect(): void;
   setTTL(ttl: number): void;
   getRecvBufferSize(): number;
@@ -441,7 +445,8 @@ class NodeDatagramConn implements DatagramConn {
   }
 
   receiveReady(): boolean {
-    return this.#queue.length > 0 || this.#failure !== undefined || this.#closed;
+    return this.#queue.length > 0 || this.#failure !== undefined ||
+      this.#closed;
   }
 
   waitReceive(): Promise<void> {
@@ -453,7 +458,10 @@ class NodeDatagramConn implements DatagramConn {
     this.#closed = true;
     // A parked receive settles as an error mapping onto `invalid-state`.
     this.#failWaiters(
-      codedError("ERR_SOCKET_DGRAM_NOT_RUNNING", "socket closed under a pending receive"),
+      codedError(
+        "ERR_SOCKET_DGRAM_NOT_RUNNING",
+        "socket closed under a pending receive",
+      ),
     );
     this.#signal();
     try {
@@ -556,7 +564,10 @@ class NodeTcpConn implements TcpConn {
       if (this.#socket.destroyed) {
         // Locally destroyed under a pending read: never a fake EOS — maps
         // onto invalid-state.
-        throw codedError("ERR_STREAM_DESTROYED", "socket closed under a pending read");
+        throw codedError(
+          "ERR_STREAM_DESTROYED",
+          "socket closed under a pending read",
+        );
       }
       await new Promise<void>((resolve) => {
         const done = () => {
@@ -682,7 +693,11 @@ function nodeTcpListen(): TcpListen | undefined {
       failWaiters(args[0]);
       signal();
     });
-    server.listen({ port, host: hostname, ...(backlog === undefined ? {} : { backlog }) });
+    server.listen({
+      port,
+      host: hostname,
+      ...(backlog === undefined ? {} : { backlog }),
+    });
 
     return {
       get addr(): NetAddr | null {
@@ -728,7 +743,10 @@ function nodeTcpListen(): TcpListen | undefined {
         closed = true;
         signal();
         failWaiters(
-          codedError("ERR_SERVER_NOT_RUNNING", "listener closed under a pending accept"),
+          codedError(
+            "ERR_SERVER_NOT_RUNNING",
+            "listener closed under a pending accept",
+          ),
         );
         for (const socket of queue.splice(0, queue.length)) {
           socket.destroy(); // refuse queued-but-untaken connections

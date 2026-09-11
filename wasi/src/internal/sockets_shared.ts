@@ -132,9 +132,15 @@ export function parseNetAddr(addr: NetAddr): IpSocketAddress {
   const host = addr.hostname;
   if (!host.includes(":")) {
     const octets = host.split(".").map(Number);
-    if (octets.length !== 4 || octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) {
+    if (
+      octets.length !== 4 ||
+      octets.some((o) => !Number.isInteger(o) || o < 0 || o > 255)
+    ) {
       throw componentError(
-        { kind: "other", value: `unparseable IPv4 hostname ${JSON.stringify(host)}` },
+        {
+          kind: "other",
+          value: `unparseable IPv4 hostname ${JSON.stringify(host)}`,
+        },
         `unparseable IPv4 hostname ${JSON.stringify(host)}`,
       );
     }
@@ -150,7 +156,9 @@ export function parseNetAddr(addr: NetAddr): IpSocketAddress {
   };
 }
 
-function parseIpv6Hostname(hostname: string): { groups: Ipv6Address; scopeId: number } {
+function parseIpv6Hostname(
+  hostname: string,
+): { groups: Ipv6Address; scopeId: number } {
   let host = hostname;
   let scopeId = 0;
   const pct = host.indexOf("%");
@@ -162,7 +170,10 @@ function parseIpv6Hostname(hostname: string): { groups: Ipv6Address; scopeId: nu
 
   const fail = (): never => {
     throw componentError(
-      { kind: "other", value: `unparseable IPv6 hostname ${JSON.stringify(hostname)}` },
+      {
+        kind: "other",
+        value: `unparseable IPv6 hostname ${JSON.stringify(hostname)}`,
+      },
       `unparseable IPv6 hostname ${JSON.stringify(hostname)}`,
     );
   };
@@ -186,7 +197,10 @@ function parseIpv6Hostname(hostname: string): { groups: Ipv6Address; scopeId: nu
   let v4Tail: [number, number] | undefined;
   if (last.length > 0 && last[last.length - 1].includes(".")) {
     const quad = last[last.length - 1].split(".").map(Number);
-    if (quad.length !== 4 || quad.some((o) => !Number.isInteger(o) || o < 0 || o > 255)) fail();
+    if (
+      quad.length !== 4 ||
+      quad.some((o) => !Number.isInteger(o) || o < 0 || o > 255)
+    ) fail();
     v4Tail = [(quad[0] << 8) | quad[1], (quad[2] << 8) | quad[3]];
     if (tail.length > 0) tailPieces = tail.slice(0, -1);
     else pieces.pop();
@@ -231,7 +245,10 @@ function isDeprecatedV4CompatibleV6(groups: Ipv6Address): boolean {
  * @internal — shared by the node/Deno socket backends; the public entry
  * point is `sockets()`.
  */
-export function isValidAddressFamily(family: IpAddressFamily, addr: IpSocketAddress): boolean {
+export function isValidAddressFamily(
+  family: IpAddressFamily,
+  addr: IpSocketAddress,
+): boolean {
   if (family === "ipv4") return addr.kind === "ipv4";
   return addr.kind === "ipv6" &&
     !isV4MappedV6(addr.value.address) &&
@@ -253,7 +270,10 @@ export function isUnspecified(addr: IpSocketAddress): boolean {
  * @internal — shared by the node/Deno socket backends; the public entry
  * point is `sockets()`.
  */
-export function sameSocketAddress(a: IpSocketAddress, b: IpSocketAddress): boolean {
+export function sameSocketAddress(
+  a: IpSocketAddress,
+  b: IpSocketAddress,
+): boolean {
   if (a.kind !== b.kind || a.value.port !== b.value.port) return false;
   return a.value.address.length === b.value.address.length &&
     a.value.address.every((part, i) => part === b.value.address[i]);
@@ -316,17 +336,32 @@ const CODE_ERRORS: Record<string, SocketErrorCode> = {
  * @internal — shared by the node/Deno socket backends; the public entry
  * point is `sockets()`.
  */
-export function mapPlatformError(e: unknown, what: string): ComponentException<SocketErrorCode> {
-  if (e instanceof ComponentException) return e as ComponentException<SocketErrorCode>;
+export function mapPlatformError(
+  e: unknown,
+  what: string,
+): ComponentException<SocketErrorCode> {
+  if (e instanceof ComponentException) {
+    return e as ComponentException<SocketErrorCode>;
+  }
   const message = e instanceof Error ? e.message : String(e);
   const err = (payload: SocketErrorCode): ComponentException<SocketErrorCode> =>
     componentError(payload, `${what}: ${message}`);
   if (isDenoError(e, "AddrInUse")) return err({ kind: "address-in-use" });
-  if (isDenoError(e, "AddrNotAvailable")) return err({ kind: "address-not-bindable" });
-  if (isDenoError(e, "ConnectionRefused")) return err({ kind: "connection-refused" });
-  if (isDenoError(e, "ConnectionReset")) return err({ kind: "connection-reset" });
-  if (isDenoError(e, "ConnectionAborted")) return err({ kind: "connection-aborted" });
-  if (isDenoError(e, "NetworkUnreachable") || isDenoError(e, "HostUnreachable")) {
+  if (isDenoError(e, "AddrNotAvailable")) {
+    return err({ kind: "address-not-bindable" });
+  }
+  if (isDenoError(e, "ConnectionRefused")) {
+    return err({ kind: "connection-refused" });
+  }
+  if (isDenoError(e, "ConnectionReset")) {
+    return err({ kind: "connection-reset" });
+  }
+  if (isDenoError(e, "ConnectionAborted")) {
+    return err({ kind: "connection-aborted" });
+  }
+  if (
+    isDenoError(e, "NetworkUnreachable") || isDenoError(e, "HostUnreachable")
+  ) {
     return err({ kind: "remote-unreachable" });
   }
   if (isDenoError(e, "PermissionDenied") || isDenoError(e, "NotCapable")) {
@@ -340,9 +375,13 @@ export function mapPlatformError(e: unknown, what: string): ComponentException<S
   }
   if (isDenoError(e, "NotSupported")) return err({ kind: "not-supported" });
   const code = (e as { code?: unknown } | null)?.code;
-  if (typeof code === "string" && code in CODE_ERRORS) return err(CODE_ERRORS[code]);
+  if (typeof code === "string" && code in CODE_ERRORS) {
+    return err(CODE_ERRORS[code]);
+  }
   // EMSGSIZE surfaces as a plain Error, not a Deno.errors class.
-  if (/message too long/i.test(message)) return err({ kind: "datagram-too-large" });
+  if (/message too long/i.test(message)) {
+    return err({ kind: "datagram-too-large" });
+  }
   // EPIPE (a write on a peer-closed connection) also surfaces as a plain
   // Error in Deno.
   if (/broken pipe/i.test(message)) return err({ kind: "connection-broken" });
@@ -375,7 +414,6 @@ export function resultErrOf(e: unknown, what: string): SocketResult {
   return { kind: "err", value: mapPlatformError(e, what).payload };
 }
 
-
 export interface SocketsOptions {
   /**
    * Observe every `wasi:sockets` entry point the guest reaches, in call
@@ -398,7 +436,10 @@ export interface UdpSocket {
   bind(localAddress: IpSocketAddress): void;
   connect(remoteAddress: IpSocketAddress): Promise<void>;
   disconnect(): void;
-  send(data: Uint8Array, remoteAddress: IpSocketAddress | undefined): Promise<void>;
+  send(
+    data: Uint8Array,
+    remoteAddress: IpSocketAddress | undefined,
+  ): Promise<void>;
   receive(): Promise<[Uint8Array, IpSocketAddress]>;
   getLocalAddress(): IpSocketAddress;
   getRemoteAddress(): IpSocketAddress;
@@ -487,7 +528,6 @@ export interface TcpSocketClass {
   create(addressFamily: IpAddressFamily): TcpSocket;
 }
 
-
 /**
  * The family's wildcard address, port 0 (tcp listen's implicit bind).
  *
@@ -499,7 +539,11 @@ export function wildcardAddress(family: IpAddressFamily): IpSocketAddress {
     ? { kind: "ipv4", value: { port: 0, address: [0, 0, 0, 0] } }
     : {
       kind: "ipv6",
-      value: { port: 0, flowInfo: 0, address: [0, 0, 0, 0, 0, 0, 0, 0], scopeId: 0 },
+      value: {
+        port: 0,
+        flowInfo: 0,
+        address: [0, 0, 0, 0, 0, 0, 0, 0],
+        scopeId: 0,
+      },
     };
 }
-

@@ -85,8 +85,19 @@
 // pre-existing escaping symlinks alike are refused with `not-permitted`;
 // OPFS has no symlinks, so the web backend is immune by construction.
 
-import { ComponentException, isStream, suspending, type Stream } from "@polyengine/protocol";
-import { FedInputStream, IoError, OutputStream, Pollable, SinkOutputStream } from "../io.ts";
+import {
+  ComponentException,
+  isStream,
+  type Stream,
+  suspending,
+} from "@polyengine/protocol";
+import {
+  FedInputStream,
+  IoError,
+  OutputStream,
+  Pollable,
+  SinkOutputStream,
+} from "../io.ts";
 
 /** `wasi:filesystem/types.error-code` labels. 0.2 (enum): all of these,
  * bare. 0.3 (variant): all but `would-block`, as `{kind}` — this package
@@ -245,7 +256,11 @@ export interface FsBackend<H> {
   symlinkAt?(target: string, base: H, segments: string[]): MaybeAsync<void>;
   readlinkAt?(base: H, segments: string[]): MaybeAsync<string>;
   identity(h: H): MaybeAsync<FsIdentity>;
-  identityAt(base: H, segments: string[], follow: boolean): MaybeAsync<FsIdentity>;
+  identityAt(
+    base: H,
+    segments: string[],
+    follow: boolean,
+  ): MaybeAsync<FsIdentity>;
   isSame(a: H, b: H): MaybeAsync<boolean>;
 }
 
@@ -341,7 +356,10 @@ function err03(code: FsErrorCode): ComponentException<{ kind: FsErrorCode }> {
 type ErrShape = (code: FsErrorCode) => ComponentException<unknown>;
 
 /** Chain over MaybeAsync without forcing sync backends through a tick. */
-function chain<T, U>(v: MaybeAsync<T>, f: (v: T) => MaybeAsync<U>): MaybeAsync<U> {
+function chain<T, U>(
+  v: MaybeAsync<T>,
+  f: (v: T) => MaybeAsync<U>,
+): MaybeAsync<U> {
   return v instanceof Promise ? v.then(f) : f(v);
 }
 
@@ -421,9 +439,15 @@ function statValue(st: FsStat): DescriptorStatValue {
     type: st.type,
     linkCount: st.linkCount,
     size: st.size,
-    ...(st.atimeNs === undefined ? {} : { dataAccessTimestamp: nsToDatetime(st.atimeNs) }),
-    ...(st.mtimeNs === undefined ? {} : { dataModificationTimestamp: nsToDatetime(st.mtimeNs) }),
-    ...(st.ctimeNs === undefined ? {} : { statusChangeTimestamp: nsToDatetime(st.ctimeNs) }),
+    ...(st.atimeNs === undefined
+      ? {}
+      : { dataAccessTimestamp: nsToDatetime(st.atimeNs) }),
+    ...(st.mtimeNs === undefined
+      ? {}
+      : { dataModificationTimestamp: nsToDatetime(st.mtimeNs) }),
+    ...(st.ctimeNs === undefined
+      ? {}
+      : { statusChangeTimestamp: nsToDatetime(st.ctimeNs) }),
   };
 }
 
@@ -520,8 +544,10 @@ export function makeFilesystem<H>(
 ): FilesystemFragment {
   const writable = access.writable === true;
   const map = (e: unknown): FsErrorCode => backend.mapError(e);
-  const g02 = <T>(fn: () => MaybeAsync<T>): MaybeAsync<T> => guarded(map, err02, fn);
-  const g03 = <T>(fn: () => MaybeAsync<T>): MaybeAsync<T> => guarded(map, err03, fn);
+  const g02 = <T>(fn: () => MaybeAsync<T>): MaybeAsync<T> =>
+    guarded(map, err02, fn);
+  const g03 = <T>(fn: () => MaybeAsync<T>): MaybeAsync<T> =>
+    guarded(map, err03, fn);
 
   /** A stream-facing sink/source error: an IoError subclass carrying the
    * code, so 0.2 stream failures downcast via filesystem-error-code. */
@@ -546,7 +572,9 @@ export function makeFilesystem<H>(
    * read-only package never advertises `write`/`mutate-directory`, on
    * preopens or on anything `open-at` mints, so a guest that checks
    * flags before acting sees the same story the operations tell. */
-  const flagsValue = (df: Partial<DescriptorFlagsValue>): DescriptorFlagsValue => ({
+  const flagsValue = (
+    df: Partial<DescriptorFlagsValue>,
+  ): DescriptorFlagsValue => ({
     read: df.read === true,
     write: writable && df.write === true,
     fileIntegritySync: df.fileIntegritySync === true,
@@ -555,7 +583,11 @@ export function makeFilesystem<H>(
     mutateDirectory: writable && df.mutateDirectory === true,
   });
 
-  const PREOPEN_FLAGS = flagsValue({ read: true, write: true, mutateDirectory: true });
+  const PREOPEN_FLAGS = flagsValue({
+    read: true,
+    write: true,
+    mutateDirectory: true,
+  });
 
   /** The package-level grant. Refuses with the WIT `read-only` code —
    * distinct from the per-descriptor checks (`requireDirMutate`,
@@ -661,13 +693,15 @@ export function makeFilesystem<H>(
     });
 
   /** Async sinks for SinkOutputStream: failures carry the code. */
-  const asyncSink = (write: (chunk: Uint8Array) => Promise<void>) => async (chunk: Uint8Array) => {
-    try {
-      await write(chunk);
-    } catch (e) {
-      throw streamError(e);
-    }
-  };
+  const asyncSink =
+    (write: (chunk: Uint8Array) => Promise<void>) =>
+    async (chunk: Uint8Array) => {
+      try {
+        await write(chunk);
+      } catch (e) {
+        throw streamError(e);
+      }
+    };
 
   // --- shared core ops (MaybeAsync; the track classes shape errors) -----------
 
@@ -709,7 +743,9 @@ export function makeFilesystem<H>(
       this.#entries = entries;
     }
     readDirectoryEntry(): DirectoryEntryValue | undefined {
-      return this.#at < this.#entries.length ? this.#entries[this.#at++] : undefined;
+      return this.#at < this.#entries.length
+        ? this.#entries[this.#at++]
+        : undefined;
     }
     [Symbol.dispose](): void {
       this.#at = this.#entries.length;
@@ -756,7 +792,9 @@ export function makeFilesystem<H>(
         requireFile(this.core, err02);
         requireFileWrite(this.core, err02);
         if (backend.isSync) {
-          return syncWriteStream((chunk) => void backend.append(this.core.h, chunk));
+          return syncWriteStream((chunk) =>
+            void backend.append(this.core.h, chunk)
+          );
         }
         return new SinkOutputStream(asyncSink(async (chunk) => {
           await backend.append(this.core.h, chunk);
@@ -764,7 +802,11 @@ export function makeFilesystem<H>(
       }) as OutputStream | SinkOutputStream;
     }
 
-    advise(_offset: bigint, _length: bigint, _advice: string): MaybeAsync<void> {
+    advise(
+      _offset: bigint,
+      _length: bigint,
+      _advice: string,
+    ): MaybeAsync<void> {
       return g02(() => requireFile(this.core, err02)); // advisory: accept and ignore
     }
 
@@ -788,7 +830,10 @@ export function makeFilesystem<H>(
       });
     }
 
-    setTimes(atime: NewTimestampValue, mtime: NewTimestampValue): MaybeAsync<void> {
+    setTimes(
+      atime: NewTimestampValue,
+      mtime: NewTimestampValue,
+    ): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
         // The descriptor's OWN times: which half of the per-descriptor
@@ -810,7 +855,9 @@ export function makeFilesystem<H>(
         const n = Number(length);
         return chain(
           backend.read(this.core.h, n, Number(offset)),
-          (bytes): [Uint8Array, boolean] => [bytes, n > 0 && bytes.length === 0],
+          (
+            bytes,
+          ): [Uint8Array, boolean] => [bytes, n > 0 && bytes.length === 0],
         );
       });
     }
@@ -820,7 +867,10 @@ export function makeFilesystem<H>(
         requireWritable(err02);
         requireFile(this.core, err02);
         requireFileWrite(this.core, err02);
-        return chain(backend.write(this.core.h, buffer, Number(offset)), BigInt);
+        return chain(
+          backend.write(this.core.h, buffer, Number(offset)),
+          BigInt,
+        );
       });
     }
 
@@ -854,7 +904,10 @@ export function makeFilesystem<H>(
       return g02(() => chain(backend.stat(this.core.h), statValue));
     }
 
-    statAt(pathFlags: PathFlagsValue, path: string): MaybeAsync<DescriptorStatValue> {
+    statAt(
+      pathFlags: PathFlagsValue,
+      path: string,
+    ): MaybeAsync<DescriptorStatValue> {
       return g02(() =>
         chain(
           backend.statAt(
@@ -939,7 +992,8 @@ export function makeFilesystem<H>(
             parsePath(path, err02),
             decodeOpen(pathFlags, openFlags, flags),
           ),
-          ({ handle, type }) => new Descriptor02(handle, type, flagsValue(flags)),
+          ({ handle, type }) =>
+            new Descriptor02(handle, type, flagsValue(flags)),
         );
       });
     }
@@ -947,7 +1001,10 @@ export function makeFilesystem<H>(
     readlinkAt(path: string): MaybeAsync<string> {
       return g02(() => {
         if (backend.readlinkAt === undefined) throw err02("unsupported");
-        return backend.readlinkAt(this.core.h, requireFinal(parsePath(path, err02), err02));
+        return backend.readlinkAt(
+          this.core.h,
+          requireFinal(parsePath(path, err02), err02),
+        );
       });
     }
 
@@ -963,7 +1020,11 @@ export function makeFilesystem<H>(
       });
     }
 
-    renameAt(oldPath: string, newDescriptor: Descriptor02, newPath: string): MaybeAsync<void> {
+    renameAt(
+      oldPath: string,
+      newDescriptor: Descriptor02,
+      newPath: string,
+    ): MaybeAsync<void> {
       return g02(() => {
         requireWritable(err02);
         // Both ends (see link-at).
@@ -1016,7 +1077,10 @@ export function makeFilesystem<H>(
       return g02(() => chain(backend.identity(this.core.h), hashIdentity));
     }
 
-    metadataHashAt(pathFlags: PathFlagsValue, path: string): MaybeAsync<MetadataHashValue> {
+    metadataHashAt(
+      pathFlags: PathFlagsValue,
+      path: string,
+    ): MaybeAsync<MetadataHashValue> {
       return g02(() =>
         chain(
           backend.identityAt(
@@ -1044,7 +1108,9 @@ export function makeFilesystem<H>(
     }
 
     /** tuple<stream<u8>, future<result<_, error-code>>> */
-    readViaStream(offset: bigint): [AsyncIterable<Uint8Array>, Promise<FsResult03>] {
+    readViaStream(
+      offset: bigint,
+    ): [AsyncIterable<Uint8Array>, Promise<FsResult03>] {
       requireFile(this.core, err03);
       requireRead(this.core, err03);
       let settle!: (r: FsResult03) => void;
@@ -1064,14 +1130,21 @@ export function makeFilesystem<H>(
     }
 
     /** The promise IS the future source (embedder-api.md §"Streams and futures"): drain the guest's stream. */
-    async writeViaStream(data: FsByteSource, offset: bigint): Promise<FsResult03> {
+    async writeViaStream(
+      data: FsByteSource,
+      offset: bigint,
+    ): Promise<FsResult03> {
       try {
         requireWritable(err03);
         requireFile(this.core, err03);
         requireFileWrite(this.core, err03);
         let cursor = Number(offset);
-        for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
-          const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
+        for await (
+          const chunk of data as AsyncIterable<Uint8Array | number[]>
+        ) {
+          const bytes = chunk instanceof Uint8Array
+            ? chunk
+            : Uint8Array.from(chunk);
           cursor += await backend.write(this.core.h, bytes, cursor);
         }
         return OK03;
@@ -1079,7 +1152,11 @@ export function makeFilesystem<H>(
         if (isStream(data)) data.drop(); // the guest's writer must not hang
         return {
           kind: "err",
-          value: { kind: e instanceof ComponentException ? (e.payload as { kind: FsErrorCode }).kind : map(e) },
+          value: {
+            kind: e instanceof ComponentException
+              ? (e.payload as { kind: FsErrorCode }).kind
+              : map(e),
+          },
         };
       }
     }
@@ -1089,8 +1166,12 @@ export function makeFilesystem<H>(
         requireWritable(err03);
         requireFile(this.core, err03);
         requireFileWrite(this.core, err03);
-        for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
-          const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
+        for await (
+          const chunk of data as AsyncIterable<Uint8Array | number[]>
+        ) {
+          const bytes = chunk instanceof Uint8Array
+            ? chunk
+            : Uint8Array.from(chunk);
           await backend.append(this.core.h, bytes);
         }
         return OK03;
@@ -1098,12 +1179,20 @@ export function makeFilesystem<H>(
         if (isStream(data)) data.drop();
         return {
           kind: "err",
-          value: { kind: e instanceof ComponentException ? (e.payload as { kind: FsErrorCode }).kind : map(e) },
+          value: {
+            kind: e instanceof ComponentException
+              ? (e.payload as { kind: FsErrorCode }).kind
+              : map(e),
+          },
         };
       }
     }
 
-    advise(_offset: bigint, _length: bigint, _advice: string): MaybeAsync<void> {
+    advise(
+      _offset: bigint,
+      _length: bigint,
+      _advice: string,
+    ): MaybeAsync<void> {
       return g03(() => requireFile(this.core, err03));
     }
 
@@ -1127,7 +1216,10 @@ export function makeFilesystem<H>(
       });
     }
 
-    setTimes(atime: NewTimestampValue, mtime: NewTimestampValue): MaybeAsync<void> {
+    setTimes(
+      atime: NewTimestampValue,
+      mtime: NewTimestampValue,
+    ): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
         // The descriptor's OWN times: which half of the per-descriptor
@@ -1143,7 +1235,9 @@ export function makeFilesystem<H>(
     }
 
     /** tuple<stream<directory-entry>, future<result<_, error-code>>> */
-    readDirectory(): MaybeAsync<[Iterable<DirectoryEntryValue>, Promise<FsResult03>]> {
+    readDirectory(): MaybeAsync<
+      [Iterable<DirectoryEntryValue>, Promise<FsResult03>]
+    > {
       return g03(() => {
         requireDir(this.core, err03);
         return chain(
@@ -1176,7 +1270,10 @@ export function makeFilesystem<H>(
       return g03(() => chain(backend.stat(this.core.h), statValue));
     }
 
-    statAt(pathFlags: PathFlagsValue, path: string): MaybeAsync<DescriptorStatValue> {
+    statAt(
+      pathFlags: PathFlagsValue,
+      path: string,
+    ): MaybeAsync<DescriptorStatValue> {
       return g03(() =>
         chain(
           backend.statAt(
@@ -1261,7 +1358,8 @@ export function makeFilesystem<H>(
             parsePath(path, err03),
             decodeOpen(pathFlags, openFlags, flags),
           ),
-          ({ handle, type }) => new Descriptor03(handle, type, flagsValue(flags)),
+          ({ handle, type }) =>
+            new Descriptor03(handle, type, flagsValue(flags)),
         );
       });
     }
@@ -1269,7 +1367,10 @@ export function makeFilesystem<H>(
     readlinkAt(path: string): MaybeAsync<string> {
       return g03(() => {
         if (backend.readlinkAt === undefined) throw err03("unsupported");
-        return backend.readlinkAt(this.core.h, requireFinal(parsePath(path, err03), err03));
+        return backend.readlinkAt(
+          this.core.h,
+          requireFinal(parsePath(path, err03), err03),
+        );
       });
     }
 
@@ -1285,7 +1386,11 @@ export function makeFilesystem<H>(
       });
     }
 
-    renameAt(oldPath: string, newDescriptor: Descriptor03, newPath: string): MaybeAsync<void> {
+    renameAt(
+      oldPath: string,
+      newDescriptor: Descriptor03,
+      newPath: string,
+    ): MaybeAsync<void> {
       return g03(() => {
         requireWritable(err03);
         // Both ends (see link-at).
@@ -1336,7 +1441,10 @@ export function makeFilesystem<H>(
       return g03(() => chain(backend.identity(this.core.h), hashIdentity));
     }
 
-    metadataHashAt(pathFlags: PathFlagsValue, path: string): MaybeAsync<MetadataHashValue> {
+    metadataHashAt(
+      pathFlags: PathFlagsValue,
+      path: string,
+    ): MaybeAsync<MetadataHashValue> {
       return g03(() =>
         chain(
           backend.identityAt(
@@ -1357,16 +1465,23 @@ export function makeFilesystem<H>(
   // Async backends: mark the 0.2 track's backend-touching methods
   // park-capable on the freshly-minted prototype (module header; embedder-api.md §"The WASI parking kernel").
   if (!backend.isSync) {
-    const proto = Descriptor02.prototype as unknown as Record<string, (...a: never[]) => unknown>;
+    const proto = Descriptor02.prototype as unknown as Record<
+      string,
+      (...a: never[]) => unknown
+    >;
     for (const name of PARKED_02) {
       proto[name] = suspending(proto[name]);
     }
   }
 
   const getDirectories02 = (): [Descriptor02, string][] =>
-    preopens.map(([h, name]) => [new Descriptor02(h, "directory", PREOPEN_FLAGS), name]);
+    preopens.map((
+      [h, name],
+    ) => [new Descriptor02(h, "directory", PREOPEN_FLAGS), name]);
   const getDirectories03 = (): [Descriptor03, string][] =>
-    preopens.map(([h, name]) => [new Descriptor03(h, "directory", PREOPEN_FLAGS), name]);
+    preopens.map((
+      [h, name],
+    ) => [new Descriptor03(h, "directory", PREOPEN_FLAGS), name]);
 
   return {
     imports: {

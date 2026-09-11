@@ -5,7 +5,12 @@
 
 import { assertEq } from "../../runtime/tests/support/asserts.ts";
 import { runSuite } from "../src/mod.ts";
-import { artifactsOf, FULL_RUN_COUNTS, haveFixture, TEST_SUITE_WASM } from "./support.ts";
+import {
+  artifactsOf,
+  FULL_RUN_COUNTS,
+  haveFixture,
+  TEST_SUITE_WASM,
+} from "./support.ts";
 
 function assert(cond: boolean, msg = ""): void {
   if (!cond) throw new Error(msg || "assertion failed");
@@ -13,7 +18,6 @@ function assert(cond: boolean, msg = ""): void {
 
 /** Strip `duration-ms` (nondeterministic wall-clock) for stable comparison,
  * same normalization golden_test.ts applies. */
-// deno-lint-ignore no-explicit-any
 function normalize(line: string): string {
   const v = JSON.parse(line);
   if (typeof v["duration-ms"] === "number") delete v["duration-ms"];

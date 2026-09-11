@@ -5,7 +5,7 @@
 // functions stay in lockstep without copy-paste. Not exported from mod.ts —
 // intra-package only.
 
-import { defineBrand, hasBrand } from "./brands.ts";
+import { defineBrand } from "./brands.ts";
 
 /**
  * Build a mark function `(fn, context?, legacyDescriptor?) => fn` that

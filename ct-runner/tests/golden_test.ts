@@ -9,12 +9,16 @@
 
 import { assertEq } from "../../runtime/tests/support/asserts.ts";
 import { runSuite } from "../src/mod.ts";
-import { artifactsOf, FULL_RUN_COUNTS, haveFixture, TEST_SUITE_WASM } from "./support.ts";
+import {
+  artifactsOf,
+  FULL_RUN_COUNTS,
+  haveFixture,
+  TEST_SUITE_WASM,
+} from "./support.ts";
 
 const ready = await haveFixture(TEST_SUITE_WASM);
 
 /** Strip nondeterministic fields for a byte-stable comparison. */
-// deno-lint-ignore no-explicit-any
 function normalize(line: string): string {
   const v = JSON.parse(line);
   if (v.suite?.["artifact-sha256"]) v.suite["artifact-sha256"] = "<sha256>";

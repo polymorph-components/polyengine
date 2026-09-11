@@ -87,7 +87,9 @@ function makeRandomU64(bytes: (len: bigint) => Uint8Array): () => bigint {
 const DEFAULT_INSECURE_SEED: readonly [bigint, bigint] = [0n, 1n];
 
 /** `wasi:random@0.2` + `@0.3` provider fragment (two track keys). */
-export function random(options: RandomOptions = {}): { imports: Record<string, unknown> } {
+export function random(
+  options: RandomOptions = {},
+): { imports: Record<string, unknown> } {
   const seed = options.insecureSeed ?? DEFAULT_INSECURE_SEED;
   const randomBytes = makeRandomBytes(options.source);
   const randomU64 = makeRandomU64(randomBytes);

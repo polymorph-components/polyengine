@@ -52,13 +52,17 @@ export class FakeFileHandle implements OpfsFileHandle {
   }
 
   createWritable(opts?: { keepExistingData?: boolean }): Promise<OpfsWritable> {
-    let buf = opts?.keepExistingData === true ? this.#data.slice() : new Uint8Array(0);
+    let buf = opts?.keepExistingData === true
+      ? this.#data.slice()
+      : new Uint8Array(0);
     let open = true;
     const requireOpen = (): void => {
       if (!open) throw domError("InvalidStateError", "writable already closed");
     };
     return Promise.resolve({
-      write: (params: { type: "write"; position: number; data: Uint8Array }) => {
+      write: (
+        params: { type: "write"; position: number; data: Uint8Array },
+      ) => {
         requireOpen();
         const end = params.position + params.data.length;
         if (end > buf.length) {
@@ -104,7 +108,9 @@ export class FakeDirectoryHandle implements OpfsDirectoryHandle {
     const existing = this.#children.get(name);
     if (existing !== undefined) {
       if (existing.kind !== "directory") {
-        return Promise.reject(domError("TypeMismatchError", `${name} is a file`));
+        return Promise.reject(
+          domError("TypeMismatchError", `${name} is a file`),
+        );
       }
       return Promise.resolve(existing);
     }
@@ -116,11 +122,16 @@ export class FakeDirectoryHandle implements OpfsDirectoryHandle {
     return Promise.resolve(dir);
   }
 
-  getFileHandle(name: string, opts?: { create?: boolean }): Promise<OpfsFileHandle> {
+  getFileHandle(
+    name: string,
+    opts?: { create?: boolean },
+  ): Promise<OpfsFileHandle> {
     const existing = this.#children.get(name);
     if (existing !== undefined) {
       if (existing.kind !== "file") {
-        return Promise.reject(domError("TypeMismatchError", `${name} is a directory`));
+        return Promise.reject(
+          domError("TypeMismatchError", `${name} is a directory`),
+        );
       }
       return Promise.resolve(existing);
     }
@@ -141,13 +152,17 @@ export class FakeDirectoryHandle implements OpfsDirectoryHandle {
       existing.kind === "directory" && opts?.recursive !== true &&
       existing.childCount() > 0
     ) {
-      return Promise.reject(domError("InvalidModificationError", `${name} not empty`));
+      return Promise.reject(
+        domError("InvalidModificationError", `${name} not empty`),
+      );
     }
     this.#children.delete(name);
     return Promise.resolve();
   }
 
-  async *entries(): AsyncIterable<[string, OpfsDirectoryHandle | OpfsFileHandle]> {
+  async *entries(): AsyncIterable<
+    [string, OpfsDirectoryHandle | OpfsFileHandle]
+  > {
     for (const [name, handle] of this.#children) yield [name, handle];
   }
 

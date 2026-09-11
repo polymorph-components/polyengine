@@ -38,19 +38,22 @@ const componentBytes = await readIfPresent(FIXTURE);
 const shimWasm = await readIfPresent(SHIM_WASM);
 const ready = componentBytes !== null && shimWasm !== null;
 
-// deno-lint-ignore no-explicit-any
 async function instantiateFixture(
   calls?: string[],
   httpOptions?: Parameters<typeof http>[0],
+  // deno-lint-ignore no-explicit-any
 ): Promise<any> {
   const translator = await Translator.create(shimWasm!);
   const { plan, adapters } = translator.translate(componentBytes!);
-  return await instantiate({ plan, componentBytes: componentBytes!, adapters }, {
-    ...http({
-      ...(httpOptions ?? {}),
-      ...(calls === undefined ? {} : { onCall: (c) => calls.push(c) }),
-    }).imports,
-  });
+  return await instantiate(
+    { plan, componentBytes: componentBytes!, adapters },
+    {
+      ...http({
+        ...(httpOptions ?? {}),
+        ...(calls === undefined ? {} : { onCall: (c) => calls.push(c) }),
+      }).imports,
+    },
+  );
 }
 
 function serve(
@@ -61,14 +64,18 @@ function serve(
       hostname: "127.0.0.1",
       port: 0,
       onListen({ port }) {
-        resolve({ authority: `127.0.0.1:${port}`, shutdown: () => server.shutdown() });
+        resolve({
+          authority: `127.0.0.1:${port}`,
+          shutdown: () => server.shutdown(),
+        });
       },
     }, handler);
   });
 }
 
 Deno.test({
-  name: "integration: guest GET through fetch — status, streamed body, driving sequence",
+  name:
+    "integration: guest GET through fetch — status, streamed body, driving sequence",
   ignore: !ready,
   async fn() {
     const server = await serve((req) => {
@@ -78,7 +85,10 @@ Deno.test({
     try {
       const calls: string[] = [];
       const c = await instantiateFixture(calls);
-      const [status, body] = await c.exports.get(server.authority, "/hello") as [
+      const [status, body] = await c.exports.get(
+        server.authority,
+        "/hello",
+      ) as [
         number,
         Uint8Array,
       ];
@@ -86,7 +96,10 @@ Deno.test({
       assertEq(new TextDecoder().decode(body), "hello from the loopback");
       assertTrue(calls.includes("request.new"), "constructor dispatched");
       assertTrue(calls.includes("client.send"), "send dispatched");
-      assertTrue(calls.includes("response.consume-body"), "consume-body dispatched");
+      assertTrue(
+        calls.includes("response.consume-body"),
+        "consume-body dispatched",
+      );
     } finally {
       await server.shutdown();
     }
@@ -94,14 +107,19 @@ Deno.test({
 });
 
 Deno.test({
-  name: "integration: guest POST — a guest-written body stream crosses fetch and echoes back",
+  name:
+    "integration: guest POST — a guest-written body stream crosses fetch and echoes back",
   ignore: !ready,
   async fn() {
     const server = await serve(async (req) => new Response(await req.bytes()));
     try {
       const c = await instantiateFixture();
       const payload = Uint8Array.from({ length: 4096 }, (_, i) => i % 251);
-      const echoed = await c.exports.postEcho(server.authority, "/echo", payload) as Uint8Array;
+      const echoed = await c.exports.postEcho(
+        server.authority,
+        "/echo",
+        payload,
+      ) as Uint8Array;
       assertEq(echoed.length, payload.length);
       assertTrue(
         echoed.every((b, i) => b === payload[i]),
@@ -114,7 +132,8 @@ Deno.test({
 });
 
 Deno.test({
-  name: "integration: a refused dial reaches the guest as the error-code's err case",
+  name:
+    "integration: a refused dial reaches the guest as the error-code's err case",
   ignore: !ready,
   async fn() {
     const probe = await serve(() => new Response("x"));
@@ -130,14 +149,19 @@ Deno.test({
     // result err — which the conventions surface as a ComponentException.
     assertTrue(threw !== undefined, "the guest observed the error");
     assertTrue(
-      String((threw as { payload?: unknown })?.payload ?? threw).includes("ConnectionRefused"),
-      `the error names the refusal, got: ${(threw as { payload?: unknown })?.payload}`,
+      String((threw as { payload?: unknown })?.payload ?? threw).includes(
+        "ConnectionRefused",
+      ),
+      `the error names the refusal, got: ${
+        (threw as { payload?: unknown })?.payload
+      }`,
     );
   },
 });
 
 Deno.test({
-  name: "integration: allowRequest: false denies the guest's request before it reaches fetch",
+  name:
+    "integration: allowRequest: false denies the guest's request before it reaches fetch",
   ignore: !ready,
   async fn() {
     // No server needed: denial happens before dispatch. A live server

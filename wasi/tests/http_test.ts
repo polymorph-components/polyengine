@@ -10,16 +10,21 @@
 
 import { ComponentException } from "@polyengine/protocol";
 import {
-  HTTP_TRACK,
   type ErrorCode,
   type Fields,
   http,
+  HTTP_TRACK,
   type HttpResult,
   type Request,
   type Response,
   type TrailersResult,
 } from "../src/http.ts";
-import { assertEq, assertRejects, assertThrows, assertTrue } from "./asserts.ts";
+import {
+  assertEq,
+  assertRejects,
+  assertThrows,
+  assertTrue,
+} from "./asserts.ts";
 
 const { Fields, Request, RequestOptions, Response, send, imports } = http();
 
@@ -28,13 +33,19 @@ const utf8 = (b: Uint8Array): string => new TextDecoder().decode(b);
 
 function errKind(fn: () => unknown): string {
   const e = assertThrows(fn);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
   return (e as ComponentException<{ kind: string }>).payload.kind;
 }
 
 async function errKindAsync(p: Promise<unknown>): Promise<string> {
   const e = await assertRejects(() => p);
-  assertTrue(e instanceof ComponentException, `expected ComponentException, got ${e}`);
+  assertTrue(
+    e instanceof ComponentException,
+    `expected ComponentException, got ${e}`,
+  );
   return (e as ComponentException<ErrorCode>).payload.kind;
 }
 
@@ -44,7 +55,10 @@ async function collect(stream: AsyncIterable<Uint8Array>): Promise<Uint8Array> {
   return Uint8Array.from(chunks);
 }
 
-const okTrailers: Promise<TrailersResult> = Promise.resolve({ kind: "ok", value: undefined });
+const okTrailers: Promise<TrailersResult> = Promise.resolve({
+  kind: "ok",
+  value: undefined,
+});
 const okRes: Promise<HttpResult> = Promise.resolve({ kind: "ok" });
 
 /** A request aimed at 127.0.0.1:port over plain http. */
@@ -74,7 +88,9 @@ function loopbackRequest(
 
 /** A loopback HTTP server for one test. */
 function serve(
-  handler: (req: globalThis.Request) => globalThis.Response | Promise<globalThis.Response>,
+  handler: (
+    req: globalThis.Request,
+  ) => globalThis.Response | Promise<globalThis.Response>,
 ): Promise<{ port: number; shutdown: () => Promise<void> }> {
   return new Promise((resolve) => {
     const server = Deno.serve({
@@ -110,8 +126,14 @@ Deno.test("http fields: set/append/delete/get-and-delete; from-list validation",
   f.set("b", [text("x")]);
   f.delete("b");
   assertEq(f.has("b"), false);
-  assertEq(errKind(() => Fields.fromList([["bad header", text("v")]])), "invalid-syntax");
-  assertEq(errKind(() => f.set("ok", [text("bad\r\nvalue")])), "invalid-syntax");
+  assertEq(
+    errKind(() => Fields.fromList([["bad header", text("v")]])),
+    "invalid-syntax",
+  );
+  assertEq(
+    errKind(() => f.set("ok", [text("bad\r\nvalue")])),
+    "invalid-syntax",
+  );
 });
 
 Deno.test("http fields: immutability — request views refuse mutation, clone is mutable", () => {
@@ -133,7 +155,12 @@ Deno.test("http fields: immutability — request views refuse mutation, clone is
 // --- request accessors ------------------------------------------------------------
 
 Deno.test("http request: accessor defaults, round trips, and validation", () => {
-  const [request] = Request["new"](new Fields(), undefined, okTrailers, undefined);
+  const [request] = Request["new"](
+    new Fields(),
+    undefined,
+    okTrailers,
+    undefined,
+  );
   assertEq(request.getMethod().kind, "get");
   assertEq(request.getPathWithQuery(), undefined);
   assertEq(request.getScheme(), undefined);
@@ -146,7 +173,9 @@ Deno.test("http request: accessor defaults, round trips, and validation", () => 
   assertEq(request.getScheme()?.kind, "HTTPS");
   request.setAuthority("example.com:8443");
   assertEq(request.getAuthority(), "example.com:8443");
-  assertThrows(() => request.setMethod({ kind: "other", value: "not a token" }));
+  assertThrows(() =>
+    request.setMethod({ kind: "other", value: "not a token" })
+  );
   assertThrows(() => request.setPathWithQuery("/sp ace"));
   assertThrows(() => request.setScheme({ kind: "other", value: "9bad" }));
   request[Symbol.dispose]();
@@ -170,7 +199,9 @@ Deno.test("http send: GET round trip — status, headers, streamed body; transmi
   const server = await serve((req) => {
     assertEq(new URL(req.url).pathname, "/hello");
     assertEq(req.headers.get("x-probe"), "42");
-    return new globalThis.Response("hi there", { headers: { "x-answer": "97" } });
+    return new globalThis.Response("hi there", {
+      headers: { "x-answer": "97" },
+    });
   });
   try {
     const [request, transmitted] = loopbackRequest(server.port, "/hello", {
@@ -190,7 +221,9 @@ Deno.test("http send: GET round trip — status, headers, streamed body; transmi
 });
 
 Deno.test("http send: POST body is transmitted (buffered divergence), echo returns", async () => {
-  const server = await serve(async (req) => new globalThis.Response(await req.bytes()));
+  const server = await serve(async (req) =>
+    new globalThis.Response(await req.bytes())
+  );
   try {
     const [request] = loopbackRequest(server.port, "/echo", {
       method: { kind: "post" },
@@ -211,7 +244,10 @@ Deno.test("http send: POST body is transmitted (buffered divergence), echo retur
 Deno.test("http send: redirects are NOT followed (manual, the wasmtime-parity stance)", async () => {
   const server = await serve((req) =>
     new URL(req.url).pathname === "/from"
-      ? new globalThis.Response(null, { status: 302, headers: { location: "/to" } })
+      ? new globalThis.Response(null, {
+        status: 302,
+        headers: { location: "/to" },
+      })
       : new globalThis.Response("followed?!")
   );
   try {
@@ -247,7 +283,10 @@ Deno.test("http send: request trailers cannot ride fetch — some(trailers) fail
   const server = await serve(() => new globalThis.Response("x"));
   try {
     const [request, transmitted] = loopbackRequest(server.port, "/", {
-      trailers: Promise.resolve<TrailersResult>({ kind: "ok", value: new Fields() }),
+      trailers: Promise.resolve<TrailersResult>({
+        kind: "ok",
+        value: new Fields(),
+      }),
     });
     assertEq(await errKindAsync(send(request)), "internal-error");
     assertEq((await transmitted).kind, "err");
@@ -292,7 +331,11 @@ Deno.test("http timeouts: first-byte timeout errs the body future, not the send"
     request.setPathWithQuery("/");
     const response = await send(request); // headers made it: send succeeds
     const [body, done] = Response.consumeBody(response, okRes);
-    assertEq((await collect(body)).length, 0, "the stream ends without fake data");
+    assertEq(
+      (await collect(body)).length,
+      0,
+      "the stream ends without fake data",
+    );
     const t = await done;
     assertEq(t.kind, "err");
     assertEq(
@@ -325,11 +368,20 @@ Deno.test("http consume-body: a constructed request's body and trailers pass thr
   assertEq(t.kind, "ok");
   assertTrue(t.kind === "ok" && t.value !== undefined, "trailers arrive");
   settleRes({ kind: "ok" });
-  assertEq((await transmitted).kind, "ok", "res settles the transmission future");
+  assertEq(
+    (await transmitted).kind,
+    "ok",
+    "res settles the transmission future",
+  );
 });
 
 Deno.test("http dispose: an unsent request settles its transmission future as err", async () => {
-  const [request, transmitted] = Request["new"](new Fields(), undefined, okTrailers, undefined);
+  const [request, transmitted] = Request["new"](
+    new Fields(),
+    undefined,
+    okTrailers,
+    undefined,
+  );
   request[Symbol.dispose]();
   const t = await transmitted;
   assertEq(t.kind, "err");
@@ -364,9 +416,17 @@ Deno.test("fragment: an embedder that means handler-over-fetch registers `send` 
   // CONTRACT: wasi/src/http.ts:16-20 — handler is deliberately not
   // registered by this fragment; the supported recipe is the embedder
   // merging `send` into its own handler-keyed provider (issue #179).
-  const embedderMerged = { ...imports, [`wasi:http/handler@0.3`]: { handle: send } };
-  const handler = embedderMerged["wasi:http/handler@0.3"] as { handle: unknown };
-  assertTrue(handler.handle === send, "handle IS client.send when the embedder opts in");
+  const embedderMerged = {
+    ...imports,
+    [`wasi:http/handler@0.3`]: { handle: send },
+  };
+  const handler = embedderMerged["wasi:http/handler@0.3"] as {
+    handle: unknown;
+  };
+  assertTrue(
+    handler.handle === send,
+    "handle IS client.send when the embedder opts in",
+  );
 });
 
 // --- allowRequest: name-level egress policy ---------------------------------------
@@ -398,16 +458,19 @@ function stubFetch(impl: typeof fetch): { calls: number; restore: () => void } {
  * call count and the last `Request` seen.
  */
 function fakeTransport(
-  impl: (request: globalThis.Request) => globalThis.Response | Promise<globalThis.Response>,
+  impl: (
+    request: globalThis.Request,
+  ) => globalThis.Response | Promise<globalThis.Response>,
 ): {
   calls: number;
   lastRequest: globalThis.Request | undefined;
   fn: (request: globalThis.Request) => Promise<globalThis.Response>;
 } {
-  const state: { calls: number; lastRequest: globalThis.Request | undefined } = {
-    calls: 0,
-    lastRequest: undefined,
-  };
+  const state: { calls: number; lastRequest: globalThis.Request | undefined } =
+    {
+      calls: 0,
+      lastRequest: undefined,
+    };
   return {
     get calls() {
       return state.calls;
@@ -431,7 +494,11 @@ function fakeTransport(
 function requestWithObservedBody(
   port: number,
   headers: [string, Uint8Array][] = [],
-): { request: Request; transmitted: Promise<HttpResult>; consumed: () => boolean } {
+): {
+  request: Request;
+  transmitted: Promise<HttpResult>;
+  consumed: () => boolean;
+} {
   let consumed = false;
   const contents = (async function* () {
     consumed = true;
@@ -460,7 +527,12 @@ Deno.test("http allowRequest: default (no options) still dispatches — fetch re
   const stub = stubFetch(() => Promise.resolve(new globalThis.Response("ok")));
   try {
     const { Request: R, Fields: F, send: s } = http();
-    const [request] = R["new"](F.fromList([]), undefined, okTrailers, undefined);
+    const [request] = R["new"](
+      F.fromList([]),
+      undefined,
+      okTrailers,
+      undefined,
+    );
     request.setScheme({ kind: "HTTP" });
     request.setAuthority("127.0.0.1:9");
     await s(request);
@@ -472,7 +544,10 @@ Deno.test("http allowRequest: default (no options) still dispatches — fetch re
 
 Deno.test("http allowRequest: explicit true dispatches — transport reached", async () => {
   const transport = fakeTransport(() => new globalThis.Response("ok"));
-  const { Request: R, Fields: F, send: s } = http({ allowRequest: true, fetch: transport.fn });
+  const { Request: R, Fields: F, send: s } = http({
+    allowRequest: true,
+    fetch: transport.fn,
+  });
   const [request] = R["new"](F.fromList([]), undefined, okTrailers, undefined);
   request.setScheme({ kind: "HTTP" });
   request.setAuthority("127.0.0.1:9");
@@ -486,7 +561,11 @@ Deno.test("http allowRequest: false denies with HTTP-request-denied; transport n
   const { request, transmitted } = requestWithObservedBody(9);
   assertEq(await errKindAsync(s(request)), "HTTP-request-denied");
   assertEq((await transmitted).kind, "err");
-  assertEq(transport.calls, 0, "transport never dispatched when allowRequest is false");
+  assertEq(
+    transport.calls,
+    0,
+    "transport never dispatched when allowRequest is false",
+  );
 });
 
 Deno.test("http allowRequest: false does not consume the body stream", async () => {
@@ -504,7 +583,8 @@ Deno.test("http allowRequest: false does not consume the body stream", async () 
 Deno.test("http allowRequest: types/client keys still registered when false", () => {
   const { imports } = http({ allowRequest: false });
   assertTrue(
-    `wasi:http/types@${HTTP_TRACK}` in imports && `wasi:http/client@${HTTP_TRACK}` in imports,
+    `wasi:http/types@${HTTP_TRACK}` in imports &&
+      `wasi:http/client@${HTTP_TRACK}` in imports,
     "types + client keys present even with egress denied",
   );
 });
@@ -519,7 +599,12 @@ Deno.test("http allowRequest: callback observes url/method/headers", async () =>
     },
     fetch: transport.fn,
   });
-  const [request] = R["new"](F.fromList([["x-probe", text("42")]]), undefined, okTrailers, undefined);
+  const [request] = R["new"](
+    F.fromList([["x-probe", text("42")]]),
+    undefined,
+    okTrailers,
+    undefined,
+  );
   request.setMethod({ kind: "post" });
   request.setScheme({ kind: "HTTPS" });
   request.setAuthority("example.com");
@@ -535,8 +620,16 @@ Deno.test("http allowRequest: callback observes url/method/headers", async () =>
 
 Deno.test("http allowRequest: callback returning true dispatches, false denies", async () => {
   const allowedTransport = fakeTransport(() => new globalThis.Response("ok"));
-  const allowed = http({ allowRequest: () => true, fetch: allowedTransport.fn });
-  const [ra] = allowed.Request["new"](allowed.Fields.fromList([]), undefined, okTrailers, undefined);
+  const allowed = http({
+    allowRequest: () => true,
+    fetch: allowedTransport.fn,
+  });
+  const [ra] = allowed.Request["new"](
+    allowed.Fields.fromList([]),
+    undefined,
+    okTrailers,
+    undefined,
+  );
   ra.setScheme({ kind: "HTTP" });
   ra.setAuthority("127.0.0.1:9");
   await allowed.send(ra);
@@ -544,29 +637,58 @@ Deno.test("http allowRequest: callback returning true dispatches, false denies",
 
   const deniedTransport = fakeTransport(() => new globalThis.Response("ok"));
   const denied = http({ allowRequest: () => false, fetch: deniedTransport.fn });
-  const [rd] = denied.Request["new"](denied.Fields.fromList([]), undefined, okTrailers, undefined);
+  const [rd] = denied.Request["new"](
+    denied.Fields.fromList([]),
+    undefined,
+    okTrailers,
+    undefined,
+  );
   rd.setScheme({ kind: "HTTP" });
   rd.setAuthority("127.0.0.1:9");
   assertEq(await errKindAsync(denied.send(rd)), "HTTP-request-denied");
-  assertEq(deniedTransport.calls, 0, "false denies without dispatching the transport");
+  assertEq(
+    deniedTransport.calls,
+    0,
+    "false denies without dispatching the transport",
+  );
 });
 
 Deno.test("http allowRequest: async callback (resolves true/false) both directions work", async () => {
   const allowedTransport = fakeTransport(() => new globalThis.Response("ok"));
-  const allowed = http({ allowRequest: () => Promise.resolve(true), fetch: allowedTransport.fn });
-  const [ra] = allowed.Request["new"](allowed.Fields.fromList([]), undefined, okTrailers, undefined);
+  const allowed = http({
+    allowRequest: () => Promise.resolve(true),
+    fetch: allowedTransport.fn,
+  });
+  const [ra] = allowed.Request["new"](
+    allowed.Fields.fromList([]),
+    undefined,
+    okTrailers,
+    undefined,
+  );
   ra.setScheme({ kind: "HTTP" });
   ra.setAuthority("127.0.0.1:9");
   await allowed.send(ra);
   assertEq(allowedTransport.calls, 1, "async true dispatches");
 
   const deniedTransport = fakeTransport(() => new globalThis.Response("ok"));
-  const denied = http({ allowRequest: () => Promise.resolve(false), fetch: deniedTransport.fn });
-  const [rd] = denied.Request["new"](denied.Fields.fromList([]), undefined, okTrailers, undefined);
+  const denied = http({
+    allowRequest: () => Promise.resolve(false),
+    fetch: deniedTransport.fn,
+  });
+  const [rd] = denied.Request["new"](
+    denied.Fields.fromList([]),
+    undefined,
+    okTrailers,
+    undefined,
+  );
   rd.setScheme({ kind: "HTTP" });
   rd.setAuthority("127.0.0.1:9");
   assertEq(await errKindAsync(denied.send(rd)), "HTTP-request-denied");
-  assertEq(deniedTransport.calls, 0, "async false denies without dispatching the transport");
+  assertEq(
+    deniedTransport.calls,
+    0,
+    "async false denies without dispatching the transport",
+  );
 });
 
 Deno.test("http allowRequest: a throwing callback denies (fail closed); detail names the thrown message", async () => {
@@ -579,13 +701,25 @@ Deno.test("http allowRequest: a throwing callback denies (fail closed); detail n
   });
   const { request } = requestWithObservedBody(9);
   const e = await assertRejects(() => s(request));
-  assertTrue(e instanceof ComponentException, "throws a branded ComponentException");
-  assertEq((e as ComponentException<ErrorCode>).payload.kind, "HTTP-request-denied");
   assertTrue(
-    String((e as ComponentException<ErrorCode>).message).includes("policy blew up"),
+    e instanceof ComponentException,
+    "throws a branded ComponentException",
+  );
+  assertEq(
+    (e as ComponentException<ErrorCode>).payload.kind,
+    "HTTP-request-denied",
+  );
+  assertTrue(
+    String((e as ComponentException<ErrorCode>).message).includes(
+      "policy blew up",
+    ),
     "the ComponentException detail mentions the thrown message",
   );
-  assertEq(transport.calls, 0, "transport never dispatched when the callback throws");
+  assertEq(
+    transport.calls,
+    0,
+    "transport never dispatched when the callback throws",
+  );
 });
 
 Deno.test("http allowRequest: a rejecting async callback denies (fail closed); detail names the rejection", async () => {
@@ -596,13 +730,25 @@ Deno.test("http allowRequest: a rejecting async callback denies (fail closed); d
   });
   const { request } = requestWithObservedBody(9);
   const e = await assertRejects(() => s(request));
-  assertTrue(e instanceof ComponentException, "throws a branded ComponentException");
-  assertEq((e as ComponentException<ErrorCode>).payload.kind, "HTTP-request-denied");
   assertTrue(
-    String((e as ComponentException<ErrorCode>).message).includes("async policy blew up"),
+    e instanceof ComponentException,
+    "throws a branded ComponentException",
+  );
+  assertEq(
+    (e as ComponentException<ErrorCode>).payload.kind,
+    "HTTP-request-denied",
+  );
+  assertTrue(
+    String((e as ComponentException<ErrorCode>).message).includes(
+      "async policy blew up",
+    ),
     "the ComponentException detail mentions the rejection message",
   );
-  assertEq(transport.calls, 0, "transport never dispatched when the async callback rejects");
+  assertEq(
+    transport.calls,
+    0,
+    "transport never dispatched when the async callback rejects",
+  );
 });
 
 // --- fetch: injectable transport ---------------------------------------------------
@@ -637,7 +783,9 @@ Deno.test("http fetch option: request.clone() peeks the body without stealing it
     // Forward the ORIGINAL (not the clone) — proves clone() didn't consume it.
     return new globalThis.Response(await req.arrayBuffer());
   });
-  const { Request: R, Fields: F, Response: Resp, send: s } = http({ fetch: transport.fn });
+  const { Request: R, Fields: F, Response: Resp, send: s } = http({
+    fetch: transport.fn,
+  });
   const [request] = R["new"](
     F.fromList([]),
     (async function* () {
@@ -652,14 +800,23 @@ Deno.test("http fetch option: request.clone() peeks the body without stealing it
   const response = await s(request);
   assertEq(peeked, "peek me");
   const [body] = Resp.consumeBody(response, okRes);
-  assertEq(utf8(await collect(body)), "peek me", "the forwarded request still delivers the body");
+  assertEq(
+    utf8(await collect(body)),
+    "peek me",
+    "the forwarded request still delivers the body",
+  );
 });
 
 Deno.test("http fetch option: a synthesized Response (no network) reaches the guest", async () => {
   const transport = fakeTransport(() =>
-    new globalThis.Response("synthetic body", { status: 201, headers: { "x-synth": "yes" } })
+    new globalThis.Response("synthetic body", {
+      status: 201,
+      headers: { "x-synth": "yes" },
+    })
   );
-  const { Request: R, Fields: F, Response: Resp, send: s } = http({ fetch: transport.fn });
+  const { Request: R, Fields: F, Response: Resp, send: s } = http({
+    fetch: transport.fn,
+  });
   const [request] = R["new"](F.fromList([]), undefined, okTrailers, undefined);
   request.setScheme({ kind: "HTTP" });
   request.setAuthority("example.com");
@@ -672,7 +829,10 @@ Deno.test("http fetch option: a synthesized Response (no network) reaches the gu
 
 Deno.test("http fetch option: a transport throwing a branded ComponentException surfaces that exact payload kind", async () => {
   const transport = fakeTransport(() => {
-    throw new ComponentException<ErrorCode>({ kind: "TLS-alert-received" }, "wasi:http: transport TLS alert");
+    throw new ComponentException<ErrorCode>(
+      { kind: "TLS-alert-received" },
+      "wasi:http: transport TLS alert",
+    );
   });
   const { send: s } = http({ fetch: transport.fn });
   const { request, transmitted } = requestWithObservedBody(9);

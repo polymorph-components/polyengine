@@ -8,7 +8,7 @@
 
 import { assertEquals } from "./assert.ts";
 import * as brands from "../src/brands.ts";
-import { PROTOCOL_GENERATION, ComponentException } from "../src/mod.ts";
+import { ComponentException, PROTOCOL_GENERATION } from "../src/mod.ts";
 
 const EXPECTED: Record<string, symbol> = {
   "polyengine.componentException/1": brands.COMPONENT_EXCEPTION,
@@ -73,7 +73,10 @@ Deno.test("brands are non-enumerable and non-writable on prototypes", () => {
   assertEquals(d?.enumerable, false);
   assertEquals(d?.writable, false);
   // Not inherited by plain objects, and invisible to value walks.
-  assertEquals(Object.keys(new ComponentException(1)).includes("payload"), true);
+  assertEquals(
+    Object.keys(new ComponentException(1)).includes("payload"),
+    true,
+  );
   assertEquals(
     Object.getOwnPropertySymbols(new ComponentException(1)).length,
     0,

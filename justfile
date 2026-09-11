@@ -18,14 +18,18 @@ check: fmt-check lint build test-rust
     cd wasi && deno task check
     cd ct-runner && deno task check
 
-# Runtime formatting; generated files are excluded by runtime/deno.json.
-fmt-check:
-    cd runtime && deno fmt --check
+# The five published packages are formatter- and lint-clean (`deno fmt`,
+# `deno lint`, stock rules). Generated artifacts are excluded per package in
+# its deno.json (runtime's bindgen snapshots and fixture output). harness,
+# examples, and tools are not shipped and are not gated.
+shipped := "protocol runtime translator wasi ct-runner"
 
-# The runtime package is lint-clean (`deno lint`, stock rules; generated
-# artifacts excluded in runtime/deno.json alongside fmt).
+# Fix with `cd <pkg> && deno fmt`.
+fmt-check:
+    for p in {{shipped}}; do (cd $p && deno fmt --check) || exit 1; done
+
 lint:
-    cd runtime && deno lint
+    for p in {{shipped}}; do (cd $p && deno lint) || exit 1; done
 
 # ----- builders ---------------------------------------------------------------
 

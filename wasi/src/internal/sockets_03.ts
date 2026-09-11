@@ -51,8 +51,7 @@ export function sockets03(onCall: (call: string) => void): {
   UdpSocket: UdpSocketClass;
   TcpSocket: TcpSocketClass;
   resolveAddresses: (name: string) => Promise<IpAddress[]>;
-}{
-
+} {
   class UdpSocket {
     #family: IpAddressFamily;
     #conn: DatagramConn | undefined;
@@ -82,7 +81,10 @@ export function sockets03(onCall: (call: string) => void): {
     bind(localAddress: IpSocketAddress): void {
       onCall("udp-socket.bind");
       if (this.#conn !== undefined) {
-        throw componentError({ kind: "invalid-state" }, "udp-socket.bind: already bound");
+        throw componentError(
+          { kind: "invalid-state" },
+          "udp-socket.bind: already bound",
+        );
       }
       if (!isValidAddressFamily(this.#family, localAddress)) {
         throw componentError(
@@ -184,7 +186,10 @@ export function sockets03(onCall: (call: string) => void): {
       this.#remote = undefined;
     }
 
-    async send(data: Uint8Array, remoteAddress: IpSocketAddress | undefined): Promise<void> {
+    async send(
+      data: Uint8Array,
+      remoteAddress: IpSocketAddress | undefined,
+    ): Promise<void> {
       onCall("udp-socket.send");
       if (data.length > MAX_UDP_DATAGRAM_SIZE) {
         throw componentError(
@@ -215,7 +220,10 @@ export function sockets03(onCall: (call: string) => void): {
           const sent = await this.#conn.send(data);
           if (sent !== data.length) {
             throw componentError(
-              { kind: "other", value: `partial send: ${sent} of ${data.length} bytes` },
+              {
+                kind: "other",
+                value: `partial send: ${sent} of ${data.length} bytes`,
+              },
               `udp-socket.send: partial send: ${sent} of ${data.length} bytes`,
             );
           }
@@ -273,7 +281,10 @@ export function sockets03(onCall: (call: string) => void): {
       }
       if (sent !== data.length) {
         throw componentError(
-          { kind: "other", value: `partial send: ${sent} of ${data.length} bytes` },
+          {
+            kind: "other",
+            value: `partial send: ${sent} of ${data.length} bytes`,
+          },
           `udp-socket.send: partial send: ${sent} of ${data.length} bytes`,
         );
       }
@@ -299,7 +310,10 @@ export function sockets03(onCall: (call: string) => void): {
           // connect() as a default destination only — so non-matching
           // sources are dropped here either way (matching what a kernel
           // filter would have done silently).
-          if (this.#remote === undefined || sameSocketAddress(source, this.#remote)) {
+          if (
+            this.#remote === undefined ||
+            sameSocketAddress(source, this.#remote)
+          ) {
             return [payload, source];
           }
         }
@@ -357,7 +371,11 @@ export function sockets03(onCall: (call: string) => void): {
 
     getReceiveBufferSize(): bigint {
       onCall("udp-socket.get-receive-buffer-size");
-      return this.#bufferSize("receive", this.#recvBuffer, this.#conn?.getRecvBufferSize);
+      return this.#bufferSize(
+        "receive",
+        this.#recvBuffer,
+        this.#conn?.getRecvBufferSize,
+      );
     }
 
     setReceiveBufferSize(value: bigint): void {
@@ -374,7 +392,11 @@ export function sockets03(onCall: (call: string) => void): {
 
     getSendBufferSize(): bigint {
       onCall("udp-socket.get-send-buffer-size");
-      return this.#bufferSize("send", this.#sendBuffer, this.#conn?.getSendBufferSize);
+      return this.#bufferSize(
+        "send",
+        this.#sendBuffer,
+        this.#conn?.getSendBufferSize,
+      );
     }
 
     setSendBufferSize(value: bigint): void {
@@ -441,7 +463,9 @@ export function sockets03(onCall: (call: string) => void): {
     }
 
     /** Re-detect per call: `create`'s answer must not outlive a test's stub. */
-    #listen(opts: { transport: "udp"; hostname: string; port: number }): DatagramConn {
+    #listen(
+      opts: { transport: "udp"; hostname: string; port: number },
+    ): DatagramConn {
       const listen = listenDatagram();
       if (listen === undefined) {
         throw componentError(
@@ -455,7 +479,13 @@ export function sockets03(onCall: (call: string) => void): {
 
   class TcpSocket {
     #family: IpAddressFamily;
-    #state: "unbound" | "bound" | "connecting" | "connected" | "listening" | "closed" = "unbound";
+    #state:
+      | "unbound"
+      | "bound"
+      | "connecting"
+      | "connected"
+      | "listening"
+      | "closed" = "unbound";
     #conn: TcpConn | undefined;
     #listener: TcpListener | undefined;
     /** The address `bind` recorded; the OS bind happens at `listen` (header). */
@@ -717,7 +747,10 @@ export function sockets03(onCall: (call: string) => void): {
      */
     send(data: TcpSendSource): Promise<SocketResult> {
       onCall("tcp-socket.send");
-      if (this.#state !== "connected" || this.#sendCalled || this.#conn === undefined) {
+      if (
+        this.#state !== "connected" || this.#sendCalled ||
+        this.#conn === undefined
+      ) {
         dropSendSource(data);
         return Promise.resolve(RESULT_INVALID_STATE);
       }
@@ -731,8 +764,12 @@ export function sockets03(onCall: (call: string) => void): {
         // Guest-side iteration failures (a peer trap while reading the
         // lifted stream) are deliberately NOT caught: they are not socket
         // errors, and the rejection rides the producer-failure channel.
-        for await (const chunk of data as AsyncIterable<Uint8Array | number[]>) {
-          const bytes = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
+        for await (
+          const chunk of data as AsyncIterable<Uint8Array | number[]>
+        ) {
+          const bytes = chunk instanceof Uint8Array
+            ? chunk
+            : Uint8Array.from(chunk);
           let at = 0;
           while (at < bytes.length) {
             let n: number;
@@ -771,7 +808,10 @@ export function sockets03(onCall: (call: string) => void): {
      */
     receive(): [TcpByteStream, Promise<SocketResult>] {
       onCall("tcp-socket.receive");
-      if (this.#state !== "connected" || this.#receiveCalled || this.#conn === undefined) {
+      if (
+        this.#state !== "connected" || this.#receiveCalled ||
+        this.#conn === undefined
+      ) {
         return [[], Promise.resolve(RESULT_INVALID_STATE)];
       }
       this.#receiveCalled = true;
@@ -963,7 +1003,10 @@ export function sockets03(onCall: (call: string) => void): {
       const conn = this.#conn;
       if (this.#state !== "connected" || conn === undefined) return;
       try {
-        conn.setKeepAlive(this.#keepAliveEnabled, Number(this.#keepAliveIdleNs / 1_000_000n));
+        conn.setKeepAlive(
+          this.#keepAliveEnabled,
+          Number(this.#keepAliveIdleNs / 1_000_000n),
+        );
       } catch (e) {
         throw mapPlatformError(e, "tcp-socket (applying keep-alive)");
       }
@@ -1020,7 +1063,10 @@ export function sockets03(onCall: (call: string) => void): {
       payload: NameLookupErrorCode,
       detail: string,
     ): ComponentException<NameLookupErrorCode> =>
-      new ComponentException(payload, `wasi:sockets/ip-name-lookup@0.3: ${detail}`);
+      new ComponentException(
+        payload,
+        `wasi:sockets/ip-name-lookup@0.3: ${detail}`,
+      );
     const toIpAddress = (hostname: string): IpAddress => {
       const parsed = parseNetAddr({ hostname, port: 0 });
       return parsed.kind === "ipv4"
@@ -1028,7 +1074,10 @@ export function sockets03(onCall: (call: string) => void): {
         : { kind: "ipv6", value: parsed.value.address };
     };
     if (name.length === 0) {
-      throw nameErr({ kind: "invalid-argument" }, "resolve-addresses: empty name");
+      throw nameErr(
+        { kind: "invalid-argument" },
+        "resolve-addresses: empty name",
+      );
     }
     // An IP literal is already an answer (and `lookup` would hand it back
     // unchanged anyway — skip the resolver round-trip).
@@ -1051,7 +1100,10 @@ export function sockets03(onCall: (call: string) => void): {
       const code = (e as { code?: unknown } | null)?.code;
       const message = e instanceof Error ? e.message : String(e);
       if (code === "ENOTFOUND" || code === "EAI_NONAME" || code === "ENODATA") {
-        throw nameErr({ kind: "name-unresolvable" }, `resolve-addresses: ${message}`);
+        throw nameErr(
+          { kind: "name-unresolvable" },
+          `resolve-addresses: ${message}`,
+        );
       }
       if (code === "EAI_AGAIN" || code === "ETIMEOUT" || code === "ETIMEDOUT") {
         throw nameErr(
@@ -1063,18 +1115,30 @@ export function sockets03(onCall: (call: string) => void): {
         isDenoError(e, "NotCapable") || isDenoError(e, "PermissionDenied") ||
         code === "EACCES" || code === "EPERM"
       ) {
-        throw nameErr({ kind: "access-denied" }, `resolve-addresses: ${message}`);
+        throw nameErr(
+          { kind: "access-denied" },
+          `resolve-addresses: ${message}`,
+        );
       }
       if (e instanceof TypeError) {
-        throw nameErr({ kind: "invalid-argument" }, `resolve-addresses: ${message}`);
+        throw nameErr(
+          { kind: "invalid-argument" },
+          `resolve-addresses: ${message}`,
+        );
       }
-      throw nameErr({ kind: "other", value: message }, `resolve-addresses: ${message}`);
+      throw nameErr(
+        { kind: "other", value: message },
+        `resolve-addresses: ${message}`,
+      );
     }
     try {
       return answers.map((a) => toIpAddress(a.address));
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      throw nameErr({ kind: "other", value: message }, `resolve-addresses: ${message}`);
+      throw nameErr(
+        { kind: "other", value: message },
+        `resolve-addresses: ${message}`,
+      );
     }
   };
 
@@ -1089,7 +1153,6 @@ export function sockets03(onCall: (call: string) => void): {
   };
 }
 
-
 /** How many bytes one tcp receive read asks the OS for. */
 const TCP_RECEIVE_CHUNK = 16384;
 
@@ -1098,14 +1161,16 @@ const TCP_RECEIVE_CHUNK = 16384;
  * implementors note says to skip them ("Guest code never gets to see
  * these failures"); everything else ends the perpetual stream.
  */
-const TRANSIENT_ACCEPT_FAILURES: ReadonlySet<SocketErrorCode["kind"]> = new Set([
-  "connection-aborted",
-  "connection-reset",
-  "connection-refused",
-  "connection-broken",
-  "remote-unreachable",
-  "timeout",
-]);
+const TRANSIENT_ACCEPT_FAILURES: ReadonlySet<SocketErrorCode["kind"]> = new Set(
+  [
+    "connection-aborted",
+    "connection-reset",
+    "connection-refused",
+    "connection-broken",
+    "remote-unreachable",
+    "timeout",
+  ],
+);
 
 /**
  * Abandon tcp send's input when the operation fails: a lifted `Stream`

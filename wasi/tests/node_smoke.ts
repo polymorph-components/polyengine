@@ -8,7 +8,11 @@
 // resolves the workspace imports into one self-contained ESM file (the
 // recipe body in the justfile).
 
-import { type IpSocketAddress, type SocketResult, sockets } from "../src/sockets.ts";
+import {
+  type IpSocketAddress,
+  type SocketResult,
+  sockets,
+} from "../src/sockets.ts";
 import { http, type TrailersResult } from "../src/http.ts";
 import { filesystemNode } from "../src/filesystem_node.ts";
 
@@ -31,11 +35,17 @@ function errKindOf(e: unknown): string {
 }
 
 function resultErrKind(r: SocketResult, what: string): string {
-  assert(r.kind === "err", `${what}: expected err result, got ${JSON.stringify(r)}`);
+  assert(
+    r.kind === "err",
+    `${what}: expected err result, got ${JSON.stringify(r)}`,
+  );
   return r.kind === "err" ? r.value.kind : "";
 }
 
-const v4 = (address: [number, number, number, number], port: number): IpSocketAddress => ({
+const v4 = (
+  address: [number, number, number, number],
+  port: number,
+): IpSocketAddress => ({
   kind: "ipv4",
   value: { port, address },
 });
@@ -44,9 +54,13 @@ async function* chunksOf(...chunks: number[][]): AsyncGenerator<Uint8Array> {
   for (const c of chunks) yield Uint8Array.from(c);
 }
 
-async function collect(stream: AsyncIterable<Uint8Array> | Iterable<Uint8Array>): Promise<number[]> {
+async function collect(
+  stream: AsyncIterable<Uint8Array> | Iterable<Uint8Array>,
+): Promise<number[]> {
   const out: number[] = [];
-  for await (const chunk of stream as AsyncIterable<Uint8Array>) out.push(...chunk);
+  for await (const chunk of stream as AsyncIterable<Uint8Array>) {
+    out.push(...chunk);
+  }
   return out;
 }
 
@@ -71,7 +85,9 @@ const nodeNet = (globalThis as unknown as {
   ): NodeTestServer;
 };
 
-function echoServer(): Promise<{ addr: IpSocketAddress; close: () => Promise<void> }> {
+function echoServer(): Promise<
+  { addr: IpSocketAddress; close: () => Promise<void> }
+> {
   const server = nodeNet.createServer({ allowHalfOpen: true }, (conn) => {
     conn.on("data", (...args) => conn.write(args[0] as Uint8Array));
     conn.on("end", () => conn.end());
@@ -99,7 +115,10 @@ async function main(): Promise<void> {
     const socket = UdpSocket.create("ipv4");
     socket.bind(v4([127, 0, 0, 1], 0));
     const addr = socket.getLocalAddress(); // same tick as bind — the sync-lookup trick
-    assert(addr.kind === "ipv4" && addr.value.port !== 0, "udp sync bind + get-local-address");
+    assert(
+      addr.kind === "ipv4" && addr.value.port !== 0,
+      "udp sync bind + get-local-address",
+    );
     socket[Symbol.dispose]();
   }
 
@@ -131,7 +150,11 @@ async function main(): Promise<void> {
         await socket.send(new Uint8Array(size), addr);
         assert(false, `udp oversize send (${size}) must fail`);
       } catch (e) {
-        assertEq(errKindOf(e), "datagram-too-large", `udp oversize send (${size})`);
+        assertEq(
+          errKindOf(e),
+          "datagram-too-large",
+          `udp oversize send (${size})`,
+        );
       }
     }
     const other = UdpSocket.create("ipv4");
@@ -148,7 +171,11 @@ async function main(): Promise<void> {
       await parked;
       assert(false, "udp parked receive must settle as err on dispose");
     } catch (e) {
-      assertEq(errKindOf(e), "invalid-state", "udp dispose retires a parked receive");
+      assertEq(
+        errKindOf(e),
+        "invalid-state",
+        "udp dispose retires a parked receive",
+      );
     }
   }
 
@@ -193,7 +220,10 @@ async function main(): Promise<void> {
       assertEq(errKindOf(e), "connection-refused", "tcp refused dial");
     }
     assertEq(
-      resultErrKind(await socket.send(chunksOf([1])), "tcp send after failed dial"),
+      resultErrKind(
+        await socket.send(chunksOf([1])),
+        "tcp send after failed dial",
+      ),
       "invalid-state",
       "tcp send after failed dial",
     );
@@ -202,9 +232,16 @@ async function main(): Promise<void> {
 
   // --- tcp: peer-closed write settles the send future as err -------------------
   {
-    const closer = nodeNet.createServer({ allowHalfOpen: false }, (conn) => conn.destroy());
+    const closer = nodeNet.createServer(
+      { allowHalfOpen: false },
+      (conn) => conn.destroy(),
+    );
     const addr = await new Promise<IpSocketAddress>((resolve) => {
-      closer.listen(0, "127.0.0.1", () => resolve(v4([127, 0, 0, 1], closer.address().port)));
+      closer.listen(
+        0,
+        "127.0.0.1",
+        () => resolve(v4([127, 0, 0, 1], closer.address().port)),
+      );
     });
     const socket = TcpSocket.create("ipv4");
     await socket.connect(addr);
@@ -216,7 +253,8 @@ async function main(): Promise<void> {
     })());
     const kind = resultErrKind(result, "tcp peer-closed write");
     assert(
-      kind === "connection-reset" || kind === "connection-broken" || kind === "invalid-state",
+      kind === "connection-reset" || kind === "connection-broken" ||
+        kind === "invalid-state",
       `tcp peer-closed write: a connection-failure kind, got ${kind}`,
     );
     socket[Symbol.dispose]();
@@ -262,12 +300,20 @@ async function main(): Promise<void> {
     );
 
     const { Fields, Request, Response, send } = http();
-    const okTrailers = Promise.resolve<TrailersResult>({ kind: "ok", value: undefined });
+    const okTrailers = Promise.resolve<TrailersResult>({
+      kind: "ok",
+      value: undefined,
+    });
     const okRes = Promise.resolve<{ kind: "ok" }>({ kind: "ok" });
 
     // GET
     {
-      const [request] = Request["new"](new Fields(), undefined, okTrailers, undefined);
+      const [request] = Request["new"](
+        new Fields(),
+        undefined,
+        okTrailers,
+        undefined,
+      );
       request.setScheme({ kind: "HTTP" });
       request.setAuthority(`127.0.0.1:${port}`);
       request.setPathWithQuery("/hello");
@@ -275,11 +321,17 @@ async function main(): Promise<void> {
       assertEq(response.getStatusCode(), 203, "http GET status");
       const [body] = Response.consumeBody(response, okRes);
       assertEq(
-        new TextDecoder().decode(await (async () => {
-          const out: number[] = [];
-          for await (const c of body as AsyncIterable<Uint8Array>) out.push(...c);
-          return Uint8Array.from(out);
-        })()),
+        new TextDecoder().decode(
+          await (async () => {
+            const out: number[] = [];
+            for await (const c of body as AsyncIterable<Uint8Array>) {
+              out.push(
+                ...c,
+              );
+            }
+            return Uint8Array.from(out);
+          })(),
+        ),
         "hello from node",
         "http GET body",
       );
@@ -322,20 +374,32 @@ async function main(): Promise<void> {
     }).process.getBuiltinModule("node:os") as { tmpdir(): string };
     const dir = nodeFs.mkdtempSync(`${nodeOs.tmpdir()}/polyengine-fs-smoke-`);
     try {
-      const { imports } = filesystemNode({ preopens: { "/": dir }, writable: true });
+      const { imports } = filesystemNode({
+        preopens: { "/": dir },
+        writable: true,
+      });
       const [[root]] = (imports["wasi:filesystem/preopens@0.2"] as {
         // deno-lint-ignore no-explicit-any
         getDirectories(): [any, string][];
       }).getDirectories();
 
       // Sync-ness is the load-bearing claim on real Node: plain values.
-      const f = root.openAt({ symlinkFollow: true }, "smoke.txt", { create: true }, {
+      const f = root.openAt({ symlinkFollow: true }, "smoke.txt", {
+        create: true,
+      }, {
         read: true,
         write: true,
       });
-      assert(!(f instanceof Promise), "fs open-at returns a plain value on node");
+      assert(
+        !(f instanceof Promise),
+        "fs open-at returns a plain value on node",
+      );
       assertEq(f.getType(), "regular-file", "fs get-type");
-      assertEq(Number(f.write(Uint8Array.from([104, 105]), 0n)), 2, "fs positional write");
+      assertEq(
+        Number(f.write(Uint8Array.from([104, 105]), 0n)),
+        2,
+        "fs positional write",
+      );
       const [bytes, eof] = f.read(8n, 0n);
       assertEq([...bytes], [104, 105], "fs positional read");
       assertEq(eof, false, "fs read eof flag");
@@ -344,7 +408,11 @@ async function main(): Promise<void> {
       out.write(Uint8Array.from([33]));
       out.blockingFlush();
       const src = f.readViaStream(0n);
-      assertEq([...src.blockingRead(16n)], [104, 105, 33], "fs via-stream round-trip");
+      assertEq(
+        [...src.blockingRead(16n)],
+        [104, 105, 33],
+        "fs via-stream round-trip",
+      );
 
       const listing = root.readDirectory();
       assertEq(listing.readDirectoryEntry()?.name, "smoke.txt", "fs listing");
@@ -366,7 +434,8 @@ async function main(): Promise<void> {
     }
   }
 
-  const version = (globalThis as unknown as { process: { version: string } }).process.version;
+  const version =
+    (globalThis as unknown as { process: { version: string } }).process.version;
   // --- tcp listen: deferred bind, accept, echo, cancellation -------------------
   {
     const socket = TcpSocket.create("ipv4");
@@ -375,11 +444,16 @@ async function main(): Promise<void> {
     // real dispatch), so the local address is real immediately after.
     const stream = await socket.listen();
     const addr = socket.getLocalAddress();
-    assert(addr.kind === "ipv4" && addr.value.port !== 0, "tcp listen: ephemeral port");
+    assert(
+      addr.kind === "ipv4" && addr.value.port !== 0,
+      "tcp listen: ephemeral port",
+    );
     assert(socket.getIsListening(), "tcp listen: get-is-listening");
 
     const client = (nodeNet as unknown as {
-      connect(o: { host: string; port: number; allowHalfOpen: boolean }): NodeTestSocket & {
+      connect(
+        o: { host: string; port: number; allowHalfOpen: boolean },
+      ): NodeTestSocket & {
         once(event: string, listener: (...args: unknown[]) => void): unknown;
       };
     }).connect({
@@ -418,10 +492,13 @@ async function main(): Promise<void> {
     socket[Symbol.dispose]();
   }
 
-  console.log(`wasi node smoke: OK (udp + tcp + listen + http + fs on ${version})`);
+  console.log(
+    `wasi node smoke: OK (udp + tcp + listen + http + fs on ${version})`,
+  );
 }
 
 main().catch((e) => {
   console.error(String((e as Error)?.stack ?? e));
-  (globalThis as unknown as { process: { exit: (code: number) => void } }).process.exit(1);
+  (globalThis as unknown as { process: { exit: (code: number) => void } })
+    .process.exit(1);
 });
