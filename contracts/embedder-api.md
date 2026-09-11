@@ -304,15 +304,23 @@ leaks (docs/architecture.md §7).
 **Host-implemented** (guest holds handles): the host supplies a class
 implementing the bindgen interface (camelCase methods, statics as static
 members, the WIT constructor as the JS constructor). The runtime owns the
-instance↔rep mapping; when the guest drops its last own handle the runtime calls
-`instance[Symbol.dispose]?.()`. Method `self` is the instance.
+rep→instance registrations; method `self` is the instance. Every time a plain
+host object is passed as `own<R>`, the runtime creates a fresh resource
+registration. Registrations are independent even when they use the same JS
+object as backing data: dropping each one calls `instance[Symbol.dispose]?.()`.
+Sharing or deduplicating the backing data is the host implementation's
+responsibility.
 
-Overlapping host-originated borrows retain the mapping until the last borrowing
-call ends. A guest drop during that interval defers disposal until the final
-borrow ends; the pending-drop instance cannot be passed as own again. A deferred
-disposal error is reported by the last borrowing call, after all its borrow
-mappings are released. An existing call failure remains primary; results that
-cannot be delivered because cleanup failed are released rather than abandoned.
+Passing an existing guest-resource wrapper as `own<R>` is different: it
+transfers that one resource and invalidates the wrapper; it does not create an
+independent resource. Canonical handle lender rules continue to protect borrows
+of such concrete resources from transfer or destruction while lent.
+
+Each host-originated `borrow<R>` of a plain host object gets a fresh,
+call-scoped registration, independent of other borrows and owns backed by that
+object. Ending that scope removes only its temporary registration and never
+disposes the object. Cleanup still releases every temporary mapping after the
+call, including failure paths.
 
 **Constructors are synchronous** (a JS constructor cannot await). A guest
 constructor that does not complete synchronously raises a named error rather
@@ -325,7 +333,7 @@ deferred until demanded.
 | host receives `own<R>`    | new instance; host owns it (drop/`using`)     | the host's own instance; the guest's handle is gone; no dispose call |
 | host receives `borrow<R>` | valid only during the call (retention throws) | the host's own instance; scoping is guest-side bookkeeping           |
 | host passes `own<R>`      | wrapper invalidated (transferred)             | instance registered; guest owns the handle                           |
-| host passes `borrow<R>`   | wrapper stays valid                           | an unregistered instance gets a rep for the call's duration          |
+| host passes `borrow<R>`   | wrapper stays valid                           | every borrow gets a fresh rep for that call's duration               |
 
 ### Pattern (non-normative): binding platform classes directly
 

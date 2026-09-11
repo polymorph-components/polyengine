@@ -10,7 +10,7 @@
 // | host receives own<R>    | new wrapper (host owns)      | instance back, ownership released, no dispose |
 // | host receives borrow<R> | wrapper valid for the call   | instance, mapping kept    |
 // | host passes own<R>      | wrapper invalidated          | instance registered       |
-// | host passes borrow<R>   | wrapper stays valid          | rep reused/allocated      |
+// | host passes borrow<R>   | wrapper stays valid          | call-scoped registration  |
 
 import type { ResourceTypeInfo, ValType } from "../cabi/types.ts";
 import { defineRealmLocal, RESOURCE_STATE } from "@polyengine/protocol";
@@ -346,25 +346,8 @@ export function buildGuestResourceClass(
       let rep: unknown;
       try {
         rep = spec.ctor(...lowered);
-      } catch (e) {
-        try {
-          release();
-        } catch {
-          // The original error wins; a secondary failure of the unwind is
-          // not the story.
-        }
-        throw e;
-      }
-      try {
+      } finally {
         release();
-      } catch (e) {
-        try {
-          if (typeof rep === "number") hostDtorCall(rt, rep);
-        } catch {
-          // The original error wins; a secondary failure of the unwind is
-          // not the story.
-        }
-        throw e;
       }
       if (rep !== null && typeof rep === "object" && "then" in rep) {
         throw new TypeError(
@@ -458,85 +441,52 @@ export function makeWrapper(
 // ---------------------------------------------------------------------------
 
 /**
- * Runtime-owned instance <-> rep mapping for a host-implemented resource.
+ * Runtime-owned rep -> instance mapping for a host-implemented resource.
  *
- * Strongly retain the instance while guest-owned or borrowed by any host-
- * originated call. Returning own releases ownership, not outstanding borrows.
- * A guest drop defers disposal until all borrows release.
- * @internal — runtime-owned instance<->rep mapping; hosts supply a class, not
- * a registry.
+ * Each host-originated own is a fresh resource registration, even when two
+ * registrations use the same JS object as backing data. Host-originated
+ * borrows are likewise fresh, call-scoped registrations: object identity
+ * cannot identify which (if any) independent own resource is being borrowed.
+ *
+ * Guest-originated borrows do carry the rep of a concrete own resource. Their
+ * lifetime is protected by the canonical handle's lender bookkeeping before
+ * this registry is consulted (definitions.py:1482-1496, 2295-2311).
+ * @internal — hosts supply a class, not a registry.
  */
 export class HostResourceRegistry {
-  readonly #byRep = new Map<
-    number,
-    { instance: object; owns: boolean; borrows: number; pendingDrop: boolean }
-  >();
-  readonly #byInstance = new WeakMap<object, number>();
+  readonly #byRep = new Map<number, { instance: object; owns: boolean }>();
   #next = 1;
 
   constructor(readonly className: string) {}
 
-  #repFor(instance: unknown): number {
+  #register(instance: unknown, owns: boolean): number {
     if (instance === null || typeof instance !== "object") {
       throw new TypeError(
         `${this.className}: expected a class instance, got ${typeof instance}`,
       );
     }
-    const held = this.#byInstance.get(instance);
-    if (held !== undefined && this.#byRep.has(held)) return held;
     const rep = this.#next++;
-    this.#byRep.set(rep, {
-      instance,
-      owns: false,
-      borrows: 0,
-      pendingDrop: false,
-    });
-    this.#byInstance.set(instance, rep);
+    this.#byRep.set(rep, { instance, owns });
     return rep;
   }
 
-  /** The host is passing an own to the guest: retain until release or drop. */
+  /** Register one fresh resource whose ownership is transferred to the guest. */
   repFor(instance: unknown): number {
-    const rep = this.#repFor(instance);
-    const entry = this.#byRep.get(rep)!;
-    if (entry.pendingDrop) {
-      throw new InvalidHandleError(
-        `${this.className}: cannot transfer an instance pending drop as own`,
-      );
-    }
-    entry.owns = true;
-    return rep;
+    return this.#register(instance, true);
   }
 
-  /** Retain a mapping for every overlapping call, independently of ownership. */
+  /** Register a fresh mapping whose lifetime is exactly one lowering scope. */
   borrowFor(instance: unknown): { rep: number; release: () => void } {
-    const rep = this.#repFor(instance);
-    const entry = this.#byRep.get(rep)!;
-    entry.borrows += 1;
+    const rep = this.#register(instance, false);
     let released = false;
     return {
       rep,
       release: () => {
         if (released) return;
         released = true;
-        entry.borrows -= 1;
-        if (entry.borrows === 0 && !entry.owns) {
-          this.#byRep.delete(rep);
-          if (entry.pendingDrop) {
-            entry.pendingDrop = false;
-            (entry.instance as { [Symbol.dispose]?: () => void })
-              [Symbol.dispose]?.();
-          }
-        }
+        this.#byRep.delete(rep);
       },
     };
-  }
-
-  /** Is this instance already registered with a live rep? */
-  hasInstance(instance: unknown): boolean {
-    if (instance === null || typeof instance !== "object") return false;
-    const held = this.#byInstance.get(instance);
-    return held !== undefined && this.#byRep.has(held);
   }
 
   /** Is `rep` live? Diagnostics and white-box tests. */
@@ -556,35 +506,24 @@ export class HostResourceRegistry {
   }
 
   /**
-   * Return the host's instance without disposal. Keep its mapping while any
-   * host-originated borrow remains, even though guest ownership has ended.
+   * Return the host's instance without disposal, completing this registration's
+   * ownership transfer. Other registrations of the same object are unrelated.
    */
   release(rep: number): object {
     const inst = this.lookup(rep);
-    const entry = this.#byRep.get(rep)!;
-    entry.owns = false;
-    if (entry.borrows === 0) this.#byRep.delete(rep);
+    this.#byRep.delete(rep);
     return inst;
   }
 
-  /**
-   * Guest drop: dispose now or after the last host-originated borrow.
-   * Pending disposal prevents re-transfer as own; the final release reports
-   * any disposal failure after removing the mapping.
-   */
+  /** Guest drop: dispose exactly this owning registration. */
   dtor(rep: number): void {
     const entry = this.#byRep.get(rep);
     if (entry === undefined || !entry.owns) return;
-    if (entry.borrows > 0) {
-      entry.owns = false;
-      entry.pendingDrop = true;
-      return;
-    }
-    const inst = this.release(rep);
-    (inst as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
+    this.#byRep.delete(rep);
+    (entry.instance as { [Symbol.dispose]?: () => void })[Symbol.dispose]?.();
   }
 
-  /** Retained mapping count, not handle count; diagnostics and tests. */
+  /** Live registration count; diagnostics and tests. */
   get liveCount(): number {
     return this.#byRep.size;
   }
