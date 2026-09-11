@@ -1,0 +1,36 @@
+;; A receiving guest which performs a real canonical stream/future read.
+;; Transfer must be refused before these exports are entered when the shared
+;; readable end is busy.
+(component
+  (type $s (stream u8))
+  (type $f (future u8))
+  (core module $mem (memory (export "memory") 1))
+  (core instance $memi (instantiate $mem))
+  (canon stream.read $s (memory $memi "memory") async (core func $sr))
+  (canon future.read $f (memory $memi "memory") async (core func $fr))
+  (core module $m
+    (import "" "memory" (memory 1))
+    (import "" "sr" (func $sr (param i32 i32 i32) (result i32)))
+    (import "" "fr" (func $fr (param i32 i32) (result i32)))
+    (func (export "pass") (param i32) (result i32) local.get 0)
+    (func (export "ping") (result i32) i32.const 42)
+    (func (export "stream-read") (param i32) (result i32)
+      (drop (call $sr (local.get 0) (i32.const 0) (i32.const 1)))
+      (i32.const 0))
+    (func (export "future-read") (param i32) (result i32)
+      (drop (call $fr (local.get 0) (i32.const 0)))
+      (i32.const 0)))
+  (core instance $i (instantiate $m (with "" (instance
+    (export "memory" (memory $memi "memory"))
+    (export "sr" (func $sr))
+    (export "fr" (func $fr))))))
+  (func (export "pass-stream") (param "s" $s) (result $s)
+    (canon lift (core func $i "pass")))
+  (func (export "pass-future") (param "f" $f) (result $f)
+    (canon lift (core func $i "pass")))
+  (func (export "read-stream") (param "s" $s) (result u32)
+    (canon lift (core func $i "stream-read")))
+  (func (export "read-future") (param "f" $f) (result u32)
+    (canon lift (core func $i "future-read")))
+  (func (export "ping") (result u32)
+    (canon lift (core func $i "ping"))))

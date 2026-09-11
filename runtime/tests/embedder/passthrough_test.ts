@@ -348,13 +348,12 @@ Deno.test({
 
 Deno.test({
   name:
-    "deadlock-verdict suppression: a Future read memoized BEFORE the transfer still resolves",
+    "deadlock-verdict suppression: a Future read memoized before transfer preserves the read on refusal",
   ignore: false,
   fn: async () => {
-    // The read genuinely happened while the host owned the end; only reads
-    // STARTED after the transfer are refused. Modelled on a LIFTED future
-    // (the host holds the readable end) with a guest-shaped write completing
-    // the rendezvous.
+    // The read genuinely started while the host owned the end. Transfer is
+    // refused while it is busy, but the memoized read remains live and may be
+    // observed repeatedly after its guest-shaped peer write completes.
     const codec = {
       element: { kind: "u32" } as ValType,
       toHost: (v: ComponentValue) => v as number,
@@ -369,7 +368,13 @@ Deno.test({
     // `Promise.resolve(f)` would adopt the thenable a microtask later, i.e.
     // after `takeValue()`.
     const pending = new Promise<number>((res, rej) => f.then(res, rej));
-    f.takeValue();
+    let transferError: unknown;
+    try {
+      f.takeValue();
+    } catch (e) {
+      transferError = e;
+    }
+    assertEq(transferError instanceof TypeError, true);
 
     // The guest delivers the value into the parked read.
     let progress = 0;
@@ -387,7 +392,8 @@ Deno.test({
       src as never,
       () => {},
     );
-    assertEq(await pending, 7, "the pre-transfer read resolves");
+    assertEq(await pending, 7);
+    assertEq(await f, 7, "the completed read remains memoized");
   },
 });
 

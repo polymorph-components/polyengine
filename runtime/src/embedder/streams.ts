@@ -16,9 +16,11 @@ import {
   type HostFuture,
   hostFuture,
   hostFutureFor,
+  hostFutureReadableState,
   type HostStream,
   hostStream,
   hostStreamFor,
+  hostStreamReadableBusy,
 } from "../exec/host_streams.ts";
 import {
   abandonReasonOf,
@@ -170,6 +172,7 @@ export class Stream<T> implements ProtocolStream<T> {
   #dropped = false;
   /** Waiters parked in `Stream.create()` until an element type is known. */
   #binders: (() => void)[] = [];
+  #boundListeners: (() => void)[] = [];
 
   private constructor(host: HostStream<T> | null, codec: ElemCodec<T> | null) {
     this.#host = host;
@@ -207,15 +210,22 @@ export class Stream<T> implements ProtocolStream<T> {
     this.#codec = codec;
     this.#host = hostStream<T>(codec.element);
     publishHostStream(this, this.#host);
+    if (this.#dropped) this.#host.readable.drop();
     const waiters = this.#binders;
     this.#binders = [];
     for (const w of waiters) w();
+    for (const listener of this.#boundListeners) listener();
   }
 
   /** @internal — resolve once this handle has a shared object. */
   whenBound(): Promise<void> {
-    if (this.#host !== null) return Promise.resolve();
+    if (this.#host !== null || this.#dropped) return Promise.resolve();
     return new Promise<void>((r) => this.#binders.push(r));
+  }
+
+  /** @internal — StreamWriter installs one stable lazy-binding hook. */
+  onBound(listener: () => void): void {
+    this.#boundListeners.push(listener);
   }
 
   /** @internal */
@@ -223,8 +233,30 @@ export class Stream<T> implements ProtocolStream<T> {
     return this.#host !== null;
   }
 
+  /** @internal */
+  get dropped(): boolean {
+    return this.#dropped;
+  }
+
   /** @internal — the shared value to hand to a lowering site. */
   takeValue(codec: ElemCodec<T>): ComponentValue {
+    if (this.#dropped) {
+      throw new TypeError(
+        "this Stream has been dropped and cannot be passed to a guest",
+      );
+    }
+    // CONTRACT: transfer is the host spelling of lift_async_value's IDLE
+    // precondition (definitions.py:1504-1511). Check the cached low-level
+    // wrapper so aliases/round trips cannot bypass it.
+    if (
+      this.#host !== null &&
+      hostStreamReadableBusy(this.#host as HostStream<unknown>)
+    ) {
+      throw new TypeError(
+        "this Stream's readable end has a read in flight; await it or " +
+          "cancelRead() before passing the stream to a guest",
+      );
+    }
     this.bindElement(codec);
     if (this.#consumed) {
       throw new TypeError(
@@ -262,13 +294,42 @@ export class Stream<T> implements ProtocolStream<T> {
   }
 
   /** Low-level read: up to `max` elements; an empty chunk means end-of-stream. */
-  async read(max: number): Promise<Chunk<T>> {
-    const host = this.#require();
+  read(max: number): Promise<Chunk<T>> {
+    let host: HostStream<T>;
+    try {
+      host = this.#require();
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    if (hostStreamReadableBusy(host as HostStream<unknown>)) {
+      throw new TypeError(
+        "a read is already in flight on this stream's readable end; " +
+          "await it or cancelRead() first",
+      );
+    }
     const where = this.#codec?.where ?? "stream read";
-    throwIfFailed(host.value, where);
-    const raw = await host.readable.read(max) as unknown as
-      | ComponentValue[]
-      | Uint8Array;
+    try {
+      throwIfFailed(host.value, where);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    let pending: Promise<T[]>;
+    try {
+      pending = host.readable.read(max);
+    } catch (e) {
+      // Only the busy exclusion above is synchronously observable. Capacity
+      // and other issuance failures retain the Promise-shaped API.
+      return Promise.reject(e);
+    }
+    return this.#finishRead(pending, host, where);
+  }
+
+  async #finishRead(
+    pending: Promise<T[]>,
+    host: HostStream<T>,
+    where: string,
+  ): Promise<Chunk<T>> {
+    const raw = await pending as unknown as ComponentValue[] | Uint8Array;
     // An empty chunk normally means clean end-of-stream; when the peer's
     // instance trapped it means the retirement walk settled us — reject
     // instead of faking EOS (§"Streams and futures"). A non-empty chunk was really
@@ -299,15 +360,45 @@ export class Stream<T> implements ProtocolStream<T> {
    * already passed to a guest both throw, as does a
    * non-`u8` element type.
    */
-  async readDirect(
+  readDirect(
     consume: (src: DirectSource) => DirectVerdict,
   ): Promise<number> {
-    const host = this.#require();
+    let host: HostStream<T>;
+    try {
+      host = this.#require();
+      requireU8Direct(this.#codec, "readDirect");
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    if (hostStreamReadableBusy(host as HostStream<unknown>)) {
+      throw new TypeError(
+        "a read is already in flight on this stream's readable end; " +
+          "await it or cancelRead() first",
+      );
+    }
     const where = this.#codec?.where ?? "stream read";
-    throwIfFailed(host.value, where);
-    requireU8Direct(this.#codec, "readDirect");
+    try {
+      throwIfFailed(host.value, where);
+    } catch (e) {
+      return Promise.reject(e);
+    }
     const info: DirectSessionInfo = { endedByVerdict: false };
-    const n = await host.readable.readDirect(consume, info);
+    let pending: Promise<number>;
+    try {
+      pending = host.readable.readDirect(consume, info);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+    return this.#finishReadDirect(pending, info, host, where);
+  }
+
+  async #finishReadDirect(
+    pending: Promise<number>,
+    info: DirectSessionInfo,
+    host: HostStream<T>,
+    where: string,
+  ): Promise<number> {
+    const n = await pending;
     // Preserve a callback-completed result. Otherwise report peer poisoning
     // with the acknowledged byte count, not a clean session end.
     if (!info.endedByVerdict) {
@@ -345,9 +436,17 @@ export class Stream<T> implements ProtocolStream<T> {
   drop(): void {
     if (this.#dropped) return;
     this.#dropped = true;
+    const waiters = this.#binders;
+    this.#binders = [];
+    for (const w of waiters) w();
+    for (const listener of this.#boundListeners) listener();
     // Both ends of a host wrapper name the same shared object; dropping once
     // is enough (`SharedStreamImpl.drop` is idempotent).
-    this.#host?.readable.drop();
+    try {
+      this.#host?.readable.drop();
+    } catch {
+      // Pump failures remain recorded; public disposal is total and silent.
+    }
   }
 
   /**
@@ -396,12 +495,23 @@ export class Stream<T> implements ProtocolStream<T> {
 /** How many elements a convenience read asks for at a time. */
 const READ_CHUNK = 4096;
 
+interface WriterOperation {
+  cancelled: boolean;
+  lowStarted: boolean;
+  started?: boolean;
+  run(op: WriterOperation): Promise<number>;
+  resolve(n: number): void;
+  reject(error: unknown): void;
+}
+
 /** Writer half of `Stream.create()`. */
 export class StreamWriter<T> implements ProtocolStreamWriter<T> {
   #stream: Stream<T>;
+  #active: WriterOperation | null = null;
 
   constructor(stream: Stream<T>) {
     this.#stream = stream;
+    stream.onBound(() => this.#launch());
     // realm boundary realm-local pill (see Stream's constructor above for rationale).
     defineRealmLocal(this);
   }
@@ -417,35 +527,91 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
    * window is misuse. Plain-array chunks are lowered (copied) up front.
    */
   write(values: Chunk<T>): Promise<number> {
-    return this.#write(values, false);
+    return this.#start(() => this.#write(values, false));
   }
 
-  async #write(values: Chunk<T>, all: boolean): Promise<number> {
-    await this.#stream.whenBound();
-    const host = hostOf(this.#stream);
-    const where = this.#stream.codec?.where ?? "stream write";
-    throwIfFailed(host.value, where);
+  #start(run: (op: WriterOperation) => Promise<number>): Promise<number> {
+    if (this.#active !== null) {
+      throw new TypeError(
+        "a write is already in flight on this stream's writable end; " +
+          "await it or cancelWrite() first",
+      );
+    }
+    let resolve!: (n: number) => void;
+    let reject!: (e: unknown) => void;
+    const promise = new Promise<number>((res, rej) => {
+      resolve = res;
+      reject = rej;
+    });
+    const op: WriterOperation = {
+      cancelled: false,
+      lowStarted: false,
+      run,
+      resolve,
+      reject,
+    };
+    this.#active = op;
+    this.#launch();
+    return promise;
+  }
+
+  #launch(): void {
+    const op = this.#active;
+    if (op === null || op.started) return;
+    if (this.#stream.dropped) return this.#resolve(op, 0);
+    if (!this.#stream.bound) return;
+    op.started = true;
+    void op.run(op).then(
+      (n) => this.#resolve(op, n),
+      (e) => this.#reject(op, e),
+    );
+  }
+
+  async #write(
+    values: Chunk<T>,
+    all: boolean,
+  ): Promise<number> {
+    const op = this.#active!;
     const codec = this.#stream.codec!;
+    const host = hostOf(this.#stream);
+    const where = codec.where ?? "stream write";
+    throwIfFailed(host.value, where);
     const lowered = packChunk(values, codec);
+    if (op.cancelled) {
+      releaseUntaken(lowered, 0, codec);
+      return 0;
+    }
     const info = codec.release === undefined ? undefined : { progress: 0 };
+    op.lowStarted = true;
     let n: number;
     try {
       n = await host.writable[all ? "writeAll" : "write"](
         lowered as unknown as T[],
         info,
       );
-      // Full takes completed before a later peer fault and keep their result.
       if (n < values.length) throwIfPeerTrapped(host.value, where, n);
     } catch (e) {
       try {
         releaseUntaken(lowered, info?.progress ?? 0, codec);
       } catch {
-        // Cleanup attempted every tail element; preserve the write failure.
+        // Preserve the operation failure after attempting every release.
       }
       throw e;
     }
+    // Keep successful cleanup outside the operation catch: if it throws,
+    // each untaken resource has still been attempted exactly once.
     releaseUntaken(lowered, n, codec);
     return n;
+  }
+
+  #resolve(op: WriterOperation, n: number): void {
+    if (this.#active === op) this.#active = null;
+    op.resolve(n);
+  }
+
+  #reject(op: WriterOperation, error: unknown): void {
+    if (this.#active === op) this.#active = null;
+    op.reject(error);
   }
 
   /**
@@ -471,36 +637,40 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
    * `Stream.create()` writer has no element type until the lowering site
    * binds one — and then requires `u8`.
    */
-  async writeDirect(
+  writeDirect(
     produce: (dest: DirectDestination) => DirectVerdict,
   ): Promise<number> {
-    await this.#stream.whenBound();
-    const host = hostOf(this.#stream);
-    const where = this.#stream.codec?.where ?? "stream write";
-    throwIfFailed(host.value, where);
-    requireU8Direct(this.#stream.codec, "writeDirect");
-    const info: DirectSessionInfo = { endedByVerdict: false };
-    const n = await host.writable.writeDirect(produce, info);
-    // Callback completion survives a later peer trap; other endings report
-    // poisoning with the acknowledged byte count.
-    if (!info.endedByVerdict) throwIfPeerTrapped(host.value, where, n);
-    return n;
+    return this.#start(async (op) => {
+      const host = hostOf(this.#stream);
+      const where = this.#stream.codec?.where ?? "stream write";
+      throwIfFailed(host.value, where);
+      requireU8Direct(this.#stream.codec, "writeDirect");
+      if (op.cancelled) return 0;
+      const info: DirectSessionInfo = { endedByVerdict: false };
+      op.lowStarted = true;
+      const n = await host.writable.writeDirect(produce, info);
+      if (!info.endedByVerdict) throwIfPeerTrapped(host.value, where, n);
+      return n;
+    });
   }
 
   /** Offer values until all are taken or the reader goes away. */
   writeAll(values: Chunk<T>): Promise<number> {
-    return this.#write(values, true);
+    return this.#start(() => this.#write(values, true));
   }
 
   cancelWrite(): void {
-    if (!this.#stream.bound) return;
-    hostOf(this.#stream).writable.cancelWrite();
+    const op = this.#active;
+    if (op === null) return;
+    op.cancelled = true;
+    if (op.lowStarted) hostOf(this.#stream).writable.cancelWrite();
+    else if (!op.started) this.#resolve(op, 0);
   }
 
   /** End-of-stream. */
   async close(): Promise<void> {
     await this.#stream.whenBound();
-    hostOf(this.#stream).writable.drop();
+    if (this.#stream.bound) hostOf(this.#stream).writable.drop();
   }
 }
 
@@ -537,6 +707,12 @@ export class Future<T> implements ProtocolFuture<T> {
   #consumed = false;
   #dropped = false;
   #settled: Promise<T> | null = null;
+  /** Low-level read installed synchronously during deferred adoption. */
+  #adoptedRead:
+    | Promise<Awaited<ReturnType<HostFuture<T>["readResult"]>>>
+    | null = null;
+  /** Await has started but its low-level read may still be behind #hostP. */
+  #reading = false;
 
   private constructor(
     host: HostFuture<T> | null,
@@ -592,6 +768,13 @@ export class Future<T> implements ProtocolFuture<T> {
   /** @internal */
   adopt(h: HostFuture<T>): void {
     this.#host = h;
+    if (this.#reading && this.#adoptedRead === null) {
+      try {
+        this.#adoptedRead = h.readResult();
+      } catch (e) {
+        this.#adoptedRead = Promise.reject(e);
+      }
+    }
   }
 
   /** @internal */
@@ -604,6 +787,22 @@ export class Future<T> implements ProtocolFuture<T> {
     if (this.#consumed) {
       throw new TypeError(
         "this Future handle has already been passed to a guest",
+      );
+    }
+    const state = hostFutureReadableState(
+      this.#host as HostFuture<unknown>,
+    );
+    if (this.#reading) {
+      throw new TypeError(
+        "this Future's readable end has an operation in flight; await or " +
+          "cancel it before passing the future to a guest",
+      );
+    }
+    if (state !== "idle") {
+      throw new TypeError(
+        state === "busy"
+          ? "this Future's readable end has an operation in flight; await or cancel it before passing the future to a guest"
+          : "this Future's value has already been consumed and cannot be passed to a guest again",
       );
     }
     this.#consumed = true;
@@ -622,24 +821,35 @@ export class Future<T> implements ProtocolFuture<T> {
         ),
       );
     }
-    this.#settled ??= (async () => {
-      const host = await this.#hostP;
-      let outcome: Awaited<ReturnType<HostFuture<T>["readResult"]>>;
+    if (this.#settled !== null) return this.#settled;
+    // Reserve before awaiting deferred materialization. takeValue() observes
+    // this initiation window even when #hostP has just adopted a host end.
+    this.#reading = true;
+    if (this.#host !== null) {
+      // Do not cross a microtask for an already materialized future: aliases
+      // consult the shared wrapper's busy state synchronously.
+      const host = this.#host;
       try {
-        outcome = await host.readResult();
+        this.#settled = this.#finishRead(host, host.readResult());
       } catch (e) {
-        // Only replace the trap manufactured by producer-failure abandonment.
-        // A distinct read/pump/busy failure remains primary even if the
-        // producer failure happens to be recorded before this continuation.
-        const failure = producerFailures.get(host.value as object);
-        if (
-          failure !== undefined && abandonReasonOf(host.value) === failure &&
-          typeof e === "object" && e !== null &&
-          (e as { cause?: unknown }).cause === failure
-        ) throw failure;
+        this.#reading = false;
         throw e;
       }
-      const { value, result } = outcome;
+    } else {
+      this.#settled = this.#hostP.then((host) =>
+        this.#finishRead(host, this.#adoptedRead ?? host.readResult())
+      );
+    }
+    this.#settled = this.#settled.finally(() => this.#reading = false);
+    return this.#settled;
+  }
+
+  async #finishRead(
+    host: HostFuture<T>,
+    pending: Promise<Awaited<ReturnType<HostFuture<T>["readResult"]>>>,
+  ): Promise<T> {
+    try {
+      const { value, result } = await pending;
       if (result !== CopyResult.COMPLETED) {
         // Producer failure and peer poisoning both outrank the ordinary
         // cancelled/dropped outcome; throwIfFailed checks them in that order.
@@ -651,8 +861,16 @@ export class Future<T> implements ProtocolFuture<T> {
         );
       }
       return this.#codec.toHost(value as ComponentValue);
-    })();
-    return this.#settled;
+    } catch (e) {
+      // Only replace the trap manufactured by producer-failure abandonment.
+      const failure = producerFailures.get(host.value as object);
+      if (
+        failure !== undefined && abandonReasonOf(host.value) === failure &&
+        typeof e === "object" && e !== null &&
+        (e as { cause?: unknown }).cause === failure
+      ) throw failure;
+      throw e;
+    }
   }
 
   then<R1 = T, R2 = never>(
