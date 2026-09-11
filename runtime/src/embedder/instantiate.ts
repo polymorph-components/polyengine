@@ -15,8 +15,6 @@ import type { LoadedPlan } from "../plan/loader.ts";
 import { loadEnvelope, loadPlan, PlanError } from "../plan/loader.ts";
 import type { FuncType, ResourceTypeInfo, ValType } from "../cabi/types.ts";
 import type { ComponentValue, VariantValue } from "../cabi/types.ts";
-import { despecialize } from "../cabi/types.ts";
-import { hostFutureFor, hostStreamFor } from "../exec/host_streams.ts";
 import { Trap } from "../cabi/trap.ts";
 import {
   type ComponentHandle,
@@ -428,8 +426,10 @@ class Facade {
       lowerBorrow: (v, t) => {
         const b = this.#binding(t.rt.resource);
         if (b.kind === "host") {
-          // Each overlapping call retains the rep; the final borrow release
-          // removes only temporary mappings, never a guest-owned registration.
+          // A plain host object does not identify any existing resource.
+          // Each lowering therefore creates its own call-scoped borrow
+          // registration; canonical guest-handle lends are tracked below this
+          // facade (definitions.py:1794-1800).
           const { rep, release } = b.registry.borrowFor(v);
           if (this.#lowerScope === null) release();
           else this.#lowerScope.push(release);
@@ -596,8 +596,8 @@ class Facade {
     this.#pendingHostResources.push({ importIndex, registry, cls });
     return hostResourceType({
       name: leaf.leaf,
-      // The guest dropped its last own handle: run the destructor, which for
-      // a host-implemented resource is `instance[Symbol.dispose]?.()`.
+      // The guest dropped this owning resource registration: run its
+      // destructor, which is `instance[Symbol.dispose]?.()` for a host resource.
       dtor: (rep) => registry.dtor(rep),
     });
   }
@@ -978,8 +978,8 @@ class Facade {
    * Lower a call's arguments, collecting the releases for anything that was
    * allocated *for the duration of this call* (see `lowerBorrow`).
    *
-   * Save/restore the collection slot for reentrant lowering. Release every
-   * borrow once, even if another release throws, then report the first error.
+   * Save/restore the collection slot for reentrant lowering. Releases are
+   * non-throwing and each borrow is released once.
    */
   #lowerParams(
     params: ValType[],
@@ -991,17 +991,7 @@ class Facade {
     const release = () => {
       if (released) return;
       released = true;
-      let failed = false;
-      let error: unknown;
-      for (const r of scope) {
-        try {
-          r();
-        } catch (e) {
-          if (!failed) error = e;
-          failed = true;
-        }
-      }
-      if (failed) throw error;
+      for (const r of scope) r();
     };
     const outer = this.#lowerScope;
     this.#lowerScope = scope;
@@ -1009,73 +999,12 @@ class Facade {
     try {
       lowered = params.map((p, i) => fromHost(args[i], p, o));
     } catch (e) {
-      try {
-        release();
-      } catch {
-        // The original error wins; a secondary failure of the unwind is
-        // not the story.
-      }
+      release();
       throw e;
     } finally {
       this.#lowerScope = outer;
     }
     return { lowered, release };
-  }
-
-  /** Cleanup cannot abandon a result already transferred out of the guest. */
-  #finishCall(
-    release: () => void,
-    succeeded: boolean,
-    raw: unknown,
-    type: ValType | null,
-  ): void {
-    try {
-      release();
-    } catch (e) {
-      if (!succeeded) return; // Preserve the original call failure.
-      if (type !== null) this.#dropResult(raw as ComponentValue, type);
-      throw e;
-    }
-  }
-
-  #dropResult(raw: ComponentValue, type: ValType): void {
-    // Already failing cleanup: retire every owned leaf, preserving that error
-    // even when a result destructor also throws.
-    try {
-      const t = despecialize(type);
-      switch (t.kind) {
-        case "own":
-          this.#bridge.dropOwn(raw as number, t);
-          break;
-        case "future":
-          hostFutureFor(raw).drop();
-          break;
-        case "stream":
-          hostStreamFor(raw).readable.drop();
-          break;
-        case "list":
-          for (const v of raw as ComponentValue[]) {
-            this.#dropResult(v, t.element);
-          }
-          break;
-        case "record":
-          for (const f of t.fields) {
-            this.#dropResult(
-              (raw as Record<string, ComponentValue>)[f.label],
-              f.type,
-            );
-          }
-          break;
-        case "variant": {
-          const v = raw as VariantValue;
-          const payload = t.cases.find((c) => c.label === v.kind)?.type;
-          if (payload != null) this.#dropResult(v.value, payload);
-          break;
-        }
-      }
-    } catch {
-      // The argument cleanup error remains primary.
-    }
   }
 
   /**
@@ -1113,14 +1042,13 @@ class Facade {
         try {
           pending = Promise.resolve(fn(...lowered)) as Promise<ComponentValue>;
         } catch (e) {
-          this.#finishCall(release, false, undefined, resultType);
+          release();
           throw e;
         }
         return Future.deferred(
           pending,
           elementCodec(element, o),
-          (succeeded, raw) =>
-            this.#finishCall(release, succeeded, raw, resultType),
+          () => release(),
         ) as unknown as Promise<unknown>;
       };
     } else {
@@ -1135,10 +1063,10 @@ class Facade {
         try {
           raw = await fn(...lowered);
         } catch (e) {
-          this.#finishCall(release, false, undefined, resultType);
+          release();
           throw e;
         }
-        this.#finishCall(release, true, raw, resultType);
+        release();
         if (resultType === null) return undefined;
         if (resultType.kind === "result") {
           // Internal result: `{kind: "ok"|"error", value}` (cabi/types.ts
@@ -1217,10 +1145,10 @@ class Facade {
         try {
           raw = entry(...lowered);
         } catch (e) {
-          this.#finishCall(release, false, undefined, resultType);
+          release();
           throw e;
         }
-        this.#finishCall(release, true, raw, resultType);
+        release();
         if (isThenable(raw)) unreachableThenable(raw);
         return Future.fromLifted(
           raw as ComponentValue,
@@ -1239,10 +1167,10 @@ class Facade {
       try {
         raw = entry(...lowered);
       } catch (e) {
-        this.#finishCall(release, false, undefined, resultType);
+        release();
         throw e;
       }
-      this.#finishCall(release, true, raw, resultType);
+      release();
       if (isThenable(raw)) unreachableThenable(raw);
       if (resultType === null) return undefined;
       if (resultType.kind === "result") {

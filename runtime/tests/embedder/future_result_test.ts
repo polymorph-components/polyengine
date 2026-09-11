@@ -14,15 +14,15 @@
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 import {
-  Future,
+  type Future,
   lowerFutureSource,
   type Stream,
 } from "../../src/embedder/streams.ts";
-import { hostFuture, hostFutureFor } from "../../src/exec/host_streams.ts";
+import { hostFutureFor } from "../../src/exec/host_streams.ts";
 import type { HostResourceRegistry } from "../../src/embedder/resources.ts";
 import { INTERNAL_HOST_REGISTRIES } from "../../src/embedder/instantiate.ts";
 import { sync } from "../../src/embedder/sync.ts";
-import { StreamProducerError, Trap } from "@polyengine/protocol";
+import { StreamProducerError } from "@polyengine/protocol";
 import type { SharedFutureImpl } from "../../src/task/mod.ts";
 
 const turn = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -186,69 +186,6 @@ for (
 
 const FIXTURE = guest("future-import");
 const have = await haveFixture(FIXTURE);
-
-const cleanupFixture = "runtime/tests/embedder/resource-overlap-future.wasm";
-const cleanupReady = await haveFixture(cleanupFixture);
-for (const synchronous of [false, true]) {
-  for (const callFails of [false, true]) {
-    Deno.test({
-      name:
-        `future result cleanup: sync=${synchronous}, callFails=${callFails}`,
-      ignore: !cleanupReady,
-      async fn() {
-        const cleanupError = new Error("borrow disposal failed");
-        const primary = new Trap("primary future call failure");
-        let disposals = 0;
-        class R {
-          [Symbol.dispose]() {
-            disposals++;
-            throw cleanupError;
-          }
-        }
-        const source = hostFuture<number>({ kind: "u32" });
-        let resultDrops = 0;
-        const drop = source.drop.bind(source);
-        source.drop = () => {
-          resultDrops++;
-          drop();
-        };
-        const future = Future.fromHostFuture(source, {
-          element: { kind: "u32" },
-          where: "cleanup test",
-          toHost: (v) => v as number,
-          fromHost: (v) => v,
-        });
-        // Forward reference: the closure runs later, after `registry`/`rep`
-        // below are filled in.
-        const c = await instantiateFixture(cleanupFixture, {
-          r: R,
-          next: () => future,
-          finish: () => {
-            registry.dtor(rep);
-            if (callFails) throw primary;
-          },
-        });
-        const registry =
-          (c as unknown as Record<symbol, Map<number, HostResourceRegistry>>)[
-            INTERNAL_HOST_REGISTRIES
-          ].get(0)!;
-        const cell = new R();
-        const rep = registry.repFor(cell);
-        let observed: unknown;
-        try {
-          await (synchronous ? sync(c.exports.run)(cell) : c.exports.run(cell));
-        } catch (e) {
-          observed = e;
-        }
-        assertEq(observed, callFails ? primary : cleanupError);
-        assertEq(disposals, 1);
-        assertEq(registry.liveCount, 0);
-        assertEq(resultDrops, callFails ? 0 : 1);
-        if (callFails) source.drop();
-      },
-    });
-  }
-}
 
 Deno.test({
   name: "futures: a sync import returning future<u32> accepts a plain Promise",

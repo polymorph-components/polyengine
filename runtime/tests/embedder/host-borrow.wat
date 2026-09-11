@@ -1,6 +1,6 @@
 ;; Host-passes-borrow fixture for the embedder conventions layer
 ;; (contracts/embedder-api.md §"Resources", 2x4 table, bottom-right cell:
-;; "a never-registered instance gets a rep allocated for the call's duration").
+;; every host-originated borrow gets a fresh rep for the call's duration).
 ;;
 ;; No corpus component takes a `borrow<R>` of an *imported* (host-implemented)
 ;; resource as an export parameter, which is the only position from which the

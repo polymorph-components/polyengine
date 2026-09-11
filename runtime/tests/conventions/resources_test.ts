@@ -4,7 +4,7 @@
 // constructor, methods are camelCase members, statics are static members — and
 // the runtime owns the instance↔rep mapping. Method `self` IS the instance: no
 // reps, no side tables. When the guest drops its
-// last own handle the runtime calls `instance[Symbol.dispose]?.()`.
+// owning registration the runtime calls `instance[Symbol.dispose]?.()`.
 //
 // The transcript's load-bearing content is the ORDER of host-observable
 // effects: construct, method, static, dispose — and that dispose lands on the
