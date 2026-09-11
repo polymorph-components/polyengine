@@ -1283,15 +1283,18 @@ export function createLiftedFunction(input: {
 
     let outcome: DriveExit | Promise<DriveExit>;
     try {
-      // Driver completion is not thread exhaustion. Require a captured result,
-      // no awaiting wasm call of this task, and no entry hop anywhere in the
-      // store. Other tasks' genuine SuspensionPoint parks may remain background
-      // work, but any engine hop this driver started still needs servicing.
-      // Callback tasks can retain waiting threads after task.return; awaiting
-      // those threads' final exit would prevent long-lived producers returning.
       const midWasmCall = () => task.threads.some((t) => store.awaiting.has(t));
       const hopParked = () => entryHopThreads(store).length > 0;
-      const driveDone = () => resolvedSeen && !midWasmCall() && !hopParked();
+      // Driver completion is not thread exhaustion. CONTRACT: an async result
+      // is independent of producer lifetime
+      // (embedder-api.md:180-185; definitions.py:521-526,2360-2369). A
+      // genuine SuspensionPoint may therefore be handed to the settlement
+      // pump once the result exists. Entry hops remain part of result-memory
+      // ordering and must complete first. Sync lifts retain full activation
+      // liveness. Callback tasks may retain waiting producer threads after
+      // task.return; awaiting their final exit would prevent result delivery.
+      const driveDone = () =>
+        resolvedSeen && !hopParked() && (ft.async || !midWasmCall());
       outcome = drive(
         store,
         driveDone,
