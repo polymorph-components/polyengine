@@ -37,6 +37,7 @@ import { copyCensus, isComponentException, isTrap } from "@polyengine/protocol";
 import { ComponentException, NameCollisionError } from "./errors.ts";
 import { type ImportLeaf, requiredImports } from "./imports.ts";
 import { hostDtorCall } from "../exec/boundary.ts";
+import { DeferredHostResult } from "../exec/host_settlement.ts";
 import {
   buildGuestResourceClass,
   type GuestResourceSpec,
@@ -721,7 +722,7 @@ class Facade {
       }
       return fromHost(v, resultType, o);
     };
-    const fail = (e: unknown, args: unknown[]): ComponentValue => {
+    const fail = (e: unknown): ComponentValue => {
       // Brand, not class (§"Module identity and @polyengine/protocol"): a `ComponentException` thrown by a host module
       // that resolved a DIFFERENT runtime copy — or hand-rolled with the
       // registry symbol — is the same value here (issue #83).
@@ -732,9 +733,6 @@ class Facade {
           value: rt.error === null ? null : fromHost(e.payload, rt.error, o),
         };
       }
-      // Trap paths abandon top-level async arguments transferred to the host.
-      // A normal result error does not: its implementation may retain them.
-      releaseAsyncArgs(args);
       if (isTrap(e)) throw e;
       if (isComponentException(e)) {
         throw new Trap(
@@ -764,12 +762,18 @@ class Facade {
       // Extras beyond WIT params are runtime values, notably abortable()'s
       // AbortSignal. Forward without component-value conversion.
       for (let i = ft.params.length; i < raw.length; i++) args.push(raw[i]);
+      // Teardown belongs to rejection, even when delivery has been discarded.
+      // A fallible ComponentException may retain arguments like a normal return.
+      const onReject = (e: unknown): void => {
+        if (!(isComponentException(e) && isResult)) releaseAsyncArgs(args);
+      };
       let out: unknown;
       try {
         out = dispatch(args);
       } catch (e) {
         scope.end();
-        return fail(e, args);
+        onReject(e);
+        return fail(e);
       }
       if (isThenable(out)) {
         // A future-typed result is the source, not async call completion.
@@ -779,15 +783,23 @@ class Facade {
           scope.end();
           return ok(out);
         }
-        return (out as PromiseLike<unknown>).then(
-          (v) => {
-            scope.end();
-            return ok(v);
-          },
-          (e) => {
-            scope.end();
-            return fail(e, args);
-          },
+        return new DeferredHostResult(
+          Promise.resolve(out).then(
+            (value) => {
+              scope.end();
+              return { value };
+            },
+            (error) => {
+              scope.end();
+              onReject(error);
+              return { error };
+            },
+          ),
+          (settlement) =>
+            "error" in settlement
+              ? fail(settlement.error)
+              : ok(settlement.value),
+          () => scope.end(),
         );
       }
       scope.end();

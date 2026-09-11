@@ -35,6 +35,7 @@ import {
   EventCode,
   type EventTuple,
   hasRealHostCall,
+  instancePoisonCause,
   isInstancePoisoned,
   NeedsJspi,
   needsJspi,
@@ -54,6 +55,7 @@ import {
   withActivation,
 } from "../task/mod.ts";
 import { currentTask } from "../task/scheduler.ts";
+import { DeferredHostResult, type HostSettlement } from "./host_settlement.ts";
 import { PlanError } from "../plan/loader.ts";
 import {
   blockCurrentActivation,
@@ -1790,12 +1792,26 @@ export function createLoweredImport(input: {
     const toResults = (v: unknown): ComponentValue[] =>
       ft.results.length === 0 ? [] : [v as ComponentValue];
 
-    if (isPromiseLike(raw)) {
+    if (raw instanceof DeferredHostResult || isPromiseLike(raw)) {
+      const deferred = raw instanceof DeferredHostResult ? raw : null;
+      const settlement = deferred?.promise ?? Promise.resolve(raw);
+      // Raw HostImports retain their single observing reaction: a boxing hop
+      // would let a queued cancellation overtake an already-settled result.
+      const fulfilled = (value: unknown): HostSettlement =>
+        deferred !== null ? value as HostSettlement : { value };
+      const convert = (done: HostSettlement): unknown => {
+        if (deferred !== null) return deferred.convert(done);
+        if ("error" in done) throw done.error;
+        return done.value;
+      };
       if (!opts.async) {
         if (mode !== "jspi" || !suspendable) {
           // An unmarked import cannot suspend even in JSPI mode. This
           // non-poisoning capability exit must release onStart's lenders
           // (contracts/intrinsics.md, trap-unwind/lender-release obligation).
+          // Observe even refused raw HostImports; no conversion continuation.
+          void settlement.catch(() => {});
+          deferred?.endScope();
           subtask.unwindLenders();
           needsJspi(
             suspendable
@@ -1812,11 +1828,11 @@ export function createLoweredImport(input: {
         // waits for the caller's next cancellable point. Parking does not
         // release callback exclusivity. Record the host outcome here, but do
         // CABI lowering and lender delivery in produce at scheduler resume.
-        let outcome: { value: unknown } | { error: unknown } | undefined;
-        const promise = Promise.resolve(raw).then(
-          (v) => {
+        let outcome: HostSettlement | undefined;
+        const promise = settlement.then(
+          (done) => {
             store.pendingHostCalls.delete(promise);
-            outcome = { value: v };
+            outcome = fulfilled(done);
           },
           (e) => {
             store.pendingHostCalls.delete(promise);
@@ -1833,13 +1849,11 @@ export function createLoweredImport(input: {
           readyFunc: () => outcome !== undefined,
           cancellable: false,
           produce: () => {
-            const done = outcome as { value: unknown } | { error: unknown };
-            if ("error" in done) {
-              // Reject the import Promise to unwind the guest. The conventions
-              // layer has already converted fallible ComponentExceptions to values.
-              throw done.error;
-            }
-            onResolve(toResults(done.value));
+            // Poisoning records a marker; it need not abandon this suspension.
+            // A FACT callee may differ from the still-healthy owning task.
+            // Preserve the original cause, including a thrown undefined.
+            if (isInstancePoisoned(inst)) throw instancePoisonCause(inst);
+            onResolve(toResults(convert(outcome!)));
             subtask.deliverResolve();
             assert_(vi.done(), `${name}: unconsumed flat arguments`);
             const flatResults = subtask.flatResults;
@@ -1847,19 +1861,22 @@ export function createLoweredImport(input: {
             if (flatResults.length === 1) return flatResults[0];
             return flatResults;
           },
-          onSettled: () => subtask.unwindLenders(),
+          onSettled: () => {
+            deferred?.endScope();
+            subtask.unwindLenders();
+          },
         });
       }
       // Async lowering runs on host settlement, not in a suspended caller's
       // produce step. Result-lowering failures use the host-failure channel.
-      const promise = Promise.resolve(raw).then(
-        (v) => {
+      const promise = settlement.then(
+        (done) => {
           store.pendingHostCalls.delete(promise);
           // Discard cancelled or poisoned recipients before lowering can
           // write guest memory or re-enter through realloc.
           if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
           try {
-            onResolve(toResults(v));
+            onResolve(toResults(convert(fulfilled(done))));
           } catch (e) {
             store.hostFailure = e;
           }
@@ -1879,6 +1896,7 @@ export function createLoweredImport(input: {
         // discharge lenders. The null result path performs no realloc.
         subtask.onCancel = () => {
           store.pendingHostCalls.delete(promise);
+          deferred?.endScope();
           onResolve(null);
           if (controller !== null) {
             // Defer host abort listeners until after the guest built-in returns.

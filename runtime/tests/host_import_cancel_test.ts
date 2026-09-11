@@ -47,6 +47,15 @@ import {
   unpackSubtaskResult,
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
+import { DeferredHostResult } from "../src/exec/host_settlement.ts";
+import { BorrowScope } from "../src/embedder/values.ts";
+import {
+  GuestResource,
+  makeWrapper,
+  takeRep,
+  wrapperState,
+} from "../src/embedder/resources.ts";
+import { ResourceTypeInfo } from "../src/cabi/types.ts";
 import {
   BLOCKED,
   createSubtaskCancel,
@@ -179,6 +188,53 @@ function inFlight(f: Fixture): { subtaski: number; subtask: Subtask } {
 }
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
+
+Deno.test("raw host settlement: resolve before queued cancel delivers RETURNED", async () => {
+  const d = deferred<number>();
+  const f = mkFixture(() => d.promise);
+  const { subtaski, subtask } = inFlight(f);
+  d.resolve(42);
+  const state = await Promise.resolve().then(() =>
+    f.asGuest(() => createSubtaskCancel({ async: true }, f.inst)(subtaski))
+  );
+  assertEq(state, SubtaskState.RETURNED);
+  assertEq(subtask.resolveDelivered(), true);
+  assertEq(new DataView(f.memory.buffer).getUint32(64, true), 42);
+});
+
+Deno.test("deferred host settlement: cancellation ends borrowed wrapper before host settles", async () => {
+  const rt = new ResourceTypeInfo(null, null);
+  const borrowed = makeWrapper(GuestResource, 42, rt, false);
+  const scope = new BorrowScope();
+  scope.add(() => borrowed.drop());
+  const d = deferred<number>();
+  const f = mkFixture(() =>
+    new DeferredHostResult(
+      d.promise.then((value) => {
+        scope.end();
+        return { value };
+      }),
+      () => {
+        throw new Error("cancelled result converted");
+      },
+      () => scope.end(),
+    )
+  );
+  const { subtaski } = inFlight(f);
+  assertEq(takeRep(borrowed, rt, false, "borrow"), 42);
+  f.asGuest(() => createSubtaskCancel({ async: true }, f.inst)(subtaski));
+  assertEq(wrapperState(borrowed)?.valid, false);
+  let refused = false;
+  try {
+    takeRep(borrowed, rt, false, "retained borrow");
+  } catch {
+    refused = true;
+  }
+  assertEq(refused, true);
+  d.resolve(42);
+  await flush();
+  assertEq(f.store.hostFailure, undefined);
+});
 
 Deno.test("cancellation discard: the async cancel form discards and answers CANCELLED_BEFORE_RETURNED", () => {
   // The headline: NOT BLOCKED. `canon_subtask_cancel` calls `on_cancel`, which
