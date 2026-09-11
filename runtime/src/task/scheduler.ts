@@ -232,7 +232,7 @@ function readSeed(): number | null {
 }
 
 let seed: number | null = readSeed();
-let rngState = 0;
+let rngState = seed ?? 0;
 
 /** Test hook: switch policy at runtime. `null` restores FIFO. */
 export function schedulerSeedForTesting(value: number | null): void {
