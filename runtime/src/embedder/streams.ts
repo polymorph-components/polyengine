@@ -21,6 +21,7 @@ import {
   hostStreamFor,
 } from "../exec/host_streams.ts";
 import {
+  abandonReasonOf,
   CopyResult,
   dropSharedForTeardown,
   type ErrorContext as InternalErrorContext,
@@ -80,7 +81,7 @@ const producerFailures = new WeakMap<object, StreamProducerError>();
 
 /**
  * Record on the handle and, if bound, the store's first-failure slot. Return
- * whether a store exists. Report before dropping the writer: driveAsync
+ * the site-named error. Report before dropping the writer: driveAsync
  * checks hostFailure before completion, so truncation cannot hide the cause.
  * The slot is store-wide, not an attribution to a particular consuming call.
  */
@@ -88,7 +89,7 @@ function reportProducerFailure(
   host: HostStream<unknown>,
   where: string,
   cause: unknown,
-): boolean {
+): StreamProducerError {
   // Brand, not class: a producer failure raised by another runtime copy
   // must not be re-wrapped into a second layer of the same error.
   const err = isStreamProducerError(cause)
@@ -101,9 +102,8 @@ function reportProducerFailure(
   const store = shared.boundStore;
   if (store != null && typeof store === "object") {
     if (store.hostFailure === undefined) store.hostFailure = err;
-    return true;
   }
-  return false;
+  return err;
 }
 
 /** @internal — raise a recorded producer failure, if any. */
@@ -273,7 +273,7 @@ export class Stream<T> implements ProtocolStream<T> {
     // instance trapped it means the retirement walk settled us — reject
     // instead of faking EOS (§"Streams and futures"). A non-empty chunk was really
     // copied before the trap and is delivered; the next read rejects.
-    if (raw.length === 0) throwIfPeerTrapped(host.value, where);
+    if (raw.length === 0) throwIfFailed(host.value, where);
     return this.#chunk(raw);
   }
 
@@ -310,7 +310,11 @@ export class Stream<T> implements ProtocolStream<T> {
     const n = await host.readable.readDirect(consume, info);
     // Preserve a callback-completed result. Otherwise report peer poisoning
     // with the acknowledged byte count, not a clean session end.
-    if (!info.endedByVerdict) throwIfPeerTrapped(host.value, where, n);
+    if (!info.endedByVerdict) {
+      const failure = producerFailures.get(host.value as object);
+      if (failure !== undefined) throw failure;
+      throwIfPeerTrapped(host.value, where, n);
+    }
     return n;
   }
 
@@ -620,11 +624,26 @@ export class Future<T> implements ProtocolFuture<T> {
     }
     this.#settled ??= (async () => {
       const host = await this.#hostP;
-      const { value, result } = await host.readResult();
+      let outcome: Awaited<ReturnType<HostFuture<T>["readResult"]>>;
+      try {
+        outcome = await host.readResult();
+      } catch (e) {
+        // Only replace the trap manufactured by producer-failure abandonment.
+        // A distinct read/pump/busy failure remains primary even if the
+        // producer failure happens to be recorded before this continuation.
+        const failure = producerFailures.get(host.value as object);
+        if (
+          failure !== undefined && abandonReasonOf(host.value) === failure &&
+          typeof e === "object" && e !== null &&
+          (e as { cause?: unknown }).cause === failure
+        ) throw failure;
+        throw e;
+      }
+      const { value, result } = outcome;
       if (result !== CopyResult.COMPLETED) {
-        // A drop caused by the writer's instance trapping is a fault, not a
-        // "no value" outcome — brand it (#66, §"Streams and futures").
-        throwIfPeerTrapped(host.value, this.#codec.where ?? "future read");
+        // Producer failure and peer poisoning both outrank the ordinary
+        // cancelled/dropped outcome; throwIfFailed checks them in that order.
+        throwIfFailed(host.value, this.#codec.where ?? "future read");
         throw new DroppedError(
           result === CopyResult.CANCELLED
             ? "the future read was cancelled"
@@ -985,14 +1004,22 @@ export function lowerFutureSource<T>(
       if (info?.progress === 0) codec.release?.(lowered);
     } catch (e) {
       // Report the producer cause rather than replace it with a generic
-      // abandonment trap. A bound store receives the failure; only an unbound
-      // future is dropped here. Reporting does not itself retire the future.
-      const reported = reportProducerFailure(
+      // abandonment trap. Reporting itself does not retire the future.
+      const failure = reportProducerFailure(
         { value: host.value } as unknown as HostStream<unknown>,
         codec.where ?? "future producer",
         e,
       );
-      if (!reported) host.drop();
+      try {
+        // CONTRACT: an unwritten bound future is abandoned, not completed
+        // DROPPED-shaped (embedder-api.md §"Streams and futures";
+        // definitions.py `WritableFutureEnd.drop`).
+        // Retire it with the producer error itself so pending guest and host
+        // readers wake with the same cause, and drop observers release activity.
+        host.fail(failure);
+      } catch {
+        // Reporting happened first; cleanup must not replace the producer fault.
+      }
     }
   })();
   return host.value;

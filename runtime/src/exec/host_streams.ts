@@ -1200,6 +1200,8 @@ export interface HostFuture<T> {
    *    cleanup.
    */
   drop(): void;
+  /** Retire an unwritten producer future while preserving its failure cause. */
+  fail(reason: Error): void;
   value: ComponentValue;
 }
 
@@ -1360,6 +1362,22 @@ function mkFuture<T>(
         shared.drop();
       }
       activity.close();
+      activity.pump();
+    },
+    fail(reason: Error) {
+      // Unlike public drop(), producer failure must preserve its site-named
+      // cause. Record it before this call: abandonment notifies parked readers.
+      try {
+        if (!delivered && !shared.dropped) {
+          abandonSharedFuture(shared, reason);
+        } else {
+          shared.drop();
+        }
+      } finally {
+        // `dropSharedForTeardown` also runs observers in a finally block, but
+        // notification itself may throw; retention still ends in that case.
+        activity.close();
+      }
       activity.pump();
     },
     value,
