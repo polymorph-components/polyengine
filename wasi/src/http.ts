@@ -54,8 +54,12 @@
 //     future settles only after the fetch, so the guest still observes
 //     truthful completion. Response bodies stream through unbuffered.
 //   * `set-connect-timeout` answers `not-supported` (fetch exposes no
-//     connect phase); first-byte and between-bytes timeouts are REAL,
-//     enforced with timers around the response-body reads.
+//     connect phase). The #227 compatibility decision makes
+//     `first-byte-timeout` bound dispatch through response headers and
+//     `between-bytes-timeout` bound every body read, including the first.
+//     Either timeout reports `connection-read-timeout`; both default to 600
+//     seconds. This differs from the vendored WIT's first-body-byte wording
+//     (examples/guests/http-fetch/wit/deps/wasi-http/types.wit:397-403).
 //   * Platform-managed headers (host, content-length, and the rest of
 //     fetch's forbidden list) are silently owned by the platform, not by
 //     the `fields` the guest set.
@@ -284,6 +288,11 @@ export interface HttpOptions {
    * so a transport can peek (e.g. for logging) and still forward the
    * original request.
    *
+   * The request carries an `AbortSignal` which is aborted if the response
+   * envelope exceeds `first-byte-timeout`. The timeout wins even when a
+   * noncompliant transport ignores that signal; a response delivered after
+   * timeout has its body canceled. See the #227 policy in the module header.
+   *
    * A transport that throws a branded `ComponentException` names the
    * guest-visible WIT error-code exactly (the fragment rethrows it
    * unchanged); anything else it throws is mapped by this fragment's
@@ -352,11 +361,17 @@ export interface RequestClass {
 }
 
 export interface RequestOptions {
+  /** Always `undefined`; fetch exposes no separately enforceable connect phase. */
   getConnectTimeout(): bigint | undefined;
+  /** Unsupported by this fetch provider; throws `not-supported`. */
   setConnectTimeout(duration: bigint | undefined): void;
+  /** Response-envelope timeout in nanoseconds; `undefined` means the 600s default. */
   getFirstByteTimeout(): bigint | undefined;
+  /** Set the response-envelope timeout; `undefined` resets it to the 600s default. */
   setFirstByteTimeout(duration: bigint | undefined): void;
+  /** Per-body-read timeout in nanoseconds; `undefined` means the 600s default. */
   getBetweenBytesTimeout(): bigint | undefined;
+  /** Set the per-body-read timeout; `undefined` resets it to the 600s default. */
   setBetweenBytesTimeout(duration: bigint | undefined): void;
   clone(): RequestOptions;
   [Symbol.dispose](): void;
@@ -750,8 +765,7 @@ export function http(options: HttpOptions = {}): HttpFragment {
     trailers: FutureLike<TrailersResult> | undefined;
     fetchBody: ReadableStream<Uint8Array> | null = null;
     settleTransmission: ((r: HttpResult) => void) | undefined;
-    /** Timeouts inherited from the request's options (fetch responses). */
-    firstByteTimeout: bigint | undefined;
+    /** Body timeout inherited from the request's options (fetch responses). */
     betweenBytesTimeout: bigint | undefined;
     consumed = false;
 
@@ -784,7 +798,6 @@ export function http(options: HttpOptions = {}): HttpFragment {
       r.statusCode = resp.status;
       r.headers = fieldsFromFetchHeaders(resp.headers);
       r.fetchBody = resp.body;
-      r.firstByteTimeout = options?.firstByteTimeout;
       r.betweenBytesTimeout = options?.betweenBytesTimeout;
       return r;
     }
@@ -895,7 +908,7 @@ export function http(options: HttpOptions = {}): HttpFragment {
     return [source, Promise.resolve(trailers).then((t) => t)];
   }
 
-  /** Consume a fetch response body, with the real byte timeouts. */
+  /** Consume a fetch response body, timing every read between bytes. */
   function consumeFetchBody(
     response: Response,
     _res: FutureLike<HttpResult>,
@@ -913,7 +926,6 @@ export function http(options: HttpOptions = {}): HttpFragment {
     const body = response.fetchBody;
     let settle!: (t: TrailersResult) => void;
     const done = new Promise<TrailersResult>((resolve) => (settle = resolve));
-    const firstByteMs = toMs(response.firstByteTimeout);
     const betweenBytesMs = toMs(response.betweenBytesTimeout);
     const source = (async function* (): AsyncGenerator<Uint8Array> {
       if (body === null) {
@@ -921,27 +933,24 @@ export function http(options: HttpOptions = {}): HttpFragment {
         return;
       }
       const reader = body.getReader();
-      let first = true;
       try {
         for (;;) {
-          const timeoutMs = first ? firstByteMs : betweenBytesMs;
           let r: ReadableStreamReadResult<Uint8Array>;
           try {
-            r = await readWithTimeout(reader, timeoutMs);
+            r = await withTimeout(reader.read(), betweenBytesMs, () => {
+              reader.cancel().catch(() => {
+                // Timeout already owns the result; cancellation is cleanup.
+              });
+            });
           } catch (e) {
             settle({
               kind: "err",
               value: e === TIMED_OUT
-                ? {
-                  kind: first
-                    ? "HTTP-response-timeout"
-                    : "connection-read-timeout",
-                }
+                ? { kind: "connection-read-timeout" }
                 : mapFetchError(e),
             });
             return;
           }
-          first = false;
           if (r.done) {
             settle({ kind: "ok", value: undefined }); // clean end; no trailers over fetch
             return;
@@ -960,25 +969,52 @@ export function http(options: HttpOptions = {}): HttpFragment {
   }
 
   const TIMED_OUT = Symbol("timed out");
+  const DEFAULT_TIMEOUT_MS = 600_000;
+  const MAX_TIMEOUT_MS = 2_147_483_647;
 
-  function toMs(ns: bigint | undefined): number | undefined {
-    return ns === undefined ? undefined : Number(ns / 1_000_000n);
+  function toMs(ns: bigint | undefined): number {
+    if (ns === undefined) return DEFAULT_TIMEOUT_MS;
+    return Number(ns / 1_000_000n);
   }
 
-  function readWithTimeout(
-    reader: ReadableStreamDefaultReader<Uint8Array>,
-    timeoutMs: number | undefined,
-  ): Promise<ReadableStreamReadResult<Uint8Array>> {
-    const read = reader.read();
-    if (timeoutMs === undefined) return read;
+  /** Race one operation against a bounded JS timer and observe late outcomes. */
+  function withTimeout<T>(
+    operation: Promise<T>,
+    timeoutMs: number,
+    onTimeout: () => void,
+    onLateValue?: (value: T) => void,
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => reject(TIMED_OUT), timeoutMs);
-      read.then(
-        (r) => {
+      let settled = false;
+      let remainingMs = timeoutMs;
+      let timer: ReturnType<typeof setTimeout>;
+      const arm = (): void => {
+        const delay = Math.min(remainingMs, MAX_TIMEOUT_MS);
+        timer = setTimeout(() => {
+          remainingMs -= delay;
+          if (remainingMs > 0) {
+            arm();
+            return;
+          }
+          settled = true;
+          onTimeout();
+          reject(TIMED_OUT);
+        }, delay);
+      };
+      arm();
+      operation.then(
+        (value) => {
+          if (settled) {
+            onLateValue?.(value);
+            return;
+          }
+          settled = true;
           clearTimeout(timer);
-          resolve(r);
+          resolve(value);
         },
         (e) => {
+          if (settled) return; // handler observes a rejection after timeout
+          settled = true;
           clearTimeout(timer);
           reject(e);
         },
@@ -1136,6 +1172,7 @@ export function http(options: HttpOptions = {}): HttpFragment {
       // Constructing the `Request` happens inside this try: a throw here
       // (e.g. a GET with a body) maps through mapFetchError exactly as a
       // fetch throw does, per the same catch below.
+      const abort = new AbortController();
       const req = new globalThis.Request(url, {
         method,
         headers,
@@ -1143,13 +1180,24 @@ export function http(options: HttpOptions = {}): HttpFragment {
         redirect: "manual",
         cache: "no-store",
         credentials: "omit",
+        signal: abort.signal,
       } as RequestInit);
       // Resolved at call time (not captured at http() construction), so
       // a test stubbing globalThis.fetch after the fragment exists still
       // takes effect.
       const transport = options.fetch ??
         ((r: globalThis.Request) => globalThis.fetch(r));
-      resp = await transport(req);
+      const envelopeMs = toMs(request.options?.firstByteTimeout);
+      resp = await withTimeout(
+        Promise.resolve().then(() => transport(req)),
+        envelopeMs,
+        () => abort.abort(),
+        (late) => {
+          late.body?.cancel().catch(() => {
+            // The timed-out send has no consumer for cleanup failures.
+          });
+        },
+      );
     } catch (e) {
       if (isComponentException(e)) {
         // Branded exception passthrough: the transport named the
@@ -1161,7 +1209,9 @@ export function http(options: HttpOptions = {}): HttpFragment {
         });
         throw e;
       }
-      const code = mapFetchError(e);
+      const code: ErrorCode = e === TIMED_OUT
+        ? { kind: "connection-read-timeout" }
+        : mapFetchError(e);
       request.settleTransmission({ kind: "err", value: code });
       throw httpError(
         code,
