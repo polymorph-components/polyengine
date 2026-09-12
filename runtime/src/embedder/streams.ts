@@ -1129,20 +1129,28 @@ async function* batches<T>(
 ): AsyncGenerator<T[] | Uint8Array> {
   if (isReadableStream(src)) {
     const reader = src.getReader();
+    let completed = false;
     try {
       for (;;) {
         const r = await Promise.race([reader.read(), gone]);
-        if (r === READER_GONE) {
-          // `cancel` settles the pending read and runs the source's own
-          // cancel() — releasing whatever platform resource backed it.
-          await reader.cancel().catch(() => {});
+        if (r === READER_GONE) return;
+        if (r.done) {
+          completed = true;
           return;
         }
-        if (r.done) return;
         yield asBatch<T>(r.value);
       }
     } finally {
-      reader.releaseLock();
+      try {
+        // JS embedding policy, not canon cancel-copy: abandoning an unfinished
+        // web stream tears down its producer (embedder-api.md, producer cleanup
+        // clause under "Streams of resources").
+        if (!completed) await reader.cancel();
+      } catch {
+        // Producer cleanup never replaces the operation's outcome.
+      } finally {
+        reader.releaseLock();
+      }
     }
   }
   if (Symbol.asyncIterator in (src as object)) {
