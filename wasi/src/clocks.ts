@@ -14,10 +14,6 @@ export interface ClocksOptions {
   now?: () => bigint;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
-}
-
 /** `wasi:clocks@0.2` + `wasi:clocks@0.3` provider fragment (two track keys). */
 export function clocks(
   options: ClocksOptions = {},
@@ -60,12 +56,13 @@ export function clocks(
   const monotonic03 = {
     now: nowFn,
     getResolution: (): bigint => RESOLUTION_NS,
+    // Shares the parking kernel's bounded, clock-rechecking timer (io.ts
+    // `Pollable.timer`/`block`) rather than a one-shot `setTimeout`.
     waitUntil: async (when: bigint): Promise<void> => {
-      const deltaNs = when - nowFn();
-      await sleep(Number(deltaNs) / 1e6);
+      await Pollable.timer(when, nowFn).block();
     },
     waitFor: async (howLong: bigint): Promise<void> => {
-      await sleep(Number(howLong) / 1e6);
+      await Pollable.timer(nowFn() + howLong, nowFn).block();
     },
   };
 
