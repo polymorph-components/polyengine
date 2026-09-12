@@ -416,8 +416,12 @@ export function createSubtaskCancel(
       // `on_cancel()` can run the cancelled callee synchronously, and that
       // callee may reenter this instance: the reentrant frame must see the
       // subtask as claimed and trap in `canon_waitable_join`
-      // (`trap_if(w.has_sync_waiter)`). A sync park keeps the claim until
-      // produce/onSettled; an async determinacy park ends it at park entry.
+      // (`trap_if(w.has_sync_waiter)`). The JSPI determinacy park is part of
+      // the emulated `on_cancel` delivery, so BOTH forms keep the claim until
+      // produce/onSettled. Releasing it at async park entry lets another
+      // thread steal the terminal event before `finish` consumes it.
+      // CONTRACT: CanonicalABI.md:4308-4313 requires the claim for the full
+      // duration in which `on_cancel` can run arbitrary/reentrant code.
       st.hasSyncWaiter = true;
       let parked = false;
       try {
@@ -461,11 +465,6 @@ export function createSubtaskCancel(
         }
         if (!ready()) {
           parked = true;
-          // Async cancellation releases its synchronous claim before the
-          // determinacy park, allowing a sibling's waitable.join. Issue #92
-          // permits reordering, not a new trap condition. Sync cancellation
-          // retains the claim through its resolution wait, as in the reference.
-          if (async_) st.hasSyncWaiter = false;
           return blockCurrentActivation({
             store: inst.store,
             task: currentTask(),

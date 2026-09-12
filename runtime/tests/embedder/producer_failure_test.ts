@@ -420,6 +420,41 @@ Deno.test("producer cleanup: parked reader drop cancels exactly once even when c
   assertEq(tracked.source.locked, false);
 });
 
+Deno.test("producer cleanup: reader drop drains an already-read owned batch", async () => {
+  let controller!: ReadableStreamDefaultController<number[]>;
+  const cancellation = deferred();
+  let cancellations = 0;
+  const released: ComponentValue[] = [];
+  const source = new ReadableStream<number[]>({
+    start(c) {
+      controller = c;
+    },
+    cancel() {
+      cancellations++;
+      return cancellation.promise;
+    },
+  });
+  const resourceCodec = {
+    ...codec,
+    release(value: ComponentValue) {
+      released.push(value);
+    },
+  };
+  const raw = lowerStreamSource(source, resourceCodec);
+  await Promise.resolve(); // let the pump issue reader.read()
+  hostStreamFor<number>(raw).readable.drop();
+  // Resolve the pump's own read in the same turn as reader loss. The batch is
+  // no longer in the web stream when cancellation runs, so pump cleanup owns it.
+  controller.enqueue([1, 2, 3]);
+  await turn();
+  assertEq(released, [1, 2, 3]);
+  assertEq(cancellations, 1);
+  assertEq(source.locked, true, "hung cancellation does not hide disposal");
+  cancellation.resolve();
+  await turn();
+  assertEq(source.locked, false);
+});
+
 Deno.test("producer cleanup: normal readable EOF releases without cancellation", async () => {
   let cancellations = 0;
   const source = new ReadableStream<number[]>({

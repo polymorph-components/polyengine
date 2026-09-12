@@ -1130,10 +1130,32 @@ async function* batches<T>(
   if (isReadableStream(src)) {
     const reader = src.getReader();
     let completed = false;
+    let cancellation: Promise<void> | undefined;
+    const cancel = () => cancellation ??= reader.cancel().catch(() => {});
     try {
       for (;;) {
-        const r = await Promise.race([reader.read(), gone]);
-        if (r === READER_GONE) return;
+        // Keep the read after racing it. If reader loss wins, cancellation
+        // settles a truly pending read; if the source already handed ownership
+        // to that read, drain its value through the ordinary untaken-tail path.
+        // CONTRACT: embedder-api.md:455-475; the CABI only accounts for values
+        // at its rendezvous (CanonicalABI.md:1769-1795).
+        const pending = reader.read();
+        let r = await Promise.race([pending, gone]);
+        if (r === READER_GONE) {
+          // Initiate before awaiting the read: cancellation is the producer's
+          // channel for unblocking a pull. Do not await cancellation yet, since
+          // a buggy/hung cancel hook must not hide disposal of an obtained value.
+          cancel();
+          try {
+            r = await pending;
+          } catch {
+            // A cancelled pull may reject; the stream is already dead and its
+            // cleanup failure must not become a producer failure.
+            return;
+          }
+          if (!r.done) yield asBatch<T>(r.value);
+          return;
+        }
         if (r.done) {
           completed = true;
           return;
@@ -1145,7 +1167,7 @@ async function* batches<T>(
         // JS embedding policy, not canon cancel-copy: abandoning an unfinished
         // web stream tears down its producer (embedder-api.md, producer cleanup
         // clause under "Streams of resources").
-        if (!completed) await reader.cancel();
+        if (!completed) await cancel();
       } catch {
         // Producer cleanup never replaces the operation's outcome.
       } finally {
