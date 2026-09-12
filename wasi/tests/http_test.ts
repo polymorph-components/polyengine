@@ -2,7 +2,7 @@
 // fields semantics, the request/response state machines, and `client.send`
 // against a live loopback `Deno.serve` — plus the recorded divergences
 // (manual redirects, untransmissible request trailers, the real
-// first-byte/between-bytes timeouts).
+// response-envelope/between-bytes timeouts).
 //
 // Fallible methods must throw BRANDED ComponentExceptions; `error-code`
 // case names are the WIT spellings VERBATIM (`DNS-timeout`,
@@ -312,38 +312,296 @@ Deno.test("http send: an erring trailers future aborts the request, per the WIT"
   }
 });
 
-// --- response body timeouts ---------------------------------------------------------
+// --- response envelope/body timeouts (#227) ----------------------------------------
 
-Deno.test("http timeouts: first-byte timeout errs the body future, not the send", async () => {
-  // Headers arrive; the body never does.
-  const server = await serve(() =>
-    new globalThis.Response(
-      new ReadableStream<Uint8Array>({ start() {/* never enqueues */} }),
-    )
+function timedRequest(fragment: ReturnType<typeof http>, timeout: {
+  first?: bigint;
+  between?: bigint;
+}): [Request, Promise<HttpResult>] {
+  const options = new fragment.RequestOptions();
+  if (timeout.first !== undefined) options.setFirstByteTimeout(timeout.first);
+  if (timeout.between !== undefined) {
+    options.setBetweenBytesTimeout(timeout.between);
+  }
+  const pair = fragment.Request["new"](
+    fragment.Fields.fromList([]),
+    undefined,
+    okTrailers,
+    options,
   );
+  pair[0].setScheme({ kind: "HTTP" });
+  pair[0].setAuthority("example.com");
+  return pair;
+}
+
+Deno.test("http timeouts: withheld response headers reject send and settle transmission", async () => {
+  let signal: AbortSignal | undefined;
+  const fragment = http({
+    fetch: (request) => {
+      signal = request.signal;
+      return new Promise(() => {});
+    },
+  });
+  const [request, transmitted] = timedRequest(fragment, {
+    first: 10_000_000n,
+  });
+  assertEq(
+    await errKindAsync(fragment.send(request)),
+    "connection-read-timeout",
+  );
+  assertTrue(signal?.aborted === true, "envelope timeout aborts the Request");
+  const result = await transmitted;
+  assertTrue(
+    result.kind === "err" && result.value.kind === "connection-read-timeout",
+    "transmission records the same timeout",
+  );
+});
+
+Deno.test("http timeouts: live loopback withheld headers time out", async () => {
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => (release = resolve));
+  const server = await serve(async () => {
+    await held;
+    return new globalThis.Response("too late");
+  });
   try {
-    const headers = Fields.fromList([]);
     const options = new RequestOptions();
-    options.setFirstByteTimeout(50_000_000n); // 50ms
-    const [request] = Request["new"](headers, undefined, okTrailers, options);
+    options.setFirstByteTimeout(20_000_000n);
+    const [request, transmitted] = Request["new"](
+      Fields.fromList([]),
+      undefined,
+      okTrailers,
+      options,
+    );
     request.setScheme({ kind: "HTTP" });
     request.setAuthority(`127.0.0.1:${server.port}`);
-    request.setPathWithQuery("/");
-    const response = await send(request); // headers made it: send succeeds
-    const [body, done] = Response.consumeBody(response, okRes);
-    assertEq(
-      (await collect(body)).length,
-      0,
-      "the stream ends without fake data",
-    );
-    const t = await done;
-    assertEq(t.kind, "err");
-    assertEq(
-      (t as { kind: "err"; value: ErrorCode }).value.kind,
-      "HTTP-response-timeout",
-    );
+    assertEq(await errKindAsync(send(request)), "connection-read-timeout");
+    assertEq((await transmitted).kind, "err");
   } finally {
+    release();
     await server.shutdown();
+  }
+});
+
+Deno.test("http timeouts: first and later stalled body reads use between-byte timeout", async () => {
+  for (const firstChunk of [undefined, text("first")]) {
+    let canceled = false;
+    const fragment = http({
+      fetch: () =>
+        Promise.resolve(
+          new globalThis.Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                if (firstChunk !== undefined) controller.enqueue(firstChunk);
+              },
+              cancel() {
+                canceled = true;
+              },
+            }),
+          ),
+        ),
+    });
+    const [request] = timedRequest(fragment, { between: 10_000_000n });
+    const response = await fragment.send(request);
+    const [body, trailers] = fragment.Response.consumeBody(response, okRes);
+    assertEq(
+      utf8(await collect(body)),
+      firstChunk === undefined ? "" : "first",
+    );
+    const result = await trailers;
+    assertTrue(
+      result.kind === "err" &&
+        result.value.kind === "connection-read-timeout",
+      "body timeout settles trailers with connection-read-timeout",
+    );
+    assertTrue(canceled, "timed-out reader cancels its response body");
+  }
+});
+
+Deno.test("http timeouts: ignoring abort cannot hold send; late body is canceled", async () => {
+  let resolveTransport!: (response: globalThis.Response) => void;
+  let canceled = false;
+  const fragment = http({
+    fetch: () => new Promise((resolve) => (resolveTransport = resolve)),
+  });
+  const [request] = timedRequest(fragment, { first: 10_000_000n });
+  assertEq(
+    await errKindAsync(fragment.send(request)),
+    "connection-read-timeout",
+  );
+  resolveTransport(
+    new globalThis.Response(
+      new ReadableStream({
+        cancel() {
+          canceled = true;
+        },
+      }),
+    ),
+  );
+  await Promise.resolve();
+  await Promise.resolve();
+  assertTrue(canceled, "late noncompliant response body is canceled");
+});
+
+Deno.test("http timeouts: transport rejection after abort is observed and timeout wins", async () => {
+  const fragment = http({
+    fetch: (request) =>
+      new Promise((_resolve, reject) => {
+        request.signal.addEventListener("abort", () => {
+          queueMicrotask(() => reject(new Error("transport noticed abort")));
+        });
+      }),
+  });
+  const [request, transmitted] = timedRequest(fragment, {
+    first: 10_000_000n,
+  });
+  assertEq(
+    await errKindAsync(fragment.send(request)),
+    "connection-read-timeout",
+  );
+  const result = await transmitted;
+  assertTrue(
+    result.kind === "err" && result.value.kind === "connection-read-timeout",
+    "the late transport rejection cannot replace the timeout",
+  );
+  // Deno's test sanitizer also verifies the observed late rejection does not
+  // become an unhandled rejection after this test returns.
+  await Promise.resolve();
+});
+
+Deno.test("http timeouts: successful envelope clears timer and does not later abort body", async () => {
+  let signal: AbortSignal | undefined;
+  const fragment = http({
+    fetch: (request) => {
+      signal = request.signal;
+      return Promise.resolve(new globalThis.Response("body"));
+    },
+  });
+  const [request] = timedRequest(fragment, { first: 10_000_000n });
+  const response = await fragment.send(request);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assertTrue(
+    signal?.aborted === false,
+    "successful envelope timer was cleared",
+  );
+  const [body] = fragment.Response.consumeBody(response, okRes);
+  assertEq(utf8(await collect(body)), "body");
+});
+
+Deno.test("http timeouts: each unset phase uses 600s and huge durations use timer chunks", async () => {
+  const original = globalThis.setTimeout;
+  const delays: number[] = [];
+  globalThis.setTimeout = ((
+    handler: Parameters<typeof setTimeout>[0],
+    delay?: number,
+  ) => {
+    delays.push(delay ?? 0);
+    return original(handler, delay);
+  }) as typeof setTimeout;
+  try {
+    const takeDelays = (): number[] => delays.splice(0);
+    const envelope = http({
+      fetch: () => Promise.resolve(new globalThis.Response(null)),
+    });
+    const [noOptions] = envelope.Request["new"](
+      envelope.Fields.fromList([]),
+      undefined,
+      okTrailers,
+      undefined,
+    );
+    noOptions.setScheme({ kind: "HTTP" });
+    noOptions.setAuthority("example.com");
+    const noOptionsResponse = await envelope.send(noOptions);
+    assertEq(
+      JSON.stringify(takeDelays()),
+      JSON.stringify([600_000]),
+      "an absent RequestOptions gets the 600s envelope default",
+    );
+    noOptionsResponse[Symbol.dispose]();
+
+    const [unsetRequest] = timedRequest(envelope, {});
+    const unsetResponse = await envelope.send(unsetRequest);
+    assertEq(
+      JSON.stringify(takeDelays()),
+      JSON.stringify([600_000]),
+      "an unset first-byte option gets the 600s envelope default",
+    );
+    unsetResponse[Symbol.dispose]();
+
+    const bodyFragment = http({
+      fetch: () =>
+        Promise.resolve(
+          new globalThis.Response(
+            new ReadableStream({
+              start(controller) {
+                controller.close();
+              },
+            }),
+          ),
+        ),
+    });
+    const [firstReadRequest] = timedRequest(bodyFragment, {
+      first: 1_000_000_000n,
+    });
+    const firstReadResponse = await bodyFragment.send(firstReadRequest);
+    takeDelays(); // discard the explicit envelope timer
+    const [firstReadBody] = bodyFragment.Response.consumeBody(
+      firstReadResponse,
+      okRes,
+    );
+    await collect(firstReadBody);
+    assertEq(
+      JSON.stringify(takeDelays()),
+      JSON.stringify([600_000]),
+      "the first body read gets the unset 600s between-byte default",
+    );
+    firstReadResponse[Symbol.dispose]();
+
+    const laterFragment = http({
+      fetch: () =>
+        Promise.resolve(
+          new globalThis.Response(
+            new ReadableStream({
+              start(controller) {
+                controller.enqueue(text("one"));
+                controller.close();
+              },
+            }),
+          ),
+        ),
+    });
+    const [laterRequest] = timedRequest(laterFragment, {
+      first: 1_000_000_000n,
+    });
+    const laterResponse = await laterFragment.send(laterRequest);
+    takeDelays(); // discard the explicit envelope timer
+    const [laterBody] = laterFragment.Response.consumeBody(
+      laterResponse,
+      okRes,
+    );
+    assertEq(utf8(await collect(laterBody)), "one");
+    assertEq(
+      JSON.stringify(takeDelays()),
+      JSON.stringify([600_000, 600_000]),
+      "first and subsequent body reads each get a fresh 600s timer",
+    );
+    laterResponse[Symbol.dispose]();
+
+    const huge = http({
+      fetch: () => Promise.resolve(new globalThis.Response(null)),
+    });
+    const [hugeRequest] = timedRequest(huge, {
+      first: 18_446_744_073_709_551_615n,
+    });
+    const hugeResponse = await huge.send(hugeRequest);
+    assertEq(
+      JSON.stringify(takeDelays()),
+      JSON.stringify([2_147_483_647]),
+      "u64 duration cannot overflow into an immediate JS timeout",
+    );
+    hugeResponse[Symbol.dispose]();
+  } finally {
+    globalThis.setTimeout = original;
   }
 });
 
