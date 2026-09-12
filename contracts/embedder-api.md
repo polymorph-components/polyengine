@@ -462,11 +462,17 @@ Obligations:
   operation error; a standalone cleanup error is reported. This applies to pumps
   and explicit writers for top-level `own` elements. Composite stream elements
   containing nested owns are not covered by this cleanup policy.
-- **Producers are cancellable**: when the stream dies while the producer is
-  parked with no write in flight, the pump cancels it — a `ReadableStream` via
-  `reader.cancel()`, an (async-)iterable via its optional `cancel(): void` (then
-  drains the pending pull so a straggler reaches the un-taken path). A source
-  with no hook stays parked until its next element.
+- **Producer cleanup follows consumption.** Whenever the pump permanently stops
+  consuming an unfinished `ReadableStream`, including after reader drop or a
+  lowering/write failure, it calls `reader.cancel()` before releasing the reader
+  lock. Normal EOF only releases the lock. Cancellation rejection is ignored,
+  preserving any original operation failure. Iterables are finalized through
+  their optional iterator `return()`. If reader drop finds an async iterable
+  parked with no write in flight, its optional source `cancel(): void` hook
+  first unblocks the pending pull; the pump drains that pull so a straggler
+  reaches the un-taken path before finalization. Without an effective hook,
+  cleanup may remain parked until the pull settles. Cancelling an individual
+  stream copy does not itself terminate the source.
 - World-level host resources register under the resource's camelCase name; their
   mangled leaves dispatch on that class. Executable spec:
   examples/guests/resource-stream,

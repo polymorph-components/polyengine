@@ -53,14 +53,17 @@ async function rejected(p: PromiseLike<unknown>): Promise<unknown> {
   );
 }
 
-function assertProducerFailure(error: unknown): void {
+function assertProducerFailure(error: unknown, expectedCause = cause): void {
   assertEq(error instanceof StreamProducerError, true, String(error));
-  assertEq((error as StreamProducerError).cause, cause);
+  assertEq((error as StreamProducerError).cause, expectedCause);
   assertEq(String(error).includes(codec.where), true, String(error));
 }
 
-function producerFailure(error: unknown): StreamProducerError {
-  assertProducerFailure(error);
+function producerFailure(
+  error: unknown,
+  expectedCause = cause,
+): StreamProducerError {
+  assertProducerFailure(error, expectedCause);
   return error as StreamProducerError;
 }
 
@@ -81,6 +84,23 @@ function failingStream<T>(first?: T) {
     },
   };
   return { source, fail: () => reject(cause) };
+}
+
+function trackedReadable<T>(
+  values: T[] = [],
+  cancelFailure?: unknown,
+) {
+  let cancellations = 0;
+  const source = new ReadableStream<T>({
+    start(controller) {
+      for (const value of values) controller.enqueue(value);
+    },
+    cancel() {
+      cancellations++;
+      if (cancelFailure !== undefined) return Promise.reject(cancelFailure);
+    },
+  });
+  return { source, cancellations: () => cancellations };
 }
 
 Deno.test("producer failure: failure before binding remains abandonment after guest lowering", async () => {
@@ -314,4 +334,107 @@ Deno.test("producer failure: direct session ended by done keeps its result", asy
   release.resolve();
   assertEq(await completed, 3);
   assertEq(await rejected(stream.read(1)), error);
+});
+
+Deno.test("producer cleanup: zero and partial short writes cancel an unfinished readable source", async () => {
+  for (const take of [0, 1]) {
+    const tracked = trackedReadable<number[]>([[1, 2]]);
+    const raw = lowerStreamSource(tracked.source, codec) as SharedStreamImpl;
+    const host = hostStreamFor<number>(asValue(raw));
+    if (take !== 0) assertEq(await host.readable.read(take), [1]);
+    await turn();
+    assertEq(raw.pendingBuffer !== null, true, `take=${take}: writer parked`);
+    host.readable.drop();
+    await turn();
+    assertEq(tracked.cancellations(), 1, `take=${take}`);
+    assertEq(
+      tracked.source.locked,
+      false,
+      `take=${take}: reader lock released`,
+    );
+  }
+});
+
+Deno.test("producer cleanup: lowering failure releases its prefix and cancels the readable source", async () => {
+  const tracked = trackedReadable<number[]>([[1, 2]]);
+  const released: ComponentValue[] = [];
+  const loweringFailure = new Error("lowering failed");
+  const resourceCodec = {
+    ...codec,
+    fromHost(value: number): ComponentValue {
+      if (value === 2) throw loweringFailure;
+      return value;
+    },
+    release(value: ComponentValue) {
+      released.push(value);
+    },
+  };
+  const raw = lowerStreamSource(tracked.source, resourceCodec);
+  const stream = Stream.fromLifted<number>(raw, resourceCodec);
+  producerFailure(await rejected(stream.read(1)), loweringFailure);
+  assertEq(released, [1]);
+  assertEq(tracked.cancellations(), 1);
+  assertEq(tracked.source.locked, false);
+});
+
+Deno.test("producer cleanup: write failure remains primary when readable cancellation rejects", async () => {
+  const cancelFailure = new Error("cancel failed");
+  const tracked = trackedReadable<number[]>([[1]], cancelFailure);
+  const raw = lowerStreamSource(tracked.source, codec) as SharedStreamImpl;
+  const host = hostStreamFor<number>(asValue(raw));
+  const writeFailure = new Error("write failed");
+  host.writable.writeAll = () => Promise.reject(writeFailure);
+  const stream = Stream.fromLifted<number>(asValue(raw), codec);
+  producerFailure(await rejected(stream.read(1)), writeFailure);
+  assertEq(tracked.cancellations(), 1);
+  assertEq(tracked.source.locked, false);
+  assertEq(raw.pendingBuffer, null);
+});
+
+Deno.test("producer cleanup: rejecting cancellation after a clean short write still retires the pump", async () => {
+  const tracked = trackedReadable<number[]>(
+    [[1, 2]],
+    new Error("cancel failed"),
+  );
+  const raw = lowerStreamSource(tracked.source, codec) as SharedStreamImpl;
+  const store: { hostFailure?: unknown } = {};
+  raw.boundStore = store;
+  const host = hostStreamFor<number>(asValue(raw));
+  assertEq(await host.readable.read(1), [1]);
+  await turn();
+  assertEq(raw.pendingBuffer !== null, true, "remaining write is parked");
+  host.readable.drop();
+  await turn();
+  assertEq(tracked.cancellations(), 1);
+  assertEq(tracked.source.locked, false);
+  assertEq(raw.pendingBuffer, null);
+  assertEq(store.hostFailure, undefined);
+});
+
+Deno.test("producer cleanup: parked reader drop cancels exactly once even when cancellation rejects", async () => {
+  const tracked = trackedReadable<number[]>([], new Error("cancel failed"));
+  const raw = lowerStreamSource(tracked.source, codec);
+  hostStreamFor<number>(raw).readable.drop();
+  await turn();
+  assertEq(tracked.cancellations(), 1);
+  assertEq(tracked.source.locked, false);
+});
+
+Deno.test("producer cleanup: normal readable EOF releases without cancellation", async () => {
+  let cancellations = 0;
+  const source = new ReadableStream<number[]>({
+    start(controller) {
+      controller.enqueue([1]);
+      controller.close();
+    },
+    cancel() {
+      cancellations++;
+    },
+  });
+  const raw = lowerStreamSource(source, codec);
+  const host = hostStreamFor<number>(raw);
+  assertEq(await host.readable.read(1), [1]);
+  assertEq(await host.readable.read(1), []);
+  assertEq(cancellations, 0);
+  assertEq(source.locked, false);
 });
