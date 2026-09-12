@@ -1264,6 +1264,16 @@ export function createLiftedFunction(input: {
           }
           return;
         }
+        // Poison notification may have run after the driver returned idle but
+        // before this continuation installed its listener. Preserve an
+        // already-captured task result above; otherwise poisoning first must
+        // reject the pending async export with the recorded cause.
+        // CONTRACT: contracts/embedder-api.md:180-185; per-instance poisoning
+        // is the runtime policy in docs/architecture.md:300-307.
+        if (isInstancePoisoned(inst)) {
+          reject(instancePoisonCause(inst));
+          return;
+        }
         const onPoison = (cause: unknown): void => {
           onResolvedHook = null;
           reject(cause);
