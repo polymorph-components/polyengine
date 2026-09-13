@@ -173,6 +173,53 @@ Deno.test({
   },
 });
 
+// #352: an empty producer's stream traps its guest reader synchronously on
+// pump()'s terminal drop; that must stay contained, not leak a second Trap.
+for (const jspi of [false, true]) {
+  Deno.test({
+    name:
+      `#352: an empty producer's terminal pump drop doesn't leak a second Trap (jspi=${jspi})`,
+    ignore: !ready,
+    fn: async () => {
+      const seen: unknown[] = [];
+      const onUnhandled = (e: PromiseRejectionEvent) => {
+        seen.push(e.reason);
+        e.preventDefault();
+      };
+      globalThis.addEventListener("unhandledrejection", onUnhandled);
+      try {
+        const c = await instantiateFixture(FIXTURE, { sink: () => 0n }, {
+          jspi,
+        });
+        const callErr = await caught(() => c.exports.consumeThenTrap([], 1));
+        assertEq(
+          callErr instanceof Trap,
+          true,
+          `the call still surfaces its own branded Trap: ${callErr}`,
+        );
+        // Poisoning is permanent: a second call refuses instead of running.
+        const secondErr = await caught(() => c.exports.consumeThenTrap([1], 1));
+        assertEq(
+          secondErr instanceof Trap &&
+            String(secondErr).includes("instance poisoned"),
+          true,
+          `poisoning is permanent: ${secondErr}`,
+        );
+        await new Promise((r) => setTimeout(r, 0));
+        assertEq(
+          seen.length,
+          0,
+          `pump()'s terminal drop must not leak a second, unhandled Trap: ${
+            seen.map(String)
+          }`,
+        );
+      } finally {
+        globalThis.removeEventListener("unhandledrejection", onUnhandled);
+      }
+    },
+  });
+}
+
 // ---------------------------------------------------------------------------
 // One in-flight operation per host end (the guard the #66 repro exposed:
 // a second same-direction op used to "rendezvous" against our own parked
