@@ -553,12 +553,12 @@ class DirectSession implements DirectBuffer {
     }
     scope.die();
     if (verdict !== "more" && verdict !== "done") {
+      // Fixed message: never inspect the invalid value (polyengine#346 —
+      // even `Array.isArray` on a revoked Proxy throws).
       this.#fail(
         new TypeError(
-          `a direct-access callback must return "more" or "done", got ` +
-            `${
-              JSON.stringify(verdict)
-            } (embedder-api.md §"Streams and futures" ("Direct-access byte edges"))`,
+          'a direct-access callback must return "more" or "done" ' +
+            '(embedder-api.md §"Streams and futures" ("Direct-access byte edges"))',
         ),
       );
       return "failed";
