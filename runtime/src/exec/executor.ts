@@ -143,6 +143,12 @@ export interface InstantiateInput {
    */
   loadedPlan?: LoadedPlan;
   /**
+   * Scheduler store supplied by an embedding layer that must know the
+   * destination identity while core start functions are still running.
+   * Internal callers normally omit this and receive a fresh store.
+   */
+  store?: Store;
+  /**
    * Make **async-typed** exports trap on idle (#292). Default false.
    *
    * An async-typed export whose task parks on something only a *later* call
@@ -255,7 +261,7 @@ class Executor {
    * make a thread blocked in one instance invisible to a driving loop in
    * another.
    */
-  readonly store = new Store();
+  readonly store: Store;
   /**
    * Memoized `unsafe-intrinsic` core functions, by DECLARING COMPONENT
    * INSTANCE and symbol.
@@ -358,6 +364,7 @@ class Executor {
   readonly omittedExports = new Map<string, string>();
 
   constructor(loaded: LoadedPlan, input: InstantiateInput) {
+    this.store = input.store ?? new Store();
     this.loaded = loaded;
     this.wire = loaded.wire;
     this.componentBytes = input.componentBytes;

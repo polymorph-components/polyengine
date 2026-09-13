@@ -13,10 +13,33 @@
 // because `Facade#funcType` gated on `bind()`, which runs after instantiation.
 
 import { assertEq } from "../support/asserts.ts";
-import { caught, haveFixture, instantiateFixture } from "./support.ts";
+import type { Future } from "../../src/embedder/streams.ts";
+import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 
 const FIXTURE = "runtime/tests/embedder/start-imports.wasm";
 const ready = await haveFixture(FIXTURE);
+
+const FUTURE_FIXTURE = "runtime/tests/embedder/start-future-import.wasm";
+Deno.test({
+  name:
+    "start imports: cross-store future return is refused before consumption",
+  ignore: !(await haveFixture(FUTURE_FIXTURE)) ||
+    !(await haveFixture(guest("future-user"))),
+  async fn() {
+    const source = await instantiateFixture(guest("future-user"));
+    const future = source.exports.makeFuture(8) as Future<number>;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const error = await caught(() =>
+      instantiateFixture(FUTURE_FIXTURE, {
+        "host:api/boot": { future: () => future },
+      })
+    );
+    assertEq(error instanceof TypeError, true, String(error));
+    assertEq(String(error).includes("cross-store"), true, String(error));
+    assertEq(String(error).includes("Promise.resolve(f)"), true, String(error));
+    assertEq(await future, 9, "start-path refusal leaves the future awaitable");
+  },
+});
 
 Deno.test({
   name: "start imports: the facade serves imports called during instantiation",

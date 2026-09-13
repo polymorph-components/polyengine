@@ -52,6 +52,29 @@ function containsBorrow(t: ValType): boolean {
 }
 
 /**
+ * Host support policy for shared async values. The reference permits identity
+ * transfer (definitions.py:1802-1810); polyengine refuses stores it cannot yet
+ * coordinate, before any ownership or destination-table mutation.
+ */
+export function assertAsyncValueDestinationStore(
+  shared: { boundStore?: unknown },
+  destinationStore: unknown,
+  what: "stream" | "future",
+): void {
+  const sourceStore = shared.boundStore;
+  if (
+    sourceStore == null || destinationStore == null ||
+    sourceStore === destinationStore
+  ) return;
+  const adapter = what === "stream" ? ".readable()" : "Promise.resolve(f)";
+  throw new TypeError(
+    `cannot pass this ${what} directly between independent polyengine stores; ` +
+      `cross-store ${what} transfer is not supported. Adapt it by value with ` +
+      `${adapter} instead.`,
+  );
+}
+
+/**
  * definitions.py `lift_async_value`.
  *
  * Lifting **removes** the handle: the readable end is transferred out of this
@@ -65,7 +88,7 @@ function liftAsyncValue(
   // deno-lint-ignore no-explicit-any
   EndT: any,
   elem: ValType | null,
-  what: string,
+  what: "stream" | "future",
 ): SharedBase {
   assert_(!containsBorrow(t), `${what} may not contain a borrow`);
   const inst = cx.inst;
@@ -98,19 +121,7 @@ function liftAsyncValue(
     // admits structural test doubles whose store field is absent.
     const holder = end.shared as { boundStore?: unknown };
     const store = (inst as unknown as { store?: unknown }).store;
-    if (holder.boundStore != null && store != null) {
-      // Stores carry no runtime-copy identity, so the census is diagnostic
-      // context, not proof that this is a cross-copy mismatch.
-      const census = copyCensus();
-      assert_(
-        holder.boundStore === store,
-        `${what} crossed into a second store; multi-store is unsupported` +
-          (census === ""
-            ? ""
-            : ` (${census} — a value from one copy cannot be lowered through ` +
-              `another)`),
-      );
-    }
+    assertAsyncValueDestinationStore(holder, store, what);
     holder.boundStore ??= store;
     // Host-wrapper re-arm hook (contracts/embedder-api.md §"Streams and futures"): the readable
     // end just left a guest table, so whoever receives it can act on it again.
@@ -161,6 +172,13 @@ export function lowerStream(
   }
   const inst = cx.inst;
   assert_(inst !== null, "stream lower requires a component instance");
+  // CONTRACT: cross-store identity is an unsupported host policy, not a CABI
+  // rule (definitions.py:1802-1805). Check before onLowered or table insertion.
+  assertAsyncValueDestinationStore(
+    v,
+    (inst as { store?: unknown }).store,
+    "stream",
+  );
   (v as { boundStore?: unknown }).boundStore ??=
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);
@@ -188,6 +206,12 @@ export function lowerFuture(
   }
   const inst = cx.inst;
   assert_(inst !== null, "future lower requires a component instance");
+  // CONTRACT: see lowerStream and definitions.py:1807-1810.
+  assertAsyncValueDestinationStore(
+    v,
+    (inst as { store?: unknown }).store,
+    "future",
+  );
   (v as { boundStore?: unknown }).boundStore ??=
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);

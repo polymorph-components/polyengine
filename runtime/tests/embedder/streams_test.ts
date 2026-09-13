@@ -15,8 +15,16 @@ import {
   mkCanonicalOptions,
 } from "../../src/cabi/context.ts";
 import { Table } from "../../src/cabi/handles.ts";
-import { liftStream } from "../../src/cabi/async_values.ts";
-import { ReadableStreamEnd, SharedStreamImpl } from "../../src/task/mod.ts";
+import {
+  liftStream,
+  lowerFuture,
+  lowerStream,
+} from "../../src/cabi/async_values.ts";
+import {
+  ReadableStreamEnd,
+  SharedFutureImpl,
+  SharedStreamImpl,
+} from "../../src/task/mod.ts";
 
 const ready = await haveFixture(guest("async-probe")) &&
   await haveFixture(guest("stream-echo")) &&
@@ -266,14 +274,12 @@ Deno.test({
 });
 
 Deno.test({
-  name: "streams: a shared object crossing into a second store is refused",
+  name: "streams: lift-side cross-store mismatch is a host TypeError",
   ignore: false,
   fn: () => {
-    // R-fix review note 4's other half, at the layer that can actually see it:
-    // `liftAsyncValue` records the driving `Store` the first time a shared
-    // object is lifted or lowered, and refuses a second one — multi-store is
-    // unsupported misuse, and silently pumping the first store would be a
-    // deadlock that reads like a hang.
+    // `liftAsyncValue` records the driving Store the first time a shared object
+    // is lifted or lowered. A later mismatch is host-visible misuse, not an
+    // internal assertion.
     const shared = new SharedStreamImpl({ kind: "u32" });
     const mkInst = (store: unknown) => {
       const handles = new Table<unknown>();
@@ -296,9 +302,102 @@ Deno.test({
       err = e;
     }
     assertEq(
-      String(err).includes("crossed into a second store"),
+      err instanceof TypeError && String(err).includes("cross-store") &&
+        String(err).includes(".readable()"),
       true,
-      `expected the cross-store assert, got: ${err}`,
+      `expected the cross-store host error, got: ${err}`,
+    );
+  },
+});
+
+for (const kind of ["stream", "future"] as const) {
+  Deno.test(`raw ${kind} lower: cross-store refusal has no side effects`, () => {
+    const sourceStore = { name: "A" }, destinationStore = { name: "B" };
+    const shared = kind === "stream"
+      ? new SharedStreamImpl({ kind: "u32" })
+      : new SharedFutureImpl({ kind: "u32" });
+    shared.boundStore = sourceStore;
+    let lowered = 0;
+    shared.onLowered = () => lowered++;
+    const handles = new Table<unknown>();
+    const cx = new LiftLowerContext(
+      mkCanonicalOptions(),
+      { handles, mayLeave: true, store: destinationStore } as never,
+    );
+    const t = { kind, element: { kind: "u32" } } as const;
+    let error: unknown;
+    try {
+      if (kind === "stream") lowerStream(cx, shared, t as never);
+      else lowerFuture(cx, shared, t as never);
+    } catch (e) {
+      error = e;
+    }
+    assertEq(error instanceof TypeError, true, String(error));
+    assertEq(String(error).includes("cross-store"), true, String(error));
+    assertEq(shared.boundStore, sourceStore);
+    assertEq(lowered, 0, "onLowered must not run on refusal");
+    assertEq(handles.array.length, 1, "destination table must remain empty");
+  });
+}
+
+Deno.test({
+  name:
+    "streams/futures: independent stores refuse before consuming the source",
+  ignore: !ready,
+  async fn() {
+    const source = await instantiateFixture(guest("stream-echo"));
+    const destination = await instantiateFixture(guest("async-probe"));
+
+    const stream = await source.exports.echoDoubled([3, 4]) as Stream<number>;
+    const streamError = await caught(() =>
+      destination.exports.sumStream(stream)
+    );
+    assertEq(streamError instanceof TypeError, true, String(streamError));
+    assertEq(String(streamError).includes("cross-store"), true);
+    assertEq(String(streamError).includes(".readable()"), true);
+    assertEq(
+      await destination.exports.sumStream(stream.readable()),
+      14n,
+      "refusal leaves the source readable for an explicit proxy",
+    );
+
+    const futureSource = await instantiateFixture(guest("future-user"));
+    const future = futureSource.exports.makeFuture(20) as Future<number>;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const futureError = await caught(() =>
+      destination.exports.futureAdd(future, 1)
+    );
+    assertEq(futureError instanceof TypeError, true, String(futureError));
+    assertEq(String(futureError).includes("cross-store"), true);
+    assertEq(String(futureError).includes("Promise.resolve(f)"), true);
+    assertEq(
+      await destination.exports.futureAdd(Promise.resolve(future), 1),
+      22,
+      "refusal leaves the future awaitable for an explicit proxy",
+    );
+
+    const sameStoreStream = await source.exports.echoDoubled([5]) as Stream<
+      number
+    >;
+    await caught(() => destination.exports.sumStream(sameStoreStream));
+    const sameStoreOutput = await source.exports.echoDoubled(
+      sameStoreStream,
+    ) as Stream<number>;
+    assertEq(
+      await sameStoreOutput.read(1),
+      [20],
+      "a refused stream remains transferable back into its source store",
+    );
+
+    const sameStoreFuture = futureSource.exports.makeFuture(5) as Future<
+      number
+    >;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await caught(() => destination.exports.futureAdd(sameStoreFuture, 0));
+    assertEq(
+      await futureSource.exports.doubleFuture(sameStoreFuture),
+      12,
+      "a refused future remains transferable back into its source store",
     );
   },
 });

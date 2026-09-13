@@ -439,7 +439,15 @@ unhandled rejection.
 `Future<T>`. A `Future<T>` handle is lowerable once its host end has
 materialized; a still-deferred handle is refused loudly (a Promise has no such
 window). The runtime facade owns pumping and closes activity retention on
-end/drop. Cross-store reuse is refused.
+end/drop. Directly transferring an already-bound stream/future into an
+independent executor store is refused before consuming the source handle; adapt
+by value with `.readable()` / `Promise.resolve(f)` instead. Refusal while
+lowering an export argument happens before guest entry and leaves both instances
+usable. If refusal unwinds an entered guest activation while converting a host
+import result, the original `TypeError` escapes and poisons that guest instance
+under the normal boundary rule. Deferred async result conversion instead uses
+the existing host-failure channel. In both cases the source handle remains
+usable. First binding and transfers within one store remain supported.
 
 **An import whose result is `future<T>` returns the future source.** A thenable
 returned by the host (`Promise<T>` or `Future<T>`) IS the future: the import

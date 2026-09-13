@@ -1,7 +1,7 @@
 // Real canonical lowers through the facade. Counters distinguish no conversion
 // from converting and subsequently disposing a discarded result (#328/#329).
 import { assertEq } from "../support/asserts.ts";
-import { caught, instantiateFixture } from "./support.ts";
+import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 import {
   ComponentException,
   deferCancel,
@@ -240,6 +240,68 @@ for (const mode of [1, 2]) {
     assertEq(await written, 0);
     await fw.write(7);
     assertEq(c.handle.componentInstances[0].store.hostFailure, undefined);
+  });
+}
+
+for (const foreign of ["stream", "future"] as const) {
+  Deno.test({
+    name:
+      `settlement: deferred nested foreign ${foreign} refusal is non-poisoning`,
+    ignore: !(await haveFixture(guest("future-user"))) ||
+      !(await haveFixture("runtime/tests/embedder/busy-read.wasm")),
+    async fn() {
+      const futureSource = await instantiateFixture(guest("future-user"));
+      const streamSource = await instantiateFixture(
+        "runtime/tests/embedder/busy-read.wasm",
+      );
+      const created = Stream.create<number>();
+      const stream = await streamSource.exports.passStream(
+        created.stream,
+      ) as Stream<number>;
+      const future = futureSource.exports.makeFuture(20) as Future<number>;
+      await turn();
+      const settlement = deferred();
+      let sources: () => unknown = () => settlement.promise;
+      const { c } = await setup({
+        producers: { sources: () => sources() },
+      });
+
+      await c.exports.sources(0);
+      settlement.resolve({
+        stream: foreign === "stream" ? stream : [1, 2],
+        future: foreign === "future" ? future : Promise.resolve(7),
+      });
+      await turn();
+      const error = await caught(() => c.exports.ping());
+      assertEq(error instanceof TypeError, true, String(error));
+      assertEq(String(error).includes("cross-store"), true, String(error));
+      assertEq(
+        isInstancePoisoned(c.handle.componentInstances[0]),
+        false,
+        "deferred settlement conversion retains its existing host-failure path",
+      );
+
+      if (foreign === "stream") {
+        const reader = stream.readable().getReader();
+        const write = created.writer.write(new Uint8Array([6, 8]));
+        const read = await reader.read();
+        assertEq([...(read.value ?? [])], [6, 8]);
+        assertEq(await write, 2);
+        reader.releaseLock();
+      } else {
+        assertEq(await future, 21, "refused future remains awaitable");
+      }
+      sources = () => ({
+        stream: new Uint8Array([8]),
+        future: Promise.resolve(9),
+      });
+      assertEq(
+        await c.exports.sources(0),
+        2,
+        "valid proxy retry is accepted for lowering",
+      );
+      assertEq(await c.exports.ping(), 42, "destination remains live on retry");
+    },
   });
 }
 

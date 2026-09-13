@@ -11,6 +11,7 @@
 import type { ValType } from "../cabi/types.ts";
 import { despecialize } from "../cabi/types.ts";
 import type { ComponentValue } from "../cabi/types.ts";
+import { assertAsyncValueDestinationStore } from "../cabi/async_values.ts";
 import {
   type DirectSessionInfo,
   type HostFuture,
@@ -239,7 +240,7 @@ export class Stream<T> implements ProtocolStream<T> {
   }
 
   /** @internal — the shared value to hand to a lowering site. */
-  takeValue(codec: ElemCodec<T>): ComponentValue {
+  takeValue(codec: ElemCodec<T>, destinationStore?: unknown): ComponentValue {
     if (this.#dropped) {
       throw new TypeError(
         "this Stream has been dropped and cannot be passed to a guest",
@@ -255,6 +256,15 @@ export class Stream<T> implements ProtocolStream<T> {
       throw new TypeError(
         "this Stream's readable end has a read in flight; await it or " +
           "cancelRead() before passing the stream to a guest",
+      );
+    }
+    // Support policy atop definitions.py:1504-1511, which transfers the shared
+    // value without stores. Refuse before lazy binding or #consumed changes.
+    if (this.#host !== null) {
+      assertAsyncValueDestinationStore(
+        this.#host.value as { boundStore?: unknown },
+        destinationStore,
+        "stream",
       );
     }
     this.bindElement(codec);
@@ -778,7 +788,7 @@ export class Future<T> implements ProtocolFuture<T> {
   }
 
   /** @internal */
-  takeValue(): ComponentValue {
+  takeValue(destinationStore?: unknown): ComponentValue {
     if (this.#host === null) {
       throw new TypeError(
         "this Future is still in flight and cannot be passed to a guest yet",
@@ -789,6 +799,12 @@ export class Future<T> implements ProtocolFuture<T> {
         "this Future handle has already been passed to a guest",
       );
     }
+    // See Stream.takeValue: this host support check precedes activity changes.
+    assertAsyncValueDestinationStore(
+      this.#host.value as { boundStore?: unknown },
+      destinationStore,
+      "future",
+    );
     const state = hostFutureReadableState(
       this.#host as HostFuture<unknown>,
     );
@@ -981,10 +997,11 @@ export type FutureSource<T> = Future<T> | PromiseLike<T> | T;
 export function lowerStreamSource<T>(
   src: StreamSource<T>,
   codec: ElemCodec<T>,
+  destinationStore?: unknown,
 ): ComponentValue {
   // Preserve handle identity before considering producer adaptation.
   if (src instanceof Stream) {
-    return src.takeValue(codec);
+    return src.takeValue(codec, destinationStore);
   }
   // A foreign handle must not silently become an async-iterator copy.
   if (hasBrand(src, STREAM)) {
@@ -1221,8 +1238,11 @@ function isReadableStream(v: unknown): v is ReadableStream<unknown> {
 export function lowerFutureSource<T>(
   src: FutureSource<T>,
   codec: ElemCodec<T>,
+  destinationStore?: unknown,
 ): ComponentValue {
-  if (src instanceof Future) return src.takeValue();
+  if (src instanceof Future) {
+    return src.takeValue(destinationStore);
+  }
   // Reject foreign handles before thenable adoption can hide a by-value copy.
   if (hasBrand(src, FUTURE)) {
     throw new TypeError(describeCrossCopy(

@@ -58,6 +58,7 @@ import {
 import { ImportResolver } from "./version.ts";
 import { type ElemCodec, Future, Stream } from "./streams.ts";
 import { markSyncCallable } from "./sync.ts";
+import { Store } from "../task/mod.ts";
 
 /**
  * Preserve declaration-level suspension/cancellation marks through every
@@ -199,7 +200,11 @@ export async function instantiate(
   opts: EmbedderOptions = {},
 ): Promise<EmbedderInstance> {
   const artifacts = await resolveArtifacts(source);
-  const facade = new Facade(artifacts, imports);
+  // The destination store must exist before core start functions can call a
+  // host import. Sharing this exact identity avoids both a stale post-bind
+  // closure and guessing from whichever task happens to be active.
+  const store = new Store();
+  const facade = new Facade(artifacts, imports, store);
   const handle = await instantiateComponent({
     plan: artifacts.plan,
     componentBytes: artifacts.componentBytes,
@@ -210,6 +215,7 @@ export async function instantiate(
     // Share the facade's resource tokens with imports called by core start
     // functions, before instantiateComponent returns a handle.
     loadedPlan: facade.loaded,
+    store,
   });
   facade.bind(handle);
   const instance: EmbedderInstance = {
@@ -270,6 +276,7 @@ class Facade {
   constructor(
     readonly artifacts: ComponentArtifacts,
     providers: Record<string, unknown>,
+    readonly store: Store,
   ) {
     this.#resolver = new ImportResolver(providers);
     this.loaded = loadPlan(artifacts.plan);
@@ -466,7 +473,7 @@ class Facade {
   }
 
   #opts(where: string): AdapterOptions {
-    return { bridge: this.#bridge, where };
+    return { bridge: this.#bridge, where, destinationStore: this.store };
   }
 
   #funcType(index: number | undefined, what: string): FuncType {
