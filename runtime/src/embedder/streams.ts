@@ -1092,7 +1092,14 @@ async function pump<T>(
     );
   }
   // Always end the stream and release activity after recording any failure.
-  host.writable.drop();
+  // This drop can synchronously resume a parked guest, which can trap back
+  // out through it (#352); `HostActivity.pump` already records that fault,
+  // so just contain the throw here — `void pump()` has no one to catch it.
+  try {
+    host.writable.drop();
+  } catch {
+    // recorded via HostActivity.pump; see above.
+  }
 }
 
 /** resource stream: destroy `lowered[taken..]` when a codec's elements hold resources. */
