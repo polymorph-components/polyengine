@@ -42,6 +42,7 @@ import {
 // `executor.ts buildLoweredImport` reads it from the embedder's imports record.
 import { deferCancel, isDeferCancel } from "../src/jspi/suspending.ts";
 import { Trap } from "../src/cabi/mod.ts";
+import { adaptHostFunction } from "../src/exec/host_settlement.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
@@ -107,7 +108,7 @@ function mkFixture(hostFn: (...a: unknown[]) => unknown): Fixture {
     name: "host-fn",
     ft: FT,
     opts,
-    hostFn,
+    hostFn: adaptHostFunction(hostFn),
     stats: newStats(),
     mode: "plain",
     suspendable: false,
@@ -241,7 +242,7 @@ Deno.test("sync lower of a Promise-returning host import needs JSPI", () => {
     name: "sync-host-fn",
     ft: syncFt,
     opts,
-    hostFn: () => Promise.resolve(1),
+    hostFn: adaptHostFunction(() => Promise.resolve(1)),
     stats: newStats(),
     deferCancel: false,
     abortable: false,

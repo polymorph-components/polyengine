@@ -5,6 +5,7 @@ import { assert_, trapIf } from "./trap.ts";
 import type { MemInst } from "./memory.ts";
 import type { StringEncoding } from "./types.ts";
 import type { Table } from "./handles.ts";
+import type { PreparedCustody } from "./values.ts";
 
 /**
  * definitions.py realloc signature: (original_ptr, original_size, alignment,
@@ -89,6 +90,9 @@ export class LiftLowerContext {
     public opts: LiftLowerOptions,
     public inst: ComponentInstanceLike | null = null,
     public borrowScope: SubtaskBorrowScope | TaskBorrowScope | null = null,
+    /** Host-boundary transfer custody and reentry guard; absent on guest-only paths. */
+    public preparedCustody: PreparedCustody | null = null,
+    public checkpoint: (() => void) | null = null,
   ) {}
 
   /**
@@ -119,6 +123,9 @@ export class LiftLowerContext {
     // entry-identity rule in exec/boundary.ts.
     const ptr = realloc!(old, oldByteLength, alignment, newByteLength);
     this.inst.mayLeave = true;
+    // Guest realloc is intentional reentry. Accepted cancellation/poisoning
+    // must stop before the next write or ownership acquisition.
+    this.checkpoint?.();
     return ptr;
   }
 

@@ -15,7 +15,7 @@
 //   * a `Store` and a fake guest thread (the same `SchedulableThread` surface
 //     `Store.tick` uses: `ready`/`waiting`/`resume`/`task.inst`);
 //   * a host import modelled exactly as the async-lower registration site in
-//     exec/boundary.ts does it — `createLoweredImport`'s `isPromiseLike(raw)`
+//     exec/boundary.ts does it — `createLoweredImport`'s explicit pending handoff
 //     branch, the `Promise.resolve(raw).then(...)` whose continuations
 //     `store.pendingHostCalls.delete(promise)` and then `onResolve`, followed
 //     by `store.pendingHostCalls.add(promise)` (currently ~1534-1548): a
@@ -135,7 +135,7 @@ Deno.test({
 
     // The guest's detached pump task: write one chunk, then "call" a
     // Promise-returning host import and park until it settles. The import is
-    // registered exactly as `createLoweredImport`'s `isPromiseLike(raw)`
+    // registered exactly as `createLoweredImport`'s pending-handoff
     // branch does it (boundary.ts, the `Promise.resolve(raw).then(...)` /
     // `store.pendingHostCalls.add(promise)` pair, currently ~1534-1548): into
     // `store.pendingHostCalls`, with a settle continuation that readies the

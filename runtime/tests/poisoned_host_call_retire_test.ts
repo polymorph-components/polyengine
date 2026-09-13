@@ -33,6 +33,7 @@ import {
 } from "../src/task/mod.ts";
 import { Trap } from "../src/cabi/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
+import { adaptHostFunction } from "../src/exec/host_settlement.ts";
 
 /** `func()` — async-typed, no results: nothing to lower, so the only thing
  * under test is where the late settlement's outcome goes. */
@@ -84,7 +85,7 @@ Deno.test(
       name: "host-fn-in-flight",
       ft: FT,
       opts,
-      hostFn: () => raw,
+      hostFn: adaptHostFunction(() => raw),
       stats: newStats(),
       mode: "plain",
       suspendable: false,

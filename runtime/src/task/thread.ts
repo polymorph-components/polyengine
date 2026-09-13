@@ -159,6 +159,18 @@ export class Thread implements SchedulableThread {
     this.#resumeInternal(cancelled);
   }
 
+  /** Retire a cancellable wait without delivering task cancellation. */
+  abandonWaiting(): void {
+    assert_(
+      this.waiting() && this.cancellable,
+      "abandon of non-cancellable wait",
+    );
+    this.#stopWaiting(CANCELLED_TRUE);
+    this.#body.return?.();
+    this.#state = "done";
+    this.cancellable = false;
+  }
+
   #resumeInternal(sendValue: unknown, failure?: { error: unknown }): void {
     this.#state = "running";
     this.cancellable = false;

@@ -23,6 +23,7 @@ import {
 } from "../src/exec/boundary.ts";
 import {
   ComponentInstanceState,
+  notifyInstancePoisoned,
   popCurrentThread,
   pushCurrentThread,
   Store,
@@ -31,6 +32,7 @@ import {
   Thread,
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
+import { adaptHostFunction } from "../src/exec/host_settlement.ts";
 
 /** `func() -> string`, async-typed — a result type that must allocate to lower. */
 const FT: FuncType = {
@@ -89,7 +91,7 @@ Deno.test(
       name: "host-fn-string-result",
       ft: FT,
       opts,
-      hostFn: () => Promise.resolve("hello"),
+      hostFn: adaptHostFunction(() => Promise.resolve("hello")),
       stats: newStats(),
       mode: "plain",
       suspendable: false,
@@ -129,3 +131,75 @@ Deno.test(
     // (rather than this local test rethrowing it) is exactly the point.
   },
 );
+
+Deno.test("#347: raw result getters run before poison eligibility and never write guest memory", async () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  const memory = new WebAssembly.Memory({ initial: 1 });
+  const view = {
+    addrType: "i32" as const,
+    get bytes() {
+      return new Uint8Array(memory.buffer);
+    },
+    get view() {
+      return new DataView(memory.buffer);
+    },
+    get length() {
+      return memory.buffer.byteLength;
+    },
+    ptrType: () => "i32" as const,
+    ptrSize: () => 4 as const,
+  };
+  const record: FuncType = {
+    params: [],
+    results: [{
+      kind: "record",
+      fields: [
+        { label: "x", type: { kind: "u32" } },
+        { label: "y", type: { kind: "u32" } },
+      ],
+    }],
+    async: true,
+  };
+  const call = createLoweredImport({
+    name: "raw-record",
+    ft: record,
+    opts: {
+      stringEncoding: "utf8",
+      memory: view as never,
+      realloc: null,
+      postReturn: null,
+      callback: null,
+      async: true,
+      cancellable: false,
+      coreType: { params: ["i32"], results: ["i32"] },
+      instance: inst,
+    },
+    hostFn: adaptHostFunction(() =>
+      Promise.resolve({
+        get x() {
+          notifyInstancePoisoned(inst, new Error("getter poison"));
+          return 111;
+        },
+        y: 222,
+      })
+    ),
+    stats: newStats(),
+    mode: "plain",
+    suspendable: false,
+    deferCancel: false,
+    abortable: false,
+  }) as (...args: number[]) => unknown;
+  const task = new Task(record, TASK_OPTS, inst, () => [], () => {});
+  const thread = new Thread(task, (function* () {})());
+  pushCurrentThread(thread);
+  try {
+    call(64);
+  } finally {
+    popCurrentThread(thread);
+  }
+  await new Promise((r) => setTimeout(r, 0));
+  const dv = new DataView(memory.buffer);
+  assertEq(dv.getUint32(64, true), 0);
+  assertEq(dv.getUint32(68, true), 0);
+});

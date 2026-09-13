@@ -47,6 +47,7 @@ import {
   type ResolvedOptions,
   SYNC_ENTRY,
 } from "./boundary.ts";
+import { adaptHostFunction, isHostCallAdapter } from "./host_settlement.ts";
 import {
   createTrampoline,
   createUnsafeIntrinsic,
@@ -1152,7 +1153,9 @@ class Executor {
       name: label,
       ft,
       opts,
-      hostFn: value as (...args: unknown[]) => unknown,
+      hostFn: isHostCallAdapter(value)
+        ? value
+        : adaptHostFunction(value as (...args: unknown[]) => unknown),
       stats: this.stats,
       mode: this.suspensionMode,
       suspendable,

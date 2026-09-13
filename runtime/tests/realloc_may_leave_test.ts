@@ -18,6 +18,7 @@ import {
 import { ComponentInstanceState, Store } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
 import { LiftLowerContext, mkCanonicalOptions } from "../src/cabi/mod.ts";
+import { adaptHostFunction } from "../src/exec/host_settlement.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
@@ -146,7 +147,7 @@ Deno.test("#147: a host-entry realloc that lowers an import traps", () => {
     name: "trivial-import",
     ft: NULLARY,
     opts: h.mkOpts({ coreType: { params: [], results: [] } }),
-    hostFn: () => undefined,
+    hostFn: adaptHostFunction(() => undefined),
     stats: newStats(),
     mode: "plain",
     suspendable: false,
@@ -189,7 +190,7 @@ Deno.test("#147: import-result lowering runs realloc inside the may_leave window
     name: "returns-string",
     ft: RETURNS_STRING,
     opts: h.mkOpts({ coreType: { params: ["i32"], results: [] } }),
-    hostFn: () => "from the host",
+    hostFn: adaptHostFunction(() => "from the host"),
     stats: newStats(),
     mode: "plain",
     suspendable: false,
@@ -229,7 +230,7 @@ Deno.test("#147: an import-result realloc that lowers an import traps", () => {
     name: "trivial-import",
     ft: NULLARY,
     opts: h.mkOpts({ coreType: { params: [], results: [] } }),
-    hostFn: () => undefined,
+    hostFn: adaptHostFunction(() => undefined),
     stats: newStats(),
     mode: "plain",
     suspendable: false,
@@ -240,7 +241,7 @@ Deno.test("#147: an import-result realloc that lowers an import traps", () => {
     name: "returns-string",
     ft: RETURNS_STRING,
     opts: h.mkOpts({ coreType: { params: ["i32"], results: [] } }),
-    hostFn: () => "from the host",
+    hostFn: adaptHostFunction(() => "from the host"),
     stats: newStats(),
     mode: "plain",
     suspendable: false,

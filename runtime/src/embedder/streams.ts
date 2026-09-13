@@ -11,6 +11,7 @@
 import type { ValType } from "../cabi/types.ts";
 import { despecialize } from "../cabi/types.ts";
 import type { ComponentValue } from "../cabi/types.ts";
+import type { PreparedTransfer } from "../cabi/values.ts";
 import { assertAsyncValueDestinationStore } from "../cabi/async_values.ts";
 import {
   type DirectSessionInfo,
@@ -64,6 +65,8 @@ export interface ElemCodec<T> {
   toHost(v: ComponentValue): T;
   /** conventions value -> internal component value */
   fromHost(v: T): ComponentValue;
+  /** Shared facade preparation; absent only on low-level/test codecs. */
+  prepareHost?(v: T): PreparedTransfer;
   /**
    * Destroy a LOWERED element the reader will never take (§"Streams and futures");
    * present only for element types that hold resources (`own<R>`), where
@@ -206,8 +209,9 @@ export class Stream<T> implements ProtocolStream<T> {
   }
 
   /** @internal — bind a lazily created stream to the lowering site's type. */
-  bindElement(codec: ElemCodec<T>): void {
+  bindElement(codec: ElemCodec<T>, checkpoint?: () => void): void {
     if (this.#host !== null) return;
+    checkpoint?.();
     this.#codec = codec;
     this.#host = hostStream<T>(codec.element);
     publishHostStream(this, this.#host);
@@ -216,6 +220,7 @@ export class Stream<T> implements ProtocolStream<T> {
     this.#binders = [];
     for (const w of waiters) w();
     for (const listener of this.#boundListeners) listener();
+    checkpoint?.();
   }
 
   /** @internal — resolve once this handle has a shared object. */
@@ -240,7 +245,11 @@ export class Stream<T> implements ProtocolStream<T> {
   }
 
   /** @internal — the shared value to hand to a lowering site. */
-  takeValue(codec: ElemCodec<T>, destinationStore?: unknown): ComponentValue {
+  takeValue(
+    codec: ElemCodec<T>,
+    destinationStore?: unknown,
+    checkpoint?: () => void,
+  ): ComponentValue {
     if (this.#dropped) {
       throw new TypeError(
         "this Stream has been dropped and cannot be passed to a guest",
@@ -267,13 +276,17 @@ export class Stream<T> implements ProtocolStream<T> {
         "stream",
       );
     }
-    this.bindElement(codec);
+    this.bindElement(codec, checkpoint);
     if (this.#consumed) {
       throw new TypeError(
         "this Stream handle has already been passed to a guest; a stream " +
           "value may only be transferred once",
       );
     }
+    // CONTRACT: eligibility must be rechecked immediately before consuming
+    // the source end, including the already-bound path where bindElement()
+    // performs no work (definitions.py:1504-1511).
+    checkpoint?.();
     this.#consumed = true;
     return this.#host!.value;
   }
@@ -586,7 +599,21 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
     const host = hostOf(this.#stream);
     const where = codec.where ?? "stream write";
     throwIfFailed(host.value, where);
-    const lowered = packChunk(values, codec);
+    const cancelledDuringPreparation = Symbol(
+      "stream write cancelled during preparation",
+    );
+    let lowered: ComponentValue[] | Uint8Array;
+    try {
+      lowered = packChunk(values, codec, () => {
+        if (op.cancelled || this.#stream.dropped) {
+          throw cancelledDuringPreparation;
+        }
+        throwIfFailed(host.value, where);
+      });
+    } catch (e) {
+      if (e === cancelledDuringPreparation) return 0;
+      throw e;
+    }
     if (op.cancelled) {
       releaseUntaken(lowered, 0, codec);
       return 0;
@@ -788,7 +815,10 @@ export class Future<T> implements ProtocolFuture<T> {
   }
 
   /** @internal */
-  takeValue(destinationStore?: unknown): ComponentValue {
+  takeValue(
+    destinationStore?: unknown,
+    checkpoint?: () => void,
+  ): ComponentValue {
     if (this.#host === null) {
       throw new TypeError(
         "this Future is still in flight and cannot be passed to a guest yet",
@@ -821,6 +851,10 @@ export class Future<T> implements ProtocolFuture<T> {
           : "this Future's value has already been consumed and cannot be passed to a guest again",
       );
     }
+    // CONTRACT: mirror lift_async_value's remove-after-validation ordering;
+    // accepted cancellation must win before this host handle is consumed
+    // (definitions.py:1504-1511).
+    checkpoint?.();
     this.#consumed = true;
     return this.#host.value;
   }
@@ -998,10 +1032,20 @@ export function lowerStreamSource<T>(
   src: StreamSource<T>,
   codec: ElemCodec<T>,
   destinationStore?: unknown,
+  deferStart?: (start: () => void) => void,
+  checkpoint?: () => void,
 ): ComponentValue {
   // Preserve handle identity before considering producer adaptation.
   if (src instanceof Stream) {
-    return src.takeValue(codec, destinationStore);
+    // Property lookup is effectful for a Proxy around a real handle. Capture
+    // it, then let accepted cancellation stop before invocation/consumption.
+    const takeValue = src.takeValue;
+    checkpoint?.();
+    return Reflect.apply(takeValue, src, [
+      codec,
+      destinationStore,
+      checkpoint,
+    ]);
   }
   // A foreign handle must not silently become an async-iterator copy.
   if (hasBrand(src, STREAM)) {
@@ -1013,7 +1057,9 @@ export function lowerStreamSource<T>(
   const host = hostStream<T>(codec.element);
   const stream = Stream.fromHostStream<T>(host, codec);
   publishHostStream(stream, host);
-  void pump(src, host, codec);
+  const start = () => void pump(src, host, codec);
+  if (deferStart === undefined) start();
+  else deferStart(start);
   return host.value;
 }
 
@@ -1027,17 +1073,37 @@ export function lowerStreamSource<T>(
 function packChunk<T>(
   values: readonly T[] | Uint8Array,
   codec: ElemCodec<T>,
+  checkpoint: () => void = () => {},
 ): ComponentValue[] | Uint8Array {
   const u8 = isU8Element(codec.element);
   if (values instanceof Uint8Array && u8) return values;
   const lowered: ComponentValue[] = [];
+  let prepared: PreparedTransfer[] | null = null;
+  if (codec.prepareHost !== undefined) {
+    prepared = new Array<PreparedTransfer>(values.length);
+    for (let i = 0; i < values.length; i++) {
+      prepared[i] = codec.prepareHost(values[i] as T);
+    }
+  }
   try {
-    for (const v of values) lowered.push(codec.fromHost(v as T));
+    if (prepared === null) {
+      for (const v of values) lowered.push(codec.fromHost(v as T));
+    } else {
+      // Whole chunk structure is frozen before the first ownership transfer.
+      checkpoint();
+      for (const p of prepared) lowered.push(p.transfer(checkpoint, false)[0]);
+      for (const p of prepared) p.start(checkpoint);
+      for (const p of prepared) p.delivered();
+    }
   } catch (e) {
-    try {
-      releaseUntaken(lowered, 0, codec);
-    } catch {
-      // Preserve the invalid element's error after releasing the prefix.
+    if (prepared !== null) {
+      for (const p of prepared) p.cleanup(e);
+    } else {
+      try {
+        releaseUntaken(lowered, 0, codec);
+      } catch {
+        // Preserve the invalid element's error after releasing the prefix.
+      }
     }
     throw e;
   }
@@ -1048,6 +1114,9 @@ function packChunk<T>(
 
 /** Race sentinel: the reader's end dropped while the producer was parked. */
 const READER_GONE: unique symbol = Symbol("polyengine reader gone");
+const CLEANLY_ABANDONED: unique symbol = Symbol(
+  "polyengine clean producer abandonment",
+);
 
 async function pump<T>(
   src: Exclude<StreamSource<T>, Stream<T>>,
@@ -1065,9 +1134,27 @@ async function pump<T>(
   );
   try {
     for await (const batch of batches<T>(src, gone)) {
+      const dropped =
+        (host.value as unknown as { dropped?: boolean }).dropped === true;
+      if (dropped && codec.release === undefined) break;
       // Lowering is the likeliest failure (a value of the wrong shape) and it
       // must be attributed to the site, not swallowed into a short stream.
-      const lowered = packChunk(batch, codec) as unknown as T[];
+      const lowered = packChunk(batch, codec, () => {
+        // A pulled top-level own is already producer-owned and must still be
+        // acquired then released through the untaken path (#342).
+        if (codec.release === undefined) {
+          if (
+            (host.value as unknown as { dropped?: boolean }).dropped === true
+          ) {
+            throw CLEANLY_ABANDONED;
+          }
+          throwIfFailed(host.value, where);
+        }
+      }) as unknown as T[];
+      if ((host.value as unknown as { dropped?: boolean }).dropped === true) {
+        releaseUntaken(lowered as unknown as ComponentValue[], 0, codec);
+        break;
+      }
       const info = codec.release === undefined ? undefined : { progress: 0 };
       let n: number;
       try {
@@ -1094,6 +1181,7 @@ async function pump<T>(
       }
     }
   } catch (e) {
+    if (e === CLEANLY_ABANDONED) return;
     failure = e;
     failed = true;
   }
@@ -1246,9 +1334,14 @@ export function lowerFutureSource<T>(
   src: FutureSource<T>,
   codec: ElemCodec<T>,
   destinationStore?: unknown,
+  deferStart?: (start: () => void) => void,
+  checkpoint?: () => void,
 ): ComponentValue {
   if (src instanceof Future) {
-    return src.takeValue(destinationStore);
+    // As for streams, a Proxy can run host code during method lookup.
+    const takeValue = src.takeValue;
+    checkpoint?.();
+    return Reflect.apply(takeValue, src, [destinationStore, checkpoint]);
   }
   // Reject foreign handles before thenable adoption can hide a by-value copy.
   if (hasBrand(src, FUTURE)) {
@@ -1258,44 +1351,73 @@ export function lowerFutureSource<T>(
     ));
   }
   const host = hostFuture<T>(codec.element);
-  void (async () => {
-    try {
-      const v = await (src as PromiseLike<T>);
-      const lowered = codec.fromHost(v);
-      const info = codec.release === undefined ? undefined : { progress: 0 };
+  const start = () =>
+    void (async () => {
       try {
-        await host.write(lowered as unknown as T, info);
-        if (info?.progress === 0) {
-          throwIfPeerTrapped(host.value, codec.where ?? "future producer", 0);
-        }
-      } catch (e) {
+        const v = await (src as PromiseLike<T>);
+        if (
+          (host.value as unknown as { dropped?: boolean }).dropped === true &&
+          codec.release === undefined
+        ) return;
+        const prepared = codec.prepareHost?.(v);
+        let lowered: ComponentValue;
         try {
-          if (info?.progress === 0) codec.release?.(lowered);
-        } catch {
-          // Preserve the write failure if cleanup also fails.
+          lowered = prepared === undefined
+            ? codec.fromHost(v)
+            : prepared.transfer(() =>
+              (host.value as unknown as { dropped?: boolean }).dropped ===
+                  true &&
+                codec.release === undefined
+                ? (() => {
+                  throw CLEANLY_ABANDONED;
+                })()
+                : throwIfFailed(host.value, codec.where ?? "future producer")
+            )[0];
+        } catch (e) {
+          prepared?.cleanup(e);
+          if (e === CLEANLY_ABANDONED) return;
+          throw e;
         }
-        throw e;
+        const info = codec.release === undefined ? undefined : { progress: 0 };
+        try {
+          const write = host.write(lowered as unknown as T, info);
+          // The stream operation now owns untaken-payload accounting.
+          prepared?.delivered();
+          await write;
+          if (info?.progress === 0) {
+            throwIfPeerTrapped(host.value, codec.where ?? "future producer", 0);
+          }
+        } catch (e) {
+          prepared?.cleanup(e);
+          try {
+            if (info?.progress === 0) codec.release?.(lowered);
+          } catch {
+            // Preserve the write failure if cleanup also fails.
+          }
+          throw e;
+        }
+        if (info?.progress === 0) codec.release?.(lowered);
+      } catch (e) {
+        // Report the producer cause rather than replace it with a generic
+        // abandonment trap. Reporting itself does not retire the future.
+        const failure = reportProducerFailure(
+          { value: host.value } as unknown as HostStream<unknown>,
+          codec.where ?? "future producer",
+          e,
+        );
+        try {
+          // CONTRACT: an unwritten bound future is abandoned, not completed
+          // DROPPED-shaped (embedder-api.md §"Streams and futures";
+          // definitions.py `WritableFutureEnd.drop`).
+          // Retire it with the producer error itself so pending guest and host
+          // readers wake with the same cause, and drop observers release activity.
+          host.fail(failure);
+        } catch {
+          // Reporting happened first; cleanup must not replace the producer fault.
+        }
       }
-      if (info?.progress === 0) codec.release?.(lowered);
-    } catch (e) {
-      // Report the producer cause rather than replace it with a generic
-      // abandonment trap. Reporting itself does not retire the future.
-      const failure = reportProducerFailure(
-        { value: host.value } as unknown as HostStream<unknown>,
-        codec.where ?? "future producer",
-        e,
-      );
-      try {
-        // CONTRACT: an unwritten bound future is abandoned, not completed
-        // DROPPED-shaped (embedder-api.md §"Streams and futures";
-        // definitions.py `WritableFutureEnd.drop`).
-        // Retire it with the producer error itself so pending guest and host
-        // readers wake with the same cause, and drop observers release activity.
-        host.fail(failure);
-      } catch {
-        // Reporting happened first; cleanup must not replace the producer fault.
-      }
-    }
-  })();
+    })();
+  if (deferStart === undefined) start();
+  else deferStart(start);
   return host.value;
 }
