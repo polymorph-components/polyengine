@@ -125,7 +125,11 @@ export function lowerOwn(
   t: OwnType,
 ): number {
   const h = new ResourceHandle(t.rt, rep, true);
-  return requireInst(cx).handles.add(h);
+  const table = requireInst(cx).handles;
+  const i = table.add(h);
+  cx.preparedCustody?.inserted(table, i, h);
+  cx.checkpoint?.();
+  return i;
 }
 
 export function lowerBorrow(
@@ -143,7 +147,9 @@ export function lowerBorrow(
   }
   const h = new ResourceHandle(t.rt, rep, false, scope);
   scope!.numBorrows += 1;
-  return requireInst(cx).handles.add(h);
+  const i = requireInst(cx).handles.add(h);
+  cx.checkpoint?.();
+  return i;
 }
 
 // ---------------------------------------------------------------------------

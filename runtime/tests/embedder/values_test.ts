@@ -9,7 +9,7 @@
 import { assertEq } from "../support/asserts.ts";
 import { caught, guest, haveFixture, instantiateFixture } from "./support.ts";
 import { ComponentException } from "@polyengine/protocol";
-import { toHost } from "../../src/embedder/values.ts";
+import { prepareHostValues, toHost } from "../../src/embedder/values.ts";
 
 const ready = await haveFixture(guest("values"));
 
@@ -34,6 +34,95 @@ Deno.test({
     );
     assertEq(await p, true);
   },
+});
+
+Deno.test("values: preparation snapshots all fields before ownership transfer", () => {
+  const events: string[] = [];
+  const t = {
+    kind: "record",
+    fields: [
+      { label: "first", type: { kind: "own", rt: { resource: {} } } },
+      { label: "later", type: { kind: "u32" } },
+    ],
+  } as unknown as Parameters<typeof prepareHostValues>[1][number];
+  const bridge = {
+    liftOwn: () => 0,
+    liftBorrow: () => 0,
+    lowerOwn: () => {
+      events.push("own");
+      return 7;
+    },
+    lowerBorrow: () => 0,
+    dropOwn: () => {},
+  };
+  const value = {
+    first: {},
+    get later() {
+      events.push("getter");
+      return 1;
+    },
+  };
+  const prepared = prepareHostValues([value], [t], {
+    bridge,
+    where: "test",
+  });
+  assertEq(events, ["getter"]);
+  prepared.transfer(() => {});
+  assertEq(events, ["getter", "own"]);
+  prepared.cleanup();
+});
+
+Deno.test("values: preparation keeps Uint8Array storage without copying contents", () => {
+  const bytes = new Uint8Array([1, 2, 3]);
+  const bridge = {
+    liftOwn: () => 0,
+    liftBorrow: () => 0,
+    lowerOwn: () => 0,
+    lowerBorrow: () => 0,
+    dropOwn: () => {},
+  };
+  const prepared = prepareHostValues([bytes], [{
+    kind: "list",
+    element: { kind: "u8" },
+  }], {
+    bridge,
+    where: "test",
+  });
+  const snapshot = prepared.values[0] as Uint8Array;
+  assertEq(snapshot.buffer === bytes.buffer, true);
+  assertEq(snapshot.byteOffset, bytes.byteOffset);
+  assertEq(snapshot.length, bytes.length);
+});
+
+Deno.test("values: a later invalid own destroys an earlier acquisition without rollback", () => {
+  const rt = { resource: {} };
+  const own = { kind: "own", rt } as unknown as Parameters<
+    typeof prepareHostValues
+  >[1][number];
+  const dropped: number[] = [];
+  let next = 0;
+  const prepared = prepareHostValues([{}, {}], [own, own], {
+    where: "test",
+    bridge: {
+      liftOwn: () => 0,
+      liftBorrow: () => 0,
+      lowerOwn: () => {
+        if (next++ === 0) return 17;
+        throw new TypeError("invalid later own");
+      },
+      lowerBorrow: () => 0,
+      dropOwn: (rep) => dropped.push(rep),
+    },
+  });
+  let error: unknown;
+  try {
+    prepared.transfer(() => {});
+  } catch (e) {
+    error = e;
+    prepared.cleanup(e);
+  }
+  assertEq(String(error).includes("invalid later own"), true);
+  assertEq(dropped, [17]);
 });
 
 Deno.test({

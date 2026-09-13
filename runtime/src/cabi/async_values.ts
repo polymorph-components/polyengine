@@ -182,7 +182,12 @@ export function lowerStream(
   (v as { boundStore?: unknown }).boundStore ??=
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);
-  return inst!.handles.add(new ReadableStreamEnd(v, declared));
+  cx.checkpoint?.();
+  const end = new ReadableStreamEnd(v, declared);
+  const i = inst!.handles.add(end);
+  cx.preparedCustody?.inserted(inst!.handles, i, end);
+  cx.checkpoint?.();
+  return i;
 }
 
 /** definitions.py `lower_future`. */
@@ -215,7 +220,12 @@ export function lowerFuture(
   (v as { boundStore?: unknown }).boundStore ??=
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);
-  return inst!.handles.add(new ReadableFutureEnd(v, declared));
+  cx.checkpoint?.();
+  const end = new ReadableFutureEnd(v, declared);
+  const i = inst!.handles.add(end);
+  cx.preparedCustody?.inserted(inst!.handles, i, end);
+  cx.checkpoint?.();
+  return i;
 }
 
 /** definitions.py `lift_error_context`. Does not remove the handle. */

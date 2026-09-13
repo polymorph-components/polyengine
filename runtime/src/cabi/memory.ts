@@ -13,6 +13,28 @@
 import { assert_, trapIf } from "./trap.ts";
 import type { PtrType } from "./types.ts";
 
+const typedArrayPrototype = Object.getPrototypeOf(Uint8Array.prototype);
+const typedArrayBuffer = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "buffer",
+)!.get!;
+const typedArrayByteOffset = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "byteOffset",
+)!.get!;
+const typedArrayLength = Object.getOwnPropertyDescriptor(
+  typedArrayPrototype,
+  "length",
+)!.get!;
+
+/** Snapshot a byte view's bounds without invoking overridable properties. */
+export function borrowedBytes(v: Uint8Array): Uint8Array {
+  const buffer = Reflect.apply(typedArrayBuffer, v, []) as ArrayBufferLike;
+  const byteOffset = Reflect.apply(typedArrayByteOffset, v, []) as number;
+  const length = Reflect.apply(typedArrayLength, v, []) as number;
+  return new Uint8Array(buffer, byteOffset, length);
+}
+
 export function ptrSize(ptrType: PtrType): 4 | 8 {
   return ptrType === "i32" ? 4 : 8;
 }

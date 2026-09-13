@@ -76,6 +76,7 @@ for (const rejection of [false, true]) {
     },
   });
 }
+
 function deferred() {
   return Promise.withResolvers<unknown>();
 }
@@ -163,6 +164,61 @@ for (const marked of [false, true]) {
     });
   }
 }
+
+Deno.test("settlement: throwing then getter is a host failure and releases arguments (#343)", async () => {
+  let thenReads = 0;
+  const { c } = await setup({
+    consume: () => ({
+      get then() {
+        thenReads++;
+        throw new Error("then lookup failed");
+      },
+    }),
+  });
+  const { stream, writer } = Stream.create<number>();
+  const fw = hostFuture<number>({ kind: "u32" });
+  const future = Future.fromHostFuture(fw, {
+    element: { kind: "u32" },
+    toHost: (v) => v as number,
+    fromHost: (v: number) => v,
+  });
+  const written = writer.writeAll(new Uint8Array([1, 2]));
+
+  const error = await caught(() => c.exports.consume(stream, future, 0));
+  assertEq(error instanceof Trap, true, String(error));
+  assertEq(String(error).includes("then lookup failed"), true, String(error));
+  assertEq(thenReads, 1, "completion classification reads then once");
+  assertEq(await written, 0, "abandoned stream argument was released");
+  await fw.write(7);
+});
+
+Deno.test("#347: facade result getter poisoning starts no later producer", async () => {
+  const p = deferred();
+  const setupResult = await setup({ producers: { sources: () => p.promise } });
+  const c = setupResult.c;
+  let futureGets = 0;
+  let starts = 0;
+  const call = caught(() => c.exports.sources(0));
+  p.resolve({
+    get stream() {
+      sync(c.exports.trap)();
+      return [1];
+    },
+    get future() {
+      futureGets++;
+      return {
+        then() {
+          starts++;
+        },
+      };
+    },
+  });
+  await call;
+  await turn();
+  assertEq(isInstancePoisoned(c.handle.componentInstances[0]), true);
+  assertEq(starts, 0, "producer does not start after getter poisoning");
+  assertEq(futureGets, 0, "preparation stops at the poisoning throw");
+});
 
 for (const mode of [1, 2]) {
   for (const rejection of [false, true]) {

@@ -47,7 +47,15 @@ import {
   unpackSubtaskResult,
 } from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
-import { DeferredHostResult } from "../src/exec/host_settlement.ts";
+import {
+  adaptHostFunction,
+  finishHostCall,
+  type HostCall,
+  invokeHostCall,
+  invokeHostCallWith,
+  markHostCallAdapter,
+  reusableImmediateHostCall,
+} from "../src/exec/host_settlement.ts";
 import { BorrowScope } from "../src/embedder/values.ts";
 import {
   GuestResource,
@@ -127,7 +135,7 @@ function mkFixture(hostFn: (...a: unknown[]) => unknown): Fixture {
     name: "host-fn",
     ft: FT,
     opts,
-    hostFn,
+    hostFn: adaptHostFunction(hostFn),
     stats: newStats(),
     mode: "plain",
     suspendable: false,
@@ -189,6 +197,218 @@ function inFlight(f: Fixture): { subtaski: number; subtask: Subtask } {
 
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
+Deno.test("host handoff: throwing then getter ends borrow scope (#343)", () => {
+  const rt = new ResourceTypeInfo(null, null);
+  const borrowed = makeWrapper(GuestResource, 42, rt, false);
+  const scope = new BorrowScope();
+  scope.add(() => borrowed.drop());
+  let reads = 0;
+  const call = invokeHostCall(() => ({
+    get then() {
+      reads++;
+      throw new Error("then getter failed");
+    },
+  }), {
+    end: () => scope.end(),
+    finish: (settlement) => {
+      if ("error" in settlement) throw settlement.error;
+      return settlement.value;
+    },
+  });
+  assertEq(call.kind, "immediate");
+  assertEq(reads, 1);
+  assertEq(wrapperState(borrowed)?.valid, false);
+  if (call.kind !== "immediate") throw new Error("expected immediate failure");
+  let failure: unknown;
+  try {
+    finishHostCall(call, call.settlement);
+  } catch (e) {
+    failure = e;
+  }
+  assertEq(String(failure).includes("then getter failed"), true);
+});
+
+Deno.test("host handoff: an overridden Promise.then cannot observe twice", async () => {
+  let calls = 0;
+  const promise = Promise.resolve(7);
+  Object.defineProperty(promise, "then", {
+    value() {
+      calls++;
+      throw new Error("own then must not run");
+    },
+  });
+  const call = invokeHostCall(() => promise, {
+    finish: (s) =>
+      "error" in s
+        ? (() => {
+          throw s.error;
+        })()
+        : s.value,
+  });
+  assertEq(call.kind, "pending");
+  if (call.kind !== "pending") return;
+  let settlement: unknown;
+  await call.observe((s) => settlement = finishHostCall(call, s));
+  assertEq(settlement, 7);
+  assertEq(calls, 0, "captured intrinsic Promise.then is used");
+});
+
+Deno.test("host handoff: Proxy getPrototypeOf failure runs cleanup once", () => {
+  const boom = new Error("getPrototypeOf failed");
+  let ends = 0;
+  let rejects = 0;
+  const value = new Proxy({}, {
+    getPrototypeOf() {
+      throw boom;
+    },
+  });
+  const call = invokeHostCall(() => value, {
+    end: () => ends++,
+    reject: () => rejects++,
+    finish(settlement) {
+      if ("error" in settlement) throw settlement.error;
+      return settlement.value;
+    },
+  });
+  assertEq(call.kind, "immediate");
+  if (call.kind !== "immediate") return;
+  let error: unknown;
+  try {
+    finishHostCall(call, call.settlement);
+  } catch (e) {
+    error = e;
+  }
+  assertEq(error, boom);
+  assertEq(ends, 1);
+  assertEq(rejects, 1);
+});
+
+Deno.test("host handoff: species setup failure is delivered with cleanup once", async () => {
+  const original = Promise.reject(new Error("original rejection"));
+  // The final policy explicitly requires the creator to observe this corrupt
+  // native promise itself; Promise.prototype.then cannot portably do so after
+  // SpeciesConstructor fails.
+  original.catch(() => {});
+  const setup = new Error("species setup failed");
+  Object.defineProperty(original, "constructor", {
+    value: {
+      get [Symbol.species]() {
+        throw setup;
+      },
+    },
+  });
+  let ends = 0;
+  let rejects = 0;
+  const call = invokeHostCall(() => original, {
+    end: () => ends++,
+    reject: () => rejects++,
+    finish(settlement) {
+      if ("error" in settlement) throw settlement.error;
+      return settlement.value;
+    },
+  });
+  assertEq(call.kind, "pending");
+  if (call.kind !== "pending") return;
+  let error: unknown;
+  await call.observe((settlement) => {
+    try {
+      finishHostCall(call, settlement);
+    } catch (e) {
+      error = e;
+    }
+  });
+  assertEq(error, setup);
+  assertEq(ends, 1);
+  assertEq(rejects, 1);
+});
+
+Deno.test("host handoff: cleanup throws do not replace a rejected undefined", async () => {
+  const rejected = Promise.reject(undefined);
+  const call = invokeHostCall(() => rejected, {
+    end: () => {
+      throw new Error("cleanup");
+    },
+    reject: () => {
+      throw new Error("reject cleanup");
+    },
+    finish: (s) =>
+      "error" in s
+        ? (() => {
+          throw s.error;
+        })()
+        : s.value,
+  });
+  assertEq(call.kind, "pending");
+  if (call.kind !== "pending") return;
+  let reason: unknown = "unset";
+  await call.observe((s) => {
+    try {
+      finishHostCall(call, s);
+    } catch (e) {
+      reason = e;
+    }
+  });
+  assertEq(reason, undefined);
+});
+
+Deno.test("host handoff: reusable immediate carrier ends throwing cleanup once", () => {
+  let ends = 0;
+  let rejects = 0;
+  const hooks = {
+    result: "raw" as const,
+    invoke: () => 7,
+    finish: () => undefined,
+    end: () => {
+      ends++;
+      throw new Error("cleanup failed");
+    },
+    reject: () => rejects++,
+  };
+  const reusable = reusableImmediateHostCall(hooks);
+  const call = invokeHostCallWith(undefined, hooks, reusable);
+  assertEq(call === reusable, true);
+  assertEq(ends, 1);
+  assertEq(rejects, 1);
+  assertEq(call.kind, "immediate");
+  if (call.kind !== "immediate") throw new Error("expected immediate failure");
+  assertEq("error" in call.settlement, true);
+});
+
+Deno.test("host handoff: reentry does not overwrite an in-use immediate carrier", () => {
+  type Context = { value: number; nested?: number };
+  const hooks = {
+    result: "prepared" as const,
+    invoke: (context: Context) => context.value,
+    finish: (
+      settlement: { value: unknown } | { error: unknown },
+      context: Context,
+    ): unknown => {
+      if ("error" in settlement) throw settlement.error;
+      if (context.nested !== undefined) {
+        const nested: HostCall = adapter({ value: context.nested });
+        if (nested.kind !== "immediate") throw new Error("expected immediate");
+        return [settlement.value, finishHostCall(nested, nested.settlement)];
+      }
+      return settlement.value;
+    },
+  };
+  const reusable: HostCall = reusableImmediateHostCall(hooks);
+  function adapter(context: Context): HostCall {
+    return invokeHostCallWith(context, hooks, reusable);
+  }
+  const outer = adapter({ value: 1, nested: 2 });
+  if (outer.kind !== "immediate") throw new Error("expected immediate");
+  assertEq(finishHostCall(outer, outer.settlement), [1, 2]);
+  const internal = reusable as unknown as {
+    busy: boolean;
+    context: unknown;
+    settlement: unknown;
+  };
+  assertEq(internal.busy, false);
+  assertEq(internal.context, undefined);
+  assertEq(internal.settlement, { value: undefined });
+});
+
 Deno.test("raw host settlement: resolve before queued cancel delivers RETURNED", async () => {
   const d = deferred<number>();
   const f = mkFixture(() => d.promise);
@@ -208,17 +428,15 @@ Deno.test("deferred host settlement: cancellation ends borrowed wrapper before h
   const scope = new BorrowScope();
   scope.add(() => borrowed.drop());
   const d = deferred<number>();
-  const f = mkFixture(() =>
-    new DeferredHostResult(
-      d.promise.then((value) => {
-        scope.end();
-        return { value };
-      }),
-      () => {
-        throw new Error("cancelled result converted");
-      },
-      () => scope.end(),
-    )
+  const f = mkFixture(
+    markHostCallAdapter(() =>
+      invokeHostCall(() => d.promise, {
+        end: () => scope.end(),
+        finish: () => {
+          throw new Error("cancelled result converted");
+        },
+      })
+    ),
   );
   const { subtaski } = inFlight(f);
   assertEq(takeRep(borrowed, rt, false, "borrow"), 42);

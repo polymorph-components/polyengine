@@ -32,6 +32,7 @@ import { despecialize } from "../cabi/types.ts";
 import { ERROR_CONTEXT, hasBrand } from "@polyengine/protocol";
 import { describeCrossCopy } from "./copy.ts";
 import { ErrorContext as InternalErrorContext } from "../task/mod.ts";
+import { dropSharedForTeardown } from "../task/mod.ts";
 import { camelCase } from "./casing.ts";
 import { NameCollisionError } from "./errors.ts";
 import {
@@ -42,6 +43,13 @@ import {
   lowerStreamSource,
   Stream,
 } from "./streams.ts";
+import {
+  type PreparedCustody,
+  type PreparedTransfer,
+  PreparedValues,
+  TransferFreeValues,
+} from "../cabi/values.ts";
+import { borrowedBytes } from "../cabi/memory.ts";
 
 /**
  * The parts of adaptation that need instance state: resources (identity
@@ -59,9 +67,18 @@ export interface ValueBridge {
     scope: BorrowScope,
   ): unknown;
   /** The host is passing an `own<R>` (transfer). */
-  lowerOwn(v: unknown, t: ValType & { kind: "own" }): number;
+  lowerOwn(
+    v: unknown,
+    t: ValType & { kind: "own" },
+    checkpoint?: () => void,
+  ): number;
   /** The host is passing a `borrow<R>` (no transfer). */
-  lowerBorrow(v: unknown, t: ValType & { kind: "borrow" }): number;
+  lowerBorrow(
+    v: unknown,
+    t: ValType & { kind: "borrow" },
+    checkpoint?: () => void,
+    releases?: (() => void)[],
+  ): number;
   /**
    * Destroy a LOWERED `own<R>` the guest will never receive (a resource
    * stream element the producer lowered but the reader never took).
@@ -387,7 +404,7 @@ function internalTag(v: ComponentValue, o: AdapterOptions): VariantValue {
  * @internal — value-adapter internals; the facade adapts values at the
  * boundary.
  */
-export function fromHost(
+export function prepareHostValue(
   v: unknown,
   t: ValType,
   o: AdapterOptions,
@@ -473,14 +490,18 @@ export function fromHost(
     case "list": {
       const elem = despecialize(t.element);
       if (elem.kind === "u8") {
-        if (v instanceof Uint8Array) return v;
+        if (v instanceof Uint8Array) return borrowedBytes(v);
         if (Array.isArray(v)) return Uint8Array.from(v as number[]);
         throw new TypeError(`${o.where}: list<u8> expects a Uint8Array`);
       }
       if (!Array.isArray(v)) {
         throw new TypeError(`${o.where}: list expects an array`);
       }
-      return v.map((e) => fromHost(e, t.element, o));
+      const out = new Array<ComponentValue>(v.length);
+      for (let i = 0; i < v.length; i++) {
+        out[i] = prepareHostValue(v[i], t.element, o);
+      }
+      return out;
     }
     case "record": {
       if (v === null || typeof v !== "object") {
@@ -496,15 +517,16 @@ export function fromHost(
           // Absent and `undefined` both mean `none` — the two spellings of an
           // optional property.
           const inner = src[key];
-          out[f.label] = inner === undefined
-            ? { kind: "none", value: null }
-            : { kind: "some", value: fromHost(inner, f.optionInner!, o, true) };
+          out[f.label] = inner === undefined ? { kind: "none", value: null } : {
+            kind: "some",
+            value: prepareHostValue(inner, f.optionInner!, o, true),
+          };
           continue;
         }
         if (!(key in src)) {
           throw new TypeError(`${o.where}: record field '${key}' is missing`);
         }
-        out[f.label] = fromHost(src[key], f.type, o);
+        out[f.label] = prepareHostValue(src[key], f.type, o);
       }
       return out;
     }
@@ -516,7 +538,7 @@ export function fromHost(
       }
       const out: Record<string, ComponentValue> = {};
       t.elements.forEach((et, i) => {
-        out[String(i)] = fromHost(v[i], et, o);
+        out[String(i)] = prepareHostValue(v[i], et, o);
       });
       return out;
     }
@@ -532,7 +554,7 @@ export function fromHost(
           `${o.where}: variant case '${kind}' needs a 'value'`,
         );
       }
-      return { kind, value: fromHost(value, c.type, o) };
+      return { kind, value: prepareHostValue(value, c.type, o) };
     }
     case "enum": {
       if (typeof v !== "string" || !enumTable(t).has(v)) {
@@ -554,12 +576,12 @@ export function fromHost(
         }
         return {
           kind: "some",
-          value: has ? fromHost(value, t.type, o, true) : null,
+          value: has ? prepareHostValue(value, t.type, o, true) : null,
         };
       }
       return v === undefined
         ? { kind: "none", value: null }
-        : { kind: "some", value: fromHost(v, t.type, o, true) };
+        : { kind: "some", value: prepareHostValue(v, t.type, o, true) };
     }
     case "result": {
       const { kind, value, has } = hostTag(v, o);
@@ -579,7 +601,7 @@ export function fromHost(
           `${o.where}: result case '${kind}' carries a payload and needs a 'value'`,
         );
       }
-      return { kind: label, value: fromHost(value, ct, o) };
+      return { kind: label, value: prepareHostValue(value, ct, o) };
     }
     case "flags": {
       if (v === null || typeof v !== "object") {
@@ -593,25 +615,208 @@ export function fromHost(
       return out;
     }
     case "map":
-      return fromHost(v, despecialize(t), o);
+      return prepareHostValue(v, despecialize(t), o);
     case "own":
-      return o.bridge.lowerOwn(v, t);
     case "borrow":
-      return o.bridge.lowerBorrow(v, t);
     case "stream":
-      return lowerStreamSource(
-        // deno-lint-ignore no-explicit-any
-        v as any,
-        elemCodec(t.element, o),
-        o.destinationStore,
-      );
     case "future":
-      return lowerFutureSource(
-        // deno-lint-ignore no-explicit-any
-        v as any,
-        elemCodec(t.element, o),
+      // Opaque and unvalidated until transfer. In particular, no wrapper state
+      // or producer protocol is touched by structural preparation.
+      return v as ComponentValue;
+  }
+}
+
+const transferKinds = new WeakMap<object, boolean>();
+const borrowKinds = new WeakMap<object, boolean>();
+
+/** Whether guest-to-host lifting can materialize a call-scoped borrow wrapper. */
+export function needsBorrowScope(t: ValType): boolean {
+  const key = t as object;
+  const hit = borrowKinds.get(key);
+  if (hit !== undefined) return hit;
+  borrowKinds.set(key, false);
+  const d = despecialize(t);
+  const answer = d.kind === "borrow" ||
+    (d.kind === "list" && needsBorrowScope(d.element)) ||
+    (d.kind === "record" && d.fields.some((f) => needsBorrowScope(f.type))) ||
+    (d.kind === "variant" &&
+      d.cases.some((c) => c.type !== null && needsBorrowScope(c.type)));
+  borrowKinds.set(key, answer);
+  return answer;
+}
+
+function needsTransfer(t: ValType): boolean {
+  const key = t as object;
+  const hit = transferKinds.get(key);
+  if (hit !== undefined) return hit;
+  // Break recursive aliases conservatively; plans are finite after
+  // despecialization, but resource metadata can contain identity cycles.
+  transferKinds.set(key, false);
+  const d = despecialize(t);
+  const answer = d.kind === "own" || d.kind === "borrow" ||
+    d.kind === "stream" || d.kind === "future" ||
+    (d.kind === "list" && needsTransfer(d.element)) ||
+    (d.kind === "record" && d.fields.some((f) => needsTransfer(f.type))) ||
+    (d.kind === "variant" &&
+      d.cases.some((c) => c.type !== null && needsTransfer(c.type)));
+  transferKinds.set(key, answer);
+  return answer;
+}
+
+function transferPreparedValue(
+  v: ComponentValue,
+  t: ValType,
+  o: AdapterOptions,
+  custody: PreparedCustody,
+  checkpoint: () => void,
+  releases: (() => void)[],
+): ComponentValue {
+  if (!needsTransfer(t)) return v;
+  const d = despecialize(t);
+  switch (d.kind) {
+    case "own": {
+      checkpoint();
+      const rep = o.bridge.lowerOwn(v, d, checkpoint);
+      // Acquisition is recorded before any later leaf or CABI callback.
+      custody.acquire(() => o.bridge.dropOwn(rep, d));
+      checkpoint();
+      return rep;
+    }
+    case "borrow":
+      checkpoint();
+      return o.bridge.lowerBorrow(v, d, checkpoint, releases);
+    case "stream": {
+      checkpoint();
+      const source = v as unknown;
+      const lowered = lowerStreamSource(
+        source as never,
+        elemCodec(d.element, o),
         o.destinationStore,
+        (start) => custody.deferStart(start),
+        checkpoint,
       );
+      custody.acquire(() => dropSharedForTeardown(lowered as never));
+      return lowered;
+    }
+    case "future": {
+      checkpoint();
+      const source = v as unknown;
+      const lowered = lowerFutureSource(
+        source as never,
+        elemCodec(d.element, o),
+        o.destinationStore,
+        (start) => custody.deferStart(start),
+        checkpoint,
+      );
+      custody.acquire(() => dropSharedForTeardown(lowered as never));
+      return lowered;
+    }
+    case "list": {
+      const values = v as ComponentValue[];
+      for (let i = 0; i < values.length; i++) {
+        values[i] = transferPreparedValue(
+          values[i],
+          d.element,
+          o,
+          custody,
+          checkpoint,
+          releases,
+        );
+      }
+      return values;
+    }
+    case "record": {
+      const values = v as Record<string, ComponentValue>;
+      for (const f of d.fields) {
+        values[f.label] = transferPreparedValue(
+          values[f.label],
+          f.type,
+          o,
+          custody,
+          checkpoint,
+          releases,
+        );
+      }
+      return values;
+    }
+    case "variant": {
+      const tagged = v as VariantValue;
+      const c = d.cases.find((x) => x.label === tagged.kind);
+      if (c?.type !== null && c !== undefined) {
+        tagged.value = transferPreparedValue(
+          tagged.value,
+          c.type,
+          o,
+          custody,
+          checkpoint,
+          releases,
+        );
+      }
+      return tagged;
+    }
+    default:
+      return v;
+  }
+}
+
+/** Snapshot a complete facade argument/result list before acquiring ownership. */
+export function prepareHostValues(
+  vs: unknown[],
+  ts: ValType[],
+  o: AdapterOptions,
+  releases: (() => void)[] = [],
+): PreparedTransfer {
+  const values = new Array<ComponentValue>(ts.length);
+  for (let i = 0; i < ts.length; i++) {
+    values[i] = prepareHostValue(vs[i], ts[i], o);
+  }
+  const transfer = ts.some(needsTransfer)
+    ? (
+      prepared: ComponentValue[],
+      types: ValType[],
+      custody: PreparedCustody,
+      checkpoint: () => void,
+    ) => {
+      for (let i = 0; i < types.length; i++) {
+        prepared[i] = transferPreparedValue(
+          prepared[i],
+          types[i],
+          o,
+          custody,
+          checkpoint,
+          releases,
+        );
+      }
+    }
+    : undefined;
+  return transfer === undefined
+    ? new TransferFreeValues(values, ts)
+    : new PreparedValues(values, ts, transfer);
+}
+
+/** Scalar/transfer-free result fast path: validate without list/envelope work. */
+export function prepareHostScalar(
+  value: unknown,
+  type: ValType,
+  o: AdapterOptions,
+): ComponentValue {
+  return prepareHostValue(value, type, o);
+}
+
+/** Compatibility/internal one-shot API. New boundary paths use prepareHostValues. */
+export function fromHost(
+  v: unknown,
+  t: ValType,
+  o: AdapterOptions,
+): ComponentValue {
+  const prepared = prepareHostValues([v], [t], o);
+  try {
+    const value = prepared.transfer(() => {})[0];
+    prepared.delivered();
+    return value;
+  } catch (e) {
+    prepared.cleanup(e);
+    throw e;
   }
 }
 
@@ -670,7 +875,7 @@ function big(
 }
 
 /** Per-element codec for a `stream<T>` / `future<T>`. */
-function elemCodec(
+export function elemCodec(
   element: ValType | null,
   o: AdapterOptions,
 ): ElemCodec<unknown> {
@@ -679,6 +884,9 @@ function elemCodec(
     where: o.where,
     toHost: (v) => element === null ? undefined : toHost(v, element, o),
     fromHost: (v) => element === null ? null : fromHost(v, element, o),
+    prepareHost: element === null
+      ? undefined
+      : (v) => prepareHostValues([v], [element], o),
     // Release untaken top-level own elements. This codec does not recursively
     // clean up owned resources nested in composite elements.
     release: element !== null && element.kind === "own"

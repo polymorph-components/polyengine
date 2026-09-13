@@ -340,6 +340,24 @@ lists use bulk TypedArray paths on little-endian hosts, with NaN
 canonicalization and a DataView fallback for big-endian hosts. `char`
 requires per-element Unicode scalar validation.
 
+**Host value preparation.** Host-to-component values are structurally
+snapshotted into the runtime's internal shape before ownership transfer or CABI
+memory effects. Resource and stream/future leaves remain opaque during that
+pass and are validated exactly once when transferred. A whole argument list or
+stream chunk is prepared before its first ownership transfer; cancellation or
+poisoning accepted during a getter, transfer hook, or guest realloc is checked
+before the next side effect and cannot subsequently report successful delivery.
+Partial transfer failure is destructive cleanup, not rollback: acquired but
+undelivered custody is retired without reviving source wrappers or undoing guest
+allocator/memory effects. Byte-array contents are not snapshotted, preserving
+the existing single CABI copy and borrowed-until-settlement rule.
+Promise completion uses captured intrinsic observation. A native Promise whose
+constructor/species has been corrupted so `Promise.prototype.then` itself
+throws cannot be portably observed; the runtime reports that setup failure and
+runs host-call cleanup, while the producer must retain its own rejection
+observer. Retrying the same intrinsic operation would not make the rejection
+observable.
+
 **Memory lifetime.** Views are reacquired after calls that can grow memory.
 Ordinary lifted lists never expose guest memory. The explicit
 `stream<u8>` direct-access API is the narrow exception: its callback may

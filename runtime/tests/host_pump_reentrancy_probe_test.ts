@@ -39,6 +39,7 @@ import {
   Thread,
 } from "../src/task/mod.ts";
 import type { ComponentValue, FuncType, ValType } from "../src/cabi/types.ts";
+import { adaptHostFunction } from "../src/exec/host_settlement.ts";
 
 const U8: ValType = { kind: "u8" };
 
@@ -85,7 +86,7 @@ function instanceA(store: Store, hostFn: () => void) {
     name: "host-import",
     ft: FT,
     opts,
-    hostFn,
+    hostFn: adaptHostFunction(hostFn),
     stats: newStats(),
     mode: "plain",
     suspendable: false,

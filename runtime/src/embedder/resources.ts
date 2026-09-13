@@ -204,6 +204,10 @@ function dropWrapper(w: GuestResource): void {
  */
 export function lendWrapper(w: object): () => void {
   const s = wrapperState(w);
+  return lendWrapperState(s);
+}
+
+function lendWrapperState(s: WrapperState | undefined): () => void {
   if (s === undefined) return () => {};
   s.lends += 1;
   let released = false;
@@ -242,6 +246,7 @@ export function takeRep(
   rt: ResourceTypeInfo,
   own: boolean,
   what: string,
+  checkpoint?: () => void,
 ): number {
   if (typeof w !== "object" || w === null) {
     throw new InvalidHandleError(
@@ -266,11 +271,34 @@ export function takeRep(
           `to an in-flight call and cannot be transferred`,
       );
     }
+    // Wrapper state may be reached through a Proxy. Recheck after all
+    // effectful validation reads and immediately before invalidation.
+    checkpoint?.();
     // Transfer: the wrapper is invalidated, and must NOT run the destructor.
     s.valid = false;
     leaked.unregister(w as GuestResource);
   }
   return s.rep;
+}
+
+/** Validate one wrapper state snapshot and acquire its borrow lend once. */
+export function takeBorrowRep(
+  w: unknown,
+  rt: ResourceTypeInfo,
+  what: string,
+  checkpoint: () => void,
+): { rep: number; release: () => void } {
+  if (typeof w !== "object" || w === null) {
+    throw new InvalidHandleError(
+      `${what}: expected a resource class instance, got ${typeof w}`,
+    );
+  }
+  const s = requireLive(w, what);
+  if (s.rt !== rt) {
+    throw new InvalidHandleError(`${what}: resource type mismatch`);
+  }
+  checkpoint();
+  return { rep: s.rep, release: lendWrapperState(s) };
 }
 
 /** Everything needed to build one guest-resource class. */
@@ -325,7 +353,7 @@ export function buildGuestResourceClass(
     args: unknown[],
     params: ValType[],
     where: string,
-  ) => { lowered: unknown[]; release: () => void },
+  ) => { prepared: unknown; release: () => void },
   // deno-lint-ignore no-explicit-any
 ): any {
   const className = pascalCase(spec.name);
@@ -338,14 +366,14 @@ export function buildGuestResourceClass(
         );
       }
       const where = `${className} constructor`;
-      const { lowered, release } = lowerArgs(
+      const { prepared, release } = lowerArgs(
         args,
         spec.ctorParams ?? [],
         where,
       );
       let rep: unknown;
       try {
-        rep = spec.ctor(...lowered);
+        rep = spec.ctor(prepared);
       } finally {
         release();
       }
@@ -476,7 +504,9 @@ export class HostResourceRegistry {
   }
 
   /** Register a fresh mapping whose lifetime is exactly one lowering scope. */
-  borrowFor(instance: unknown): { rep: number; release: () => void } {
+  borrowFor(
+    instance: unknown,
+  ): { rep: number; release: () => void } {
     const rep = this.#register(instance, false);
     let released = false;
     return {

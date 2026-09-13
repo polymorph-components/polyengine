@@ -37,28 +37,40 @@ import { copyCensus, isComponentException, isTrap } from "@polyengine/protocol";
 import { ComponentException, NameCollisionError } from "./errors.ts";
 import { type ImportLeaf, requiredImports } from "./imports.ts";
 import { hostDtorCall } from "../exec/boundary.ts";
-import { DeferredHostResult } from "../exec/host_settlement.ts";
+import {
+  type HostCallAdapter,
+  type HostCallHooks,
+  invokeHostCallWith,
+  markHostCallAdapter,
+  reusableImmediateHostCall,
+} from "../exec/host_settlement.ts";
 import {
   buildGuestResourceClass,
   type GuestResourceSpec,
   HostResourceRegistry,
   invalidateWrapper,
-  lendWrapper,
   makeWrapper,
+  takeBorrowRep,
   takeRep,
 } from "./resources.ts";
 import {
   type AdapterOptions,
   BorrowScope,
   describe,
-  fromHost,
+  elemCodec,
+  needsBorrowScope,
+  NO_BORROWS,
+  prepareHostScalar,
+  prepareHostValues,
   toHost,
   type ValueBridge,
 } from "./values.ts";
 import { ImportResolver } from "./version.ts";
-import { type ElemCodec, Future, Stream } from "./streams.ts";
+import { Future, Stream } from "./streams.ts";
 import { markSyncCallable } from "./sync.ts";
 import { Store } from "../task/mod.ts";
+
+const NO_COMPONENT_VALUES: ComponentValue[] = [];
 
 /**
  * Preserve declaration-level suspension/cancellation marks through every
@@ -69,19 +81,6 @@ function relayMarks<F extends CallableFunction>(from: unknown, to: F): F {
   if (isDeferCancel(from)) deferCancel(to);
   if (isAbortable(from)) abortable(to);
   return to;
-}
-
-/** Per-element codec for a `future<T>` returned in function-result position. */
-function elementCodec(
-  element: ValType | null,
-  o: AdapterOptions,
-): ElemCodec<unknown> {
-  return {
-    element,
-    where: o.where,
-    toHost: (v) => element === null ? undefined : toHost(v, element, o),
-    fromHost: (v) => element === null ? null : fromHost(v, element, o),
-  };
 }
 
 /** The shim's output plus the component bytes it describes. */
@@ -262,12 +261,6 @@ class Facade {
    */
   readonly loaded: LoadedPlan;
   readonly #bridge: ValueBridge;
-  /**
-   * Releases collected during synchronous argument lowering. #lowerParams
-   * saves/restores this slot for reentrant lowering; each call retains its
-   * own release list after the collection window ends.
-   */
-  #lowerScope: (() => void)[] | null = null;
   /** ResourceIndex -> registry, for diagnostics (see INTERNAL_HOST_REGISTRIES). */
   readonly hostRegistries = new Map<number, HostResourceRegistry>();
   /** True once `buildExports` has run: guest resource classes then exist. */
@@ -374,7 +367,10 @@ class Facade {
       // The rt is supplied per wrapper, so an anonymous class needs none here.
       { impl: null, dtor: null } as unknown as ResourceTypeInfo,
       () => () => Promise.reject(new TypeError("no methods")),
-      () => ({ lowered: [], release: () => {} }),
+      () => ({
+        prepared: prepareHostValues([], [], this.#opts("resource")),
+        release: () => {},
+      }),
     );
     return b.cls;
   }
@@ -426,12 +422,12 @@ class Facade {
         scope.add(() => invalidateWrapper(w));
         return w;
       },
-      lowerOwn: (v, t) => {
+      lowerOwn: (v, t, checkpoint) => {
         const b = this.#binding(t.rt.resource);
         if (b.kind === "host") return b.registry.repFor(v);
-        return takeRep(v, t.rt.resource, true, `own<${b.name}>`);
+        return takeRep(v, t.rt.resource, true, `own<${b.name}>`, checkpoint);
       },
-      lowerBorrow: (v, t) => {
+      lowerBorrow: (v, t, checkpoint, releases) => {
         const b = this.#binding(t.rt.resource);
         if (b.kind === "host") {
           // A plain host object does not identify any existing resource.
@@ -439,21 +435,25 @@ class Facade {
           // registration; canonical guest-handle lends are tracked below this
           // facade (definitions.py:1794-1800).
           const { rep, release } = b.registry.borrowFor(v);
-          if (this.#lowerScope === null) release();
-          else this.#lowerScope.push(release);
+          if (releases === undefined) release();
+          else releases.push(release);
+          checkpoint?.();
           return rep;
         }
         // Retain the rep until this call ends; explicit/GC drop must not
         // destroy it while borrowed (lift_borrow -> Subtask.add_lender).
-        const rep = takeRep(v, t.rt.resource, false, `borrow<${b.name}>`);
-        const release = lendWrapper(v as object);
-        if (this.#lowerScope === null) {
+        const { rep, release } = takeBorrowRep(
+          v,
+          t.rt.resource,
+          `borrow<${b.name}>`,
+          checkpoint ?? (() => {}),
+        );
+        if (releases === undefined) {
           // No enclosing lowering scope (a raw/one-off lowering): the lend
           // has no observable window, so it must not be left dangling.
           release();
-        } else {
-          this.#lowerScope.push(release);
-        }
+        } else releases.push(release);
+        checkpoint?.();
         return rep;
       },
       dropOwn: (rep, t) => {
@@ -566,8 +566,8 @@ class Facade {
     const dispatch = this.#dispatcher(leaf, provider);
     // Build the value adapter lazily from the facade's already-loaded types.
     // The executor receives this same LoadedPlan, including for start calls.
-    let impl: RawFn | null = null;
-    const wrapper = (...raw: unknown[]) => {
+    let impl: HostCallAdapter | null = null;
+    const wrapper = markHostCallAdapter((...raw: unknown[]) => {
       if (impl === null) {
         const ft = this.#funcType(
           this.artifacts.plan.imports[importIndex].type,
@@ -576,7 +576,7 @@ class Facade {
         impl = this.#wrapImportFn(leaf, ft, dispatch);
       }
       return impl(...raw);
-    };
+    });
     // The executor reads declaration marks from this outermost wrapper.
     return relayMarks(dispatch, wrapper);
   }
@@ -712,33 +712,55 @@ class Facade {
     leaf: ImportLeaf,
     ft: FuncType,
     dispatch: (args: unknown[]) => unknown,
-  ): RawFn {
+  ): HostCallAdapter {
     const where = `import '${label(leaf)}'`;
     const o = this.#opts(where);
     const resultType = ft.results.length === 0 ? null : ft.results[0];
     const isResult = resultType !== null && resultType.kind === "result";
+    const resultTypes = resultType === null ? [] : [resultType];
+    // Only values whose CABI lowering is a callback-free flat lane may bypass
+    // the prepared-transfer envelope. Strings/lists can realloc, and handles
+    // can mutate tables or invoke transfer hooks even without facade custody.
+    const scalarResult = resultType !== null && (
+      resultType.kind === "bool" || resultType.kind === "u8" ||
+      resultType.kind === "u16" || resultType.kind === "u32" ||
+      resultType.kind === "u64" || resultType.kind === "s8" ||
+      resultType.kind === "s16" || resultType.kind === "s32" ||
+      resultType.kind === "s64" || resultType.kind === "f32" ||
+      resultType.kind === "f64" || resultType.kind === "char"
+    );
+    const needsScope = ft.params.some(needsBorrowScope);
 
-    const ok = (v: unknown): ComponentValue | undefined => {
-      if (resultType === null) return undefined;
+    const ok = (v: unknown) => {
+      if (resultType === null) return NO_COMPONENT_VALUES;
       if (isResult) {
         const rt = resultType as ValType & { kind: "result" };
-        return {
-          kind: "ok",
-          value: rt.ok === null ? null : fromHost(v, rt.ok, o),
-        };
+        return prepareHostValues(
+          [{
+            kind: "ok",
+            value: rt.ok === null ? null : v,
+          }],
+          resultTypes,
+          o,
+        );
       }
-      return fromHost(v, resultType, o);
+      if (scalarResult) return [prepareHostScalar(v, resultType!, o)];
+      return prepareHostValues([v], resultTypes, o);
     };
-    const fail = (e: unknown): ComponentValue => {
+    const fail = (e: unknown) => {
       // Brand, not class (§"Module identity and @polyengine/protocol"): a `ComponentException` thrown by a host module
       // that resolved a DIFFERENT runtime copy — or hand-rolled with the
       // registry symbol — is the same value here (issue #83).
       if (isComponentException(e) && isResult) {
         const rt = resultType as ValType & { kind: "result" };
-        return {
-          kind: "error",
-          value: rt.error === null ? null : fromHost(e.payload, rt.error, o),
-        };
+        return prepareHostValues(
+          [{
+            kind: "err",
+            value: rt.error === null ? null : e.payload,
+          }],
+          resultTypes,
+          o,
+        );
       }
       if (isTrap(e)) throw e;
       if (isComponentException(e)) {
@@ -761,57 +783,60 @@ class Facade {
       );
     };
 
-    return (...raw: unknown[]) => {
-      const scope = new BorrowScope();
-      const args = ft.params.map((p, i) =>
-        toHost(raw[i] as ComponentValue, p, o, scope)
-      );
+    interface ImportCallContext {
+      args: unknown[];
+      scope: BorrowScope;
+    }
+    const hooks: HostCallHooks<ImportCallContext> = {
+      result: "prepared",
+      invoke: ({ args }) => dispatch(args),
+      // A future-typed thenable is the source, not call completion. Its
+      // producer must be lowered immediately and may depend on guest work.
+      thenableIsValue: resultType?.kind === "future",
+      end: ({ scope }) => scope.end(),
+      reject: (e, { args }) => {
+        if (!(isComponentException(e) && isResult)) releaseAsyncArgs(args);
+      },
+      finish: (settlement) =>
+        "error" in settlement ? fail(settlement.error) : ok(settlement.value),
+    };
+    const immediate = reusableImmediateHostCall(hooks);
+    const noScopeHooks: HostCallHooks<unknown[]> = {
+      result: "prepared",
+      invoke: (args) => dispatch(args),
+      thenableIsValue: resultType?.kind === "future",
+      reject: (e, args) => {
+        if (!(isComponentException(e) && isResult)) releaseAsyncArgs(args);
+      },
+      finish: (settlement) =>
+        "error" in settlement ? fail(settlement.error) : ok(settlement.value),
+    };
+    const noScopeImmediate = reusableImmediateHostCall(noScopeHooks);
+
+    return markHostCallAdapter((...raw: unknown[]) => {
+      const scope = needsScope ? new BorrowScope() : NO_BORROWS;
+      const args: unknown[] = [];
+      try {
+        // A later argument may invoke hostile conversion hooks. Keep the
+        // partial list so every earlier borrow wrapper/async argument is
+        // invalidated if conversion fails before host dispatch (#343).
+        for (let i = 0; i < ft.params.length; i++) {
+          args.push(toHost(raw[i] as ComponentValue, ft.params[i], o, scope));
+        }
+      } catch (e) {
+        scope.end();
+        releaseAsyncArgs(args);
+        throw e;
+      }
       // Extras beyond WIT params are runtime values, notably abortable()'s
       // AbortSignal. Forward without component-value conversion.
       for (let i = ft.params.length; i < raw.length; i++) args.push(raw[i]);
       // Teardown belongs to rejection, even when delivery has been discarded.
       // A fallible ComponentException may retain arguments like a normal return.
-      const onReject = (e: unknown): void => {
-        if (!(isComponentException(e) && isResult)) releaseAsyncArgs(args);
-      };
-      let out: unknown;
-      try {
-        out = dispatch(args);
-      } catch (e) {
-        scope.end();
-        onReject(e);
-        return fail(e);
-      }
-      if (isThenable(out)) {
-        // A future-typed result is the source, not async call completion.
-        // Lower it immediately: settlement may depend on guest work after
-        // this import returns. This also preserves returned Future handles.
-        if (resultType !== null && resultType.kind === "future") {
-          scope.end();
-          return ok(out);
-        }
-        return new DeferredHostResult(
-          Promise.resolve(out).then(
-            (value) => {
-              scope.end();
-              return { value };
-            },
-            (error) => {
-              scope.end();
-              onReject(error);
-              return { error };
-            },
-          ),
-          (settlement) =>
-            "error" in settlement
-              ? fail(settlement.error)
-              : ok(settlement.value),
-          () => scope.end(),
-        );
-      }
-      scope.end();
-      return ok(out);
-    };
+      return needsScope
+        ? invokeHostCallWith({ args, scope }, hooks, immediate)
+        : invokeHostCallWith(args, noScopeHooks, noScopeImmediate);
+    });
   }
 
   // -- exports ---------------------------------------------------------------
@@ -1004,7 +1029,10 @@ class Facade {
     params: ValType[],
     args: unknown[],
     o: AdapterOptions,
-  ): { lowered: ComponentValue[]; release: () => void } {
+  ): {
+    prepared: import("../cabi/values.ts").PreparedTransfer;
+    release: () => void;
+  } {
     const scope: (() => void)[] = [];
     let released = false;
     const release = () => {
@@ -1012,18 +1040,14 @@ class Facade {
       released = true;
       for (const r of scope) r();
     };
-    const outer = this.#lowerScope;
-    this.#lowerScope = scope;
-    let lowered: ComponentValue[];
+    let prepared: import("../cabi/values.ts").PreparedTransfer;
     try {
-      lowered = params.map((p, i) => fromHost(args[i], p, o));
+      prepared = prepareHostValues(args, params, o, scope);
     } catch (e) {
       release();
       throw e;
-    } finally {
-      this.#lowerScope = outer;
     }
-    return { lowered, release };
+    return { prepared, release };
   }
 
   /**
@@ -1056,17 +1080,17 @@ class Facade {
               `${args.length}`,
           );
         }
-        const { lowered, release } = this.#lowerParams(ft.params, args, o);
+        const { prepared, release } = this.#lowerParams(ft.params, args, o);
         let pending: Promise<ComponentValue>;
         try {
-          pending = Promise.resolve(fn(...lowered)) as Promise<ComponentValue>;
+          pending = Promise.resolve(fn(prepared)) as Promise<ComponentValue>;
         } catch (e) {
           release();
           throw e;
         }
         return Future.deferred(
           pending,
-          elementCodec(element, o),
+          elemCodec(element, o),
           () => release(),
         ) as unknown as Promise<unknown>;
       };
@@ -1077,10 +1101,10 @@ class Facade {
             `${where}: expected ${ft.params.length} argument(s), got ${args.length}`,
           );
         }
-        const { lowered, release } = this.#lowerParams(ft.params, args, o);
+        const { prepared, release } = this.#lowerParams(ft.params, args, o);
         let raw: unknown;
         try {
-          raw = await fn(...lowered);
+          raw = await fn(prepared);
         } catch (e) {
           release();
           throw e;
@@ -1159,10 +1183,10 @@ class Facade {
               `${args.length}`,
           );
         }
-        const { lowered, release } = this.#lowerParams(ft.params, args, o);
+        const { prepared, release } = this.#lowerParams(ft.params, args, o);
         let raw: unknown;
         try {
-          raw = entry(...lowered);
+          raw = entry(prepared);
         } catch (e) {
           release();
           throw e;
@@ -1171,7 +1195,7 @@ class Facade {
         if (isThenable(raw)) unreachableThenable(raw);
         return Future.fromLifted(
           raw as ComponentValue,
-          elementCodec(element, o),
+          elemCodec(element, o),
         );
       };
     }
@@ -1181,10 +1205,10 @@ class Facade {
           `${where}: expected ${ft.params.length} argument(s), got ${args.length}`,
         );
       }
-      const { lowered, release } = this.#lowerParams(ft.params, args, o);
+      const { prepared, release } = this.#lowerParams(ft.params, args, o);
       let raw: unknown;
       try {
-        raw = entry(...lowered);
+        raw = entry(prepared);
       } catch (e) {
         release();
         throw e;

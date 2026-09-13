@@ -24,6 +24,11 @@ import {
   trap,
   trapIf,
 } from "../cabi/mod.ts";
+import {
+  isPreparedTransfer,
+  type PreparedTransfer,
+  prepareRawValues,
+} from "../cabi/values.ts";
 import { assert_, AssertionError } from "../cabi/trap.ts";
 import {
   addInstancePoisonedListener,
@@ -55,7 +60,12 @@ import {
   withActivation,
 } from "../task/mod.ts";
 import { currentTask } from "../task/scheduler.ts";
-import { DeferredHostResult, type HostSettlement } from "./host_settlement.ts";
+import type {
+  HostCall,
+  HostCallAdapter,
+  HostSettlement,
+} from "./host_settlement.ts";
+import { finishHostCall, releaseHostCall } from "./host_settlement.ts";
 import { PlanError } from "../plan/loader.ts";
 import {
   blockCurrentActivation,
@@ -1111,7 +1121,9 @@ export function createLiftedFunction(input: {
     );
   }
 
-  const invokeNow = (hostArgs: ComponentValue[]): unknown => {
+  const invokeNow = (
+    hostInput: ComponentValue[] | PreparedTransfer,
+  ): unknown => {
     stats.liftedCalls++;
     // A trap remembered during an earlier call must never be attributed to
     // this one (see intrinsics `HostTrapState`).
@@ -1128,6 +1140,26 @@ export function createLiftedFunction(input: {
         `cannot enter component instance ${inst.index}`,
       );
       if (refusal !== null) trap(refusal);
+    }
+    const prepared: PreparedTransfer | null = isPreparedTransfer(hostInput)
+      ? hostInput
+      : null;
+    const admissionCheckpoint = (): void => {
+      const refusal = entryRefusal(
+        inst,
+        input.guestDtorCaller ?? null,
+        `cannot enter component instance ${inst.index}`,
+      );
+      if (refusal !== null) trap(refusal);
+    };
+    let hostArgs: ComponentValue[];
+    try {
+      hostArgs = prepared === null
+        ? hostInput as ComponentValue[]
+        : prepared.transfer(admissionCheckpoint);
+    } catch (e) {
+      prepared?.cleanup(e);
+      throw e;
     }
     let completed = false;
 
@@ -1165,6 +1197,8 @@ export function createLiftedFunction(input: {
         task,
         thread: () => thread,
         mode,
+        prepared,
+        admissionCheckpoint,
       }),
     );
 
@@ -1186,10 +1220,16 @@ export function createLiftedFunction(input: {
       return resultsToHost(resolved);
     };
 
-    const unwind = (): void => {
+    const unwind = (...primary: [] | [unknown]): void => {
       // Failed adapters may skip exit-sync-call; release this task's lenders
       // so unaffected instances do not retain abandoned borrows.
       if (completed) return;
+      try {
+        if (primary.length === 0) prepared?.cleanup();
+        else prepared?.cleanup(primary[0]);
+      } catch {
+        // An active boundary failure remains primary.
+      }
       for (const t of task.threads as { syncCallStack: unknown[] }[]) {
         while (t.syncCallStack.length > 0) {
           (t.syncCallStack.pop() as LenderScope).releaseLenders();
@@ -1238,7 +1278,7 @@ export function createLiftedFunction(input: {
       // own JSPI hop must not turn this completed sync call into a Promise.
       if (guestDtor) return finishHostEntry();
     } catch (e) {
-      unwind();
+      unwind(e);
       if (!isCapabilitySignal(e)) poison(e);
       throw e;
     }
@@ -1260,24 +1300,37 @@ export function createLiftedFunction(input: {
           try {
             resolve(finishHostEntry());
           } catch (e) {
+            unwind(e);
             reject(e);
           }
           return;
         }
+        const onPoison = (cause: unknown): void => {
+          onResolvedHook = null;
+          // A task blocked before admission has no guest activation to retire.
+          // Resume its cancellable gate so enterImplicitThread's finally
+          // removes the waiting slot, without synthesizing task cancellation.
+          if (
+            task.state === "initial" && thread.waiting() && thread.cancellable
+          ) {
+            thread.abandonWaiting();
+          }
+          unwind(cause);
+          reject(cause);
+        };
         // Poison notification may have run after the driver returned idle but
         // before this continuation installed its listener. Preserve an
         // already-captured task result above; otherwise poisoning first must
-        // reject the pending async export with the recorded cause.
+        // reject the pending async export with the recorded cause. Defer this
+        // already-recorded case one microtask so the caller receives and can
+        // observe the returned Promise before it rejects.
         // CONTRACT: contracts/embedder-api.md:180-185; per-instance poisoning
         // is the runtime policy in docs/architecture.md:300-307.
         if (isInstancePoisoned(inst)) {
-          reject(instancePoisonCause(inst));
+          const cause = instancePoisonCause(inst);
+          Promise.resolve().then(() => onPoison(cause));
           return;
         }
-        const onPoison = (cause: unknown): void => {
-          onResolvedHook = null;
-          reject(cause);
-        };
         registerPendingLift(inst, onPoison);
         onResolvedHook = () => {
           unregisterPendingLift(inst, onPoison);
@@ -1288,6 +1341,7 @@ export function createLiftedFunction(input: {
             // handlers run on a microtask regardless.
             resolve(finishHostEntry());
           } catch (e) {
+            unwind(e);
             reject(e);
           }
         };
@@ -1314,7 +1368,7 @@ export function createLiftedFunction(input: {
         idlePolicy,
       );
     } catch (e) {
-      unwind();
+      unwind(e);
       throw e;
     }
     /**
@@ -1326,24 +1380,34 @@ export function createLiftedFunction(input: {
       try {
         return finish(outcome);
       } catch (e) {
-        unwind();
+        unwind(e);
         throw e;
       }
     }
     return outcome.then(finish, (e) => {
-      unwind();
+      unwind(e);
       throw e;
     });
   };
 
-  return (...hostArgs: ComponentValue[]): unknown => {
+  return (...rawHostArgs: ComponentValue[]): unknown => {
+    const prepared = rawHostArgs.length === 1 &&
+        isPreparedTransfer(rawHostArgs[0])
+      ? rawHostArgs[0] as unknown as PreparedTransfer
+      : null;
+    const hostArgs = prepared ?? rawHostArgs;
     // Synchronous callers refuse before entry rather than waiting on JSPI hops.
     if (input.refuseOnEntryHops && entryHopThreads(store, inst).length > 0) {
-      throw new SyncEntryBusy(name);
+      const refusal = new SyncEntryBusy(name);
+      // Prepared arguments may already own resources. This is a pre-entry
+      // refusal, so retire that custody without allowing cleanup failure to
+      // replace the capability signal.
+      prepared?.cleanup(refusal);
+      throw refusal;
     }
-    if (hostArgs.length !== ft.params.length) {
+    if (prepared === null && rawHostArgs.length !== ft.params.length) {
       throw new TypeError(
-        `${name}: expected ${ft.params.length} argument(s), got ${hostArgs.length}`,
+        `${name}: expected ${ft.params.length} argument(s), got ${rawHostArgs.length}`,
       );
     }
     // Preserve core-return/result-lift ordering across promising-entry hops:
@@ -1351,7 +1415,13 @@ export function createLiftedFunction(input: {
     // Genuine SuspensionPoint parks are excluded, allowing host-import reentry
     // (`runtime/tests/jspi/hop_atomicity_test.ts`). This is not a general entry lock.
     if (mode === "jspi" && entryHopThreads(store, inst).length > 0) {
-      return awaitHopQuiescence(store, inst).then(() => invokeNow(hostArgs));
+      return awaitHopQuiescence(store, inst).then(
+        () => invokeNow(hostArgs),
+        (e) => {
+          prepared?.cleanup(e);
+          throw e;
+        },
+      );
     }
     return invokeNow(hostArgs);
   };
@@ -1599,6 +1669,8 @@ function* liftBody(input: {
   task: Task;
   thread: () => Thread;
   mode: SuspensionMode;
+  prepared: PreparedTransfer | null;
+  admissionCheckpoint: () => void;
 }): Generator<BlockRequest, void, Cancelled> {
   const { name, ft, opts, core, stats, task } = input;
   const thread = input.thread();
@@ -1606,9 +1678,18 @@ function* liftBody(input: {
 
   if (!(yield* task.enterImplicitThread(thread))) return;
 
-  const cx = new LiftLowerContext(cabiOptions(opts), inst, task);
+  const cx = new LiftLowerContext(
+    cabiOptions(opts),
+    inst,
+    task,
+    input.prepared?.optionalCustody ?? null,
+    input.prepared === null ? null : input.admissionCheckpoint,
+  );
   const args = task.start();
   const flatArgs = lowerFlatValues(cx, MAX_FLAT_PARAMS, args, ft.params);
+  // Canonical argument lowering is complete and the core callee is about to
+  // receive the handles. Later guest failure must not reclaim delivered owns.
+  input.prepared?.delivered();
 
   if (!opts.async) {
     const flatResults = normalizeCoreValues(
@@ -1670,6 +1751,78 @@ function* liftBody(input: {
 // canon lower
 // ---------------------------------------------------------------------------
 
+const HOST_RESULT_DELIVERY_CANCELLED = Symbol(
+  "host result delivery cancelled",
+);
+
+function prepareLoweredResult(
+  call: HostCall,
+  settlement: HostSettlement,
+  resultTypes: FuncType["results"],
+): PreparedTransfer | ComponentValue[] {
+  const finished = finishHostCall(call, settlement);
+  if (isPreparedTransfer(finished)) return finished;
+  if (call.result === "prepared") {
+    return finished as ComponentValue[];
+  }
+  return prepareRawValues(
+    resultTypes.length === 0 ? [] : [finished],
+    resultTypes,
+  );
+}
+
+function checkLoweredResultDelivery(
+  subtask: Subtask,
+  inst: ComponentInstanceState,
+): void {
+  if (subtask.resolved()) throw HOST_RESULT_DELIVERY_CANCELLED;
+  if (isInstancePoisoned(inst)) throw instancePoisonCause(inst);
+}
+
+/** Callback-free primitive scalar results need no reentry-bearing commit context. */
+function commitTransferFreeResult(
+  prepared: PreparedTransfer | ComponentValue[],
+  subtask: Subtask,
+  inst: ComponentInstanceState,
+  onResolve: (result: ComponentValue[] | null) => void,
+): void {
+  checkLoweredResultDelivery(subtask, inst);
+  onResolve(Array.isArray(prepared) ? prepared : prepared.values);
+  if (!Array.isArray(prepared)) prepared.delivered();
+}
+
+function commitLoweredResult(
+  prepared: PreparedTransfer,
+  subtask: Subtask,
+  inst: ComponentInstanceState,
+  cx: LiftLowerContext,
+  onResolve: (result: ComponentValue[] | null) => void,
+): void {
+  const checkpoint = () => checkLoweredResultDelivery(subtask, inst);
+  checkpoint();
+  try {
+    const values = prepared.transfer(checkpoint, false);
+    if (prepared.optionalCustody !== null) {
+      checkpoint();
+      // All facade acquisitions are complete. Start natural producers now,
+      // before the callback-free CABI insertion/final RETURNED transition.
+      prepared.start(checkpoint);
+    }
+    cx.preparedCustody = prepared.optionalCustody;
+    cx.checkpoint = checkpoint;
+    onResolve(values);
+    // onResolve completed table insertion and the final state change without
+    // another host callback. The canonical receiver owns custody.
+    prepared.delivered();
+  } catch (e) {
+    prepared.cleanup(e);
+    throw e;
+  } finally {
+    cx.preparedCustody = null;
+    cx.checkpoint = null;
+  }
+}
+
 /**
  * Build a `canon_lower` host-import body. Async lowers return a subtask handle
  * for pending host Promises and deliver results through events. A sync lower
@@ -1680,7 +1833,7 @@ export function createLoweredImport(input: {
   name: string;
   ft: FuncType;
   opts: ResolvedOptions;
-  hostFn: (...args: unknown[]) => unknown;
+  hostFn: HostCallAdapter;
   stats: ExecutionStats;
   /** Executor's suspension mode; decides whether a sync lower may park. */
   mode: SuspensionMode;
@@ -1785,6 +1938,10 @@ export function createLoweredImport(input: {
         ft.results,
         vi,
       );
+      // All effectful preparation, transfer hooks and reallocs are behind us.
+      // This final eligibility check is immediately before the callback-free
+      // RETURNED transition; an accepted cancellation cannot be overwritten.
+      cx.checkpoint?.();
       subtask.resolve(SubtaskState.RETURNED, flatResults);
     };
 
@@ -1796,32 +1953,18 @@ export function createLoweredImport(input: {
     // cannot fire. Unmarked imports do not require AbortController support.
     const controller = abortable ? new AbortController() : null;
     const args = onStart();
-    const raw = controller === null
+    const call: HostCall = controller === null
       ? hostFn(...args)
       : hostFn(...args, controller.signal);
-    const toResults = (v: unknown): ComponentValue[] =>
-      ft.results.length === 0 ? [] : [v as ComponentValue];
-
-    if (raw instanceof DeferredHostResult || isPromiseLike(raw)) {
-      const deferred = raw instanceof DeferredHostResult ? raw : null;
-      const settlement = deferred?.promise ?? Promise.resolve(raw);
-      // Raw HostImports retain their single observing reaction: a boxing hop
-      // would let a queued cancellation overtake an already-settled result.
-      const fulfilled = (value: unknown): HostSettlement =>
-        deferred !== null ? value as HostSettlement : { value };
-      const convert = (done: HostSettlement): unknown => {
-        if (deferred !== null) return deferred.convert(done);
-        if ("error" in done) throw done.error;
-        return done.value;
-      };
+    if (call.kind === "pending") {
       if (!opts.async) {
         if (mode !== "jspi" || !suspendable) {
           // An unmarked import cannot suspend even in JSPI mode. This
           // non-poisoning capability exit must release onStart's lenders
           // (contracts/intrinsics.md, trap-unwind/lender-release obligation).
           // Observe even refused raw HostImports; no conversion continuation.
-          void settlement.catch(() => {});
-          deferred?.endScope();
+          void call.observe(() => {});
+          call.discard();
           subtask.unwindLenders();
           needsJspi(
             suspendable
@@ -1839,16 +1982,16 @@ export function createLoweredImport(input: {
         // release callback exclusivity. Record the host outcome here, but do
         // CABI lowering and lender delivery in produce at scheduler resume.
         let outcome: HostSettlement | undefined;
-        const promise = settlement.then(
-          (done) => {
-            store.pendingHostCalls.delete(promise);
-            outcome = fulfilled(done);
-          },
-          (e) => {
-            store.pendingHostCalls.delete(promise);
-            outcome = { error: e };
-          },
-        );
+        // Assigned after observe() returns; setup failures settle asynchronously.
+        // deno-lint-ignore prefer-const
+        let registered: Promise<void> | undefined;
+        const promise = call.observe((done) => {
+          if (registered !== undefined) {
+            store.pendingHostCalls.delete(registered);
+          }
+          outcome = done;
+        });
+        registered = promise;
         // Mark this park externally wakeable for drivers and teardown.
         registerHostCall(store, promise);
         // Success delivers lenders in produce. onSettled is the idempotent
@@ -1863,7 +2006,12 @@ export function createLoweredImport(input: {
             // A FACT callee may differ from the still-healthy owning task.
             // Preserve the original cause, including a thrown undefined.
             if (isInstancePoisoned(inst)) throw instancePoisonCause(inst);
-            onResolve(toResults(convert(outcome!)));
+            const prepared = prepareLoweredResult(call, outcome!, ft.results);
+            if (Array.isArray(prepared)) {
+              commitTransferFreeResult(prepared, subtask, inst, onResolve);
+            } else {
+              commitLoweredResult(prepared, subtask, inst, cx, onResolve);
+            }
             subtask.deliverResolve();
             assert_(vi.done(), `${name}: unconsumed flat arguments`);
             const flatResults = subtask.flatResults;
@@ -1872,33 +2020,41 @@ export function createLoweredImport(input: {
             return flatResults;
           },
           onSettled: () => {
-            deferred?.endScope();
+            call.discard();
             subtask.unwindLenders();
           },
         });
       }
       // Async lowering runs on host settlement, not in a suspended caller's
       // produce step. Result-lowering failures use the host-failure channel.
-      const promise = settlement.then(
-        (done) => {
-          store.pendingHostCalls.delete(promise);
-          // Discard cancelled or poisoned recipients before lowering can
-          // write guest memory or re-enter through realloc.
-          if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
-          try {
-            onResolve(toResults(convert(fulfilled(done))));
-          } catch (e) {
+      // Assigned after observe() returns; setup failures settle asynchronously.
+      // deno-lint-ignore prefer-const
+      let registered: Promise<void> | undefined;
+      const promise = call.observe((done) => {
+        if (registered !== undefined) store.pendingHostCalls.delete(registered);
+        // Discard cancelled or poisoned recipients before facade conversion
+        // can inspect host data or CABI lowering can enter realloc.
+        if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
+        try {
+          const prepared = prepareLoweredResult(call, done, ft.results);
+          // commitLoweredResult's first check follows structural preparation,
+          // so a getter may accept cancellation but cannot trigger later effects.
+          if (Array.isArray(prepared)) {
+            commitTransferFreeResult(prepared, subtask, inst, onResolve);
+          } else {
+            commitLoweredResult(prepared, subtask, inst, cx, onResolve);
+          }
+        } catch (e) {
+          if (
+            e !== HOST_RESULT_DELIVERY_CANCELLED &&
+            !isInstancePoisoned(opts.instance)
+          ) {
             store.hostFailure = e;
           }
-        },
-        (e) => {
-          store.pendingHostCalls.delete(promise);
-          // Late rejection of discarded work must not fail an unrelated call.
-          if (subtask.resolved() || isInstancePoisoned(opts.instance)) return;
-          store.hostFailure = e;
-        },
-      );
-      registerHostCall(store, promise);
+        }
+      });
+      registered = promise;
+      if (!subtask.resolved()) registerHostCall(store, promise);
       if (!deferCancel) {
         // Prompt-cancel host policy (`canon_lower`'s on_resolve(None)).
         // canon_subtask_cancel sets cancellationRequested before calling us.
@@ -1906,7 +2062,7 @@ export function createLoweredImport(input: {
         // discharge lenders. The null result path performs no realloc.
         subtask.onCancel = () => {
           store.pendingHostCalls.delete(promise);
-          deferred?.endScope();
+          call.discard();
           onResolve(null);
           if (controller !== null) {
             // Defer host abort listeners until after the guest built-in returns.
@@ -1918,7 +2074,22 @@ export function createLoweredImport(input: {
         };
       }
     } else {
-      onResolve(toResults(raw));
+      // Immediate completion is still subject to the same pre-preparation
+      // eligibility rule as an observed pending completion.
+      try {
+        checkLoweredResultDelivery(subtask, inst);
+      } catch (e) {
+        // No result preparation is permitted for an ineligible recipient, but
+        // the adapter's reusable immediate carrier must not retain this call.
+        releaseHostCall(call);
+        throw e;
+      }
+      const prepared = prepareLoweredResult(call, call.settlement, ft.results);
+      if (Array.isArray(prepared)) {
+        commitTransferFreeResult(prepared, subtask, inst, onResolve);
+      } else {
+        commitLoweredResult(prepared, subtask, inst, cx, onResolve);
+      }
     }
 
     // `canon_lower`: a sync-typed callee must have resolved.

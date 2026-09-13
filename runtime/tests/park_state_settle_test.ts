@@ -35,6 +35,7 @@ import {
   newStats,
   type ResolvedOptions,
 } from "../src/exec/boundary.ts";
+import { adaptHostFunction } from "../src/exec/host_settlement.ts";
 import {
   ComponentInstanceState,
   NeedsJspi,
@@ -290,7 +291,7 @@ function mkImportWorld(input: {
       // Sync lower of (borrow) -> (): one flat i32 param, no results.
       coreType: { params: ["i32"], results: [] },
     }),
-    hostFn: input.hostFn,
+    hostFn: adaptHostFunction(input.hostFn),
     stats: newStats(),
     mode: input.mode,
     suspendable: input.suspendable,
