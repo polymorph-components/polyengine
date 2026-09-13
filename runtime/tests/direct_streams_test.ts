@@ -40,6 +40,7 @@ import type { ValType } from "../src/cabi/types.ts";
 import type {
   DirectDestination,
   DirectSource,
+  DirectVerdict,
 } from "../src/exec/host_streams.ts";
 import { hostStream } from "../src/exec/mod.ts";
 
@@ -548,6 +549,171 @@ Deno.test("direct-access byte edge: the one-in-flight-per-end rule covers the di
   hs.readable.cancelRead();
   await rd;
 });
+
+// ---------------------------------------------------------------------------
+// 4b. Invalid verdicts (polyengine#346): the diagnostic is a FIXED message
+// that never inspects the bad value, so it cannot itself throw or invoke a
+// hook the value defines (BigInt/cyclic JSON, a throwing toJSON, a revoked
+// Proxy — even `Array.isArray` throws on the latter).
+// ---------------------------------------------------------------------------
+
+type InvalidVerdict = {
+  readonly label: string;
+  readonly value: unknown;
+  /** Hook-invocation count, where applicable; always 0 for a correct fix. */
+  readonly calls: () => number;
+};
+
+function invalidVerdicts(): InvalidVerdict[] {
+  const cyclic: Record<string, unknown> = {};
+  cyclic.self = cyclic;
+
+  let poisonedCalls = 0;
+  const poisoned = {
+    toJSON: () => {
+      poisonedCalls++;
+      throw new Error("toJSON must never run");
+    },
+    toString: () => {
+      poisonedCalls++;
+      throw new Error("toString must never run");
+    },
+    valueOf: () => {
+      poisonedCalls++;
+      throw new Error("valueOf must never run");
+    },
+    [Symbol.toPrimitive]: () => {
+      poisonedCalls++;
+      throw new Error("Symbol.toPrimitive must never run");
+    },
+  };
+
+  const { proxy: revoked, revoke } = Proxy.revocable({}, {});
+  revoke();
+
+  return [
+    { label: "BigInt", value: 10n, calls: () => 0 },
+    { label: "cyclic object", value: cyclic, calls: () => 0 },
+    {
+      label: "object with throwing toJSON/toString/valueOf/toPrimitive",
+      value: poisoned,
+      calls: () => poisonedCalls,
+    },
+    { label: "revoked Proxy", value: revoked, calls: () => 0 },
+  ];
+}
+
+for (const kind of ["writeDirect", "readDirect"] as const) {
+  for (const order of ["direct-first", "peer-first"] as const) {
+    for (const c of invalidVerdicts()) {
+      Deno.test(
+        `direct-access byte edge misuse: ${kind} invalid verdict (${c.label}, ${order}) rejects and leaves the peer usable`,
+        async () => {
+          const { view } = mkMemory();
+          const cx = mkCx(view);
+          const hs = hostStream<number>(U8);
+          const shared = hs.value as unknown as SharedStreamImpl;
+          // Mark a positive prefix through the real API before returning the
+          // bad verdict: this is what proves the mark gets DISCARDED (not
+          // just that nothing happened to mark in the first place).
+          const badWrite = (dest: DirectDestination) => {
+            dest.remaining();
+            dest.markWritten(1);
+            return c.value as unknown as DirectVerdict;
+          };
+          const badRead = (src: DirectSource) => {
+            src.remaining();
+            src.markRead(1);
+            return c.value as unknown as DirectVerdict;
+          };
+
+          try {
+            let session: Promise<number>;
+            let g: GuestOp;
+            if (kind === "writeDirect") {
+              if (order === "direct-first") {
+                session = hs.writable.writeDirect(badWrite);
+                g = guestOp(shared, "read", cx, 5000, 4);
+              } else {
+                g = guestOp(shared, "read", cx, 5100, 4);
+                session = hs.writable.writeDirect(badWrite);
+              }
+            } else {
+              if (order === "direct-first") {
+                session = hs.readable.readDirect(badRead);
+                g = guestOp(shared, "write", cx, 5200, 4);
+              } else {
+                g = guestOp(shared, "write", cx, 5300, 4);
+                session = hs.readable.readDirect(badRead);
+              }
+            }
+
+            const e = await caught(session);
+            assert(
+              e instanceof TypeError,
+              `${kind} ${c.label} ${order}: TypeError, got ${e}`,
+            );
+            assert(
+              String((e as Error).message).includes(
+                'must return "more" or "done"',
+              ),
+              `${kind} ${c.label} ${order}: names the rule: ${e}`,
+            );
+            assertEq(
+              c.calls(),
+              0,
+              `${kind} ${c.label} ${order}: the bad value's own hook must ` +
+                `never be invoked while diagnosing it`,
+            );
+            assertEq(
+              g.events,
+              [],
+              `${kind} ${c.label} ${order}: no event on the peer`,
+            );
+            assertEq(
+              g.buf.progress,
+              0,
+              `${kind} ${c.label} ${order}: the mark(1) was discarded, ` +
+                `not acknowledged, on the invalid verdict`,
+            );
+            assertEq(
+              shared.dropped,
+              false,
+              `${kind} ${c.label} ${order}: the stream stays alive`,
+            );
+
+            // The peer is still parked; a valid rendezvous afterward proves
+            // no busy/stuck pending slot survived the failed direct session.
+            if (kind === "writeDirect") {
+              assertEq(
+                await hs.writable.write(Uint8Array.from([1, 2]) as never),
+                2,
+                `${kind} ${c.label} ${order}: a later chunk write drains the peer`,
+              );
+              assertEq(g.events, [{
+                result: CopyResult.COMPLETED,
+                progress: 2,
+              }]);
+            } else {
+              assertEq(
+                [...(await hs.readable.read(4)) as unknown as Uint8Array],
+                [0, 0, 0, 0],
+                `${kind} ${c.label} ${order}: a later chunk read drains the peer`,
+              );
+              assertEq(g.events, [{
+                result: CopyResult.COMPLETED,
+                progress: 4,
+              }]);
+            }
+          } finally {
+            hs.writable.cancelWrite();
+            hs.readable.cancelRead();
+          }
+        },
+      );
+    }
+  }
+}
 
 // ===========================================================================
 // 5. Zero-length probes (Concurrency.md "Stream Readiness")
