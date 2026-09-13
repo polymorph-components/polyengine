@@ -403,6 +403,10 @@ function mkCalleeTask(input: {
   );
   task.factPassthrough = true;
   task.factResultTypesKnown = declaredResults !== null;
+  // Autonomous continuation failure belongs to the host call at the root of
+  // this nested FACT call. Synchronous propagation is unchanged because this
+  // hook is consulted only after a scheduler entry catches the escape.
+  task.failureOwner = maybeCurrentTask()?.failureOwner ?? task;
 
   const body = function* (
     thread: Thread,

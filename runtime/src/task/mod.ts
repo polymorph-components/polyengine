@@ -52,6 +52,8 @@ export class ComponentInstanceState implements ComponentInstanceLike {
   /** definitions.py `exclusive_thread`. */
   exclusiveThread: Thread | null = null;
   readonly store: Store;
+  /** Host-visible calls not yet terminally published. */
+  readonly activeCalls: Set<{ fail(cause: unknown): boolean }> = new Set();
 
   constructor(index: number, store?: Store) {
     this.index = index;
@@ -133,6 +135,36 @@ export class Task {
    * trampoline may lack a mapping; only known types may be compared.
    */
   factResultTypesKnown = false;
+
+  /**
+   * Host-call lifecycle hooks. `onControlReturn` is deliberately separate
+   * from `onResolve`: definitions.py delivers canonical resolution inside
+   * `Task.return_`, while public delivery is eligible only when the activation
+   * that performed it has returned or genuinely blocked (CanonicalABI.md
+   * 961-983). FACT tasks leave these unset.
+   */
+  onControlReturn: ((thread: Thread) => void) | null = null;
+  onFailure: ((cause: unknown) => boolean) | null = null;
+  /** Root call that receives autonomous failures from this task. */
+  failureOwner: Task = this;
+  /** Route an autonomous scheduler failure to this task's owning call. */
+  fail(cause: unknown): boolean {
+    if (this.onFailure === null) return false;
+    return this.onFailure(cause);
+  }
+
+  /** A generator activation finished or reached a real scheduler park. */
+  controlReturned(thread: Thread): void {
+    this.onControlReturn?.(thread);
+  }
+
+  attachCall(): void {
+    this.inst.activeCalls.add(this);
+  }
+
+  detachCall(): void {
+    this.inst.activeCalls.delete(this);
+  }
 
   constructor(
     public ft: FuncType,

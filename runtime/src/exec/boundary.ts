@@ -31,10 +31,10 @@ import {
 } from "../cabi/values.ts";
 import { assert_, AssertionError } from "../cabi/trap.ts";
 import {
-  addInstancePoisonedListener,
   type BlockRequest,
   type Cancelled,
   type ComponentInstanceState,
+  consumeSchedulerFailure,
   driveSyncLift,
   entryRefusal,
   EventCode,
@@ -45,6 +45,7 @@ import {
   NeedsJspi,
   needsJspi,
   notifyInstancePoisoned,
+  OriginatedSchedulerFailure,
   packSubtaskResult,
   PendingCapability,
   realHostCalls,
@@ -396,6 +397,11 @@ type IdlePolicy = "trap" | "exit";
  */
 type DriveExit = "done" | "idle";
 
+/** A pre-existing store-global report, distinct from a guest scheduler trap. */
+class HostFailureReport {
+  constructor(readonly cause: unknown) {}
+}
+
 /**
  * Pump `store` until `done()` holds. Returns the exit verdict directly if
  * that was settled synchronously, or a Promise of it otherwise.
@@ -431,9 +437,13 @@ function driveLoop(
     // starve them. Hand those stores to the interleaved async drain.
     while (store.awaiting.size === 0 && store.tick()) {
       traceDrive("drive", store, done, "ticked");
-      if (store.hostFailure !== undefined) throw takeHostFailure(store);
+      if (store.hostFailure !== undefined) {
+        throw takeHostFailure(store);
+      }
     }
-    if (store.hostFailure !== undefined) throw takeHostFailure(store);
+    if (store.hostFailure !== undefined) {
+      throw takeHostFailure(store);
+    }
     if (done()) {
       traceDrive("drive", store, done, "EXIT-done");
       // No async finally will run: hand off any background work here.
@@ -510,7 +520,16 @@ export async function driveStoreAsync(
 ): Promise<void> {
   // The exit verdict is for `drive`'s lift caller (see `DriveExit`); the
   // pumps drive to quiescence and have nothing to decide on it.
-  await driveAsync(store, done, what);
+  for (;;) {
+    try {
+      await driveAsync(store, done, what);
+      return;
+    } catch (e) {
+      if (consumeSchedulerFailure(store, e)) continue;
+      if (e instanceof HostFailureReport) throw e.cause;
+      throw e;
+    }
+  }
 }
 
 /**
@@ -764,7 +783,9 @@ async function driveAsync(
       traceDrive("driveAsync", store, done, "top");
       // Complete settled activation bookkeeping before any scheduling decision.
       store.serviceSettled();
-      if (store.hostFailure !== undefined) throw takeHostFailure(store);
+      if (store.hostFailure !== undefined) {
+        throw takeHostFailure(store);
+      }
       // Yield for this store's engine resumptions. Only their execution/park
       // or settlement may release them; never clear other owners' entries.
       if (store.hasPendingResumptions()) {
@@ -786,7 +807,9 @@ async function driveAsync(
       }
       claimHops = 0;
       while (store.tick()) {
-        if (store.hostFailure !== undefined) throw takeHostFailure(store);
+        if (store.hostFailure !== undefined) {
+          throw takeHostFailure(store);
+        }
         // A READY/YIELD loop must not starve promise settlements. Give engine
         // continuations a microtask per tick and service any landed tails first.
         if (store.awaiting.size > 0) {
@@ -794,7 +817,9 @@ async function driveAsync(
           if (store.hasServiceableSettled()) break;
         }
       }
-      if (store.hostFailure !== undefined) throw takeHostFailure(store);
+      if (store.hostFailure !== undefined) {
+        throw takeHostFailure(store);
+      }
       if (done()) {
         traceDrive("driveAsync", store, done, "EXIT-done");
         return "done";
@@ -933,7 +958,15 @@ async function driveAsync(
           for (let i = store.settled.length - 1; i >= 0; i--) {
             if (store.settled[i].t === winner.t) store.settled.splice(i, 1);
           }
-          winner.t.resumeWith(winner.value, winner.failure);
+          const task = (winner.t as {
+            task?: { failureOwner?: unknown };
+          }).task;
+          const origin = task?.failureOwner ?? task;
+          try {
+            winner.t.resumeWith(winner.value, winner.failure);
+          } catch (e) {
+            throw new OriginatedSchedulerFailure(origin, e);
+          }
         }
         continue;
       }
@@ -975,7 +1008,7 @@ async function driveAsync(
 function takeHostFailure(store: Store): unknown {
   const e = store.hostFailure;
   store.hostFailure = undefined;
-  return e;
+  return new HostFailureReport(e);
 }
 
 // ---------------------------------------------------------------------------
@@ -991,39 +1024,6 @@ function takeHostFailure(store: Store): unknown {
  * hops cause a pre-entry, non-poisoning `SyncEntryBusy` refusal.
  */
 export const SYNC_ENTRY: unique symbol = Symbol("polyengine.syncEntry");
-
-// ---------------------------------------------------------------------------
-// Pending async-typed lift results
-// ---------------------------------------------------------------------------
-//
-// An idle exit transfers result settlement to the task's onResolve callback.
-// If a later driver poisons the instance first and async-end retirement returns,
-// this listener rejects pending results. A throwing retirement hook prevents
-// this notification; recording the poison cause alone does not settle them.
-const pendingLifts = new WeakMap<object, Set<(cause: unknown) => void>>();
-
-function registerPendingLift(inst: object, reject: (c: unknown) => void): void {
-  let s = pendingLifts.get(inst);
-  if (s === undefined) pendingLifts.set(inst, s = new Set());
-  s.add(reject);
-}
-
-function unregisterPendingLift(
-  inst: object,
-  reject: (c: unknown) => void,
-): void {
-  pendingLifts.get(inst)?.delete(reject);
-}
-
-addInstancePoisonedListener((inst, cause) => {
-  const s = pendingLifts.get(inst as object);
-  if (s === undefined || s.size === 0) return;
-  // Drained before dispatch: a rejection handler running synchronously must
-  // not see, or re-enter, this set.
-  const waiters = [...s];
-  s.clear();
-  for (const r of waiters) r(cause);
-});
 
 /** Build a `Store.lift` / `canon_lift` entry with a Task and implicit Thread.
  * Canonical options select sync result lifting, callback dispatch, or stackful
@@ -1161,14 +1161,83 @@ export function createLiftedFunction(input: {
       prepared?.cleanup(e);
       throw e;
     }
-    let completed = false;
-
     let resolved: ComponentValue[] | null = null;
     let resolvedSeen = false;
-    /**
-     * Idle-path result waiter. onResolve, not thread drain, supplies the answer.
-     */
-    let onResolvedHook: (() => void) | null = null;
+    let eligible = false;
+    let terminal = false;
+    let terminalFailed = false;
+    let terminalValue: unknown;
+    let terminalCause: unknown;
+    let invocationReturned = false;
+    let futurePublicationQueued = false;
+    let waiter: {
+      promise: Promise<unknown>;
+      resolve: (value: unknown) => void;
+      reject: (cause: unknown) => void;
+    } | null = null;
+
+    const terminalPromise = (): Promise<unknown> => {
+      if (waiter === null) {
+        let resolve!: (value: unknown) => void;
+        let reject!: (cause: unknown) => void;
+        const promise = new Promise<unknown>((res, rej) => {
+          resolve = res;
+          reject = rej;
+        });
+        // The origin can fail while a sibling driver is still inside invokeNow,
+        // before the facade receives this Promise. Observe internally from
+        // creation; the returned promise still rejects for its caller.
+        void promise.catch(() => {});
+        waiter = { promise, resolve, reject };
+        if (terminal) {
+          if (terminalFailed) reject(terminalCause);
+          else resolve(terminalValue);
+        }
+      }
+      return waiter.promise;
+    };
+
+    const publishIfEligible = (): void => {
+      if (terminal || !eligible || !resolvedSeen) return;
+      if (!invocationReturned && ft.async && ft.results[0]?.kind === "future") {
+        return;
+      }
+      if (
+        ft.async && ft.results[0]?.kind === "future" &&
+        !futurePublicationQueued
+      ) {
+        futurePublicationQueued = true;
+        Promise.resolve().then(publishIfEligible);
+        return;
+      }
+      // Existing host producer/conversion failures are store-global reports,
+      // not task-origin traps. They must remain loud if recorded before this
+      // call publishes, but do not poison the instance (#118).
+      if (store.hostFailure !== undefined) {
+        const report = takeHostFailure(store);
+        failCall(
+          report instanceof HostFailureReport ? report.cause : report,
+        );
+        return;
+      }
+      if (resolved === null) {
+        terminalFailed = true;
+        terminalCause = new AssertionError(
+          `${name}: task resolved as cancelled, but the host never requested cancellation`,
+        );
+        terminal = true;
+        task.detachCall();
+        waiter?.reject(terminalCause);
+        return;
+      }
+      terminalValue = resultsToHost(resolved);
+      terminal = true;
+      task.detachCall();
+      // This runs only at a control-return boundary, outside canonical state
+      // mutation, so Promise thenable inspection is safe here.
+      waiter?.resolve(terminalValue);
+    };
+
     const task = new Task(
       ft,
       taskOpts,
@@ -1178,11 +1247,6 @@ export function createLiftedFunction(input: {
         resolved = result;
         resolvedSeen = true;
         stats.tasksResolved++;
-        if (onResolvedHook !== null) {
-          const f = onResolvedHook;
-          onResolvedHook = null;
-          f();
-        }
       },
     );
 
@@ -1203,36 +1267,36 @@ export function createLiftedFunction(input: {
     );
 
     const finishHostEntry = (): unknown => {
-      completed = true;
       trapIf(
-        !resolvedSeen,
+        !terminal,
         `${name}: task finished without resolving (deadlock)`,
       );
-      if (resolved === null) {
-        // definitions.py `Task.cancel`: `on_resolve(None)`. A host-initiated
-        // call has no way to express "cancelled" in its return value, and the
-        // host never requests cancellation, so reaching this is a bug.
-        throw new AssertionError(
-          `${name}: task resolved as cancelled, but the host never ` +
-            `requested cancellation`,
-        );
-      }
-      return resultsToHost(resolved);
+      if (terminalFailed) throw terminalCause;
+      return terminalValue;
     };
 
     const unwind = (...primary: [] | [unknown]): void => {
       // Failed adapters may skip exit-sync-call; release this task's lenders
       // so unaffected instances do not retain abandoned borrows.
-      if (completed) return;
+      let cleanupFailure: unknown;
+      let cleanupFailed = false;
       try {
         if (primary.length === 0) prepared?.cleanup();
         else prepared?.cleanup(primary[0]);
-      } catch {
-        // An active boundary failure remains primary.
+      } catch (e) {
+        cleanupFailed = true;
+        cleanupFailure = e;
       }
       for (const t of task.threads as { syncCallStack: unknown[] }[]) {
         while (t.syncCallStack.length > 0) {
-          (t.syncCallStack.pop() as LenderScope).releaseLenders();
+          try {
+            (t.syncCallStack.pop() as LenderScope).releaseLenders();
+          } catch (e) {
+            if (!cleanupFailed) {
+              cleanupFailed = true;
+              cleanupFailure = e;
+            }
+          }
         }
       }
       void syncCallStack;
@@ -1245,6 +1309,7 @@ export function createLiftedFunction(input: {
           i.mayLeave = true;
         }
       }
+      if (primary.length === 0 && cleanupFailed) throw cleanupFailure;
     };
 
     /**
@@ -1266,6 +1331,36 @@ export function createLiftedFunction(input: {
     const isCapabilitySignal = (e: unknown): boolean =>
       e instanceof NeedsJspi || e instanceof PendingCapability;
 
+    const failCall = (e: unknown): boolean => {
+      if (terminal) return false;
+      terminal = true;
+      task.detachCall();
+      terminalFailed = true;
+      terminalCause = e;
+      if (
+        task.state === "initial" && thread.waiting() && thread.cancellable
+      ) {
+        thread.abandonWaiting();
+      }
+      try {
+        unwind(e);
+      } finally {
+        waiter?.reject(e);
+      }
+      return true;
+    };
+    task.onFailure = (e): boolean => {
+      if (terminal) return false;
+      if (!isCapabilitySignal(e)) poison(e);
+      return failCall(e);
+    };
+    task.onControlReturn = (owner) => {
+      if (owner.task !== task || terminal) return;
+      eligible = true;
+      publishIfEligible();
+    };
+    task.attachCall();
+
     try {
       thread.resume();
       // The reference sync loop drives callee-instance threads. JSPI and
@@ -1278,116 +1373,100 @@ export function createLiftedFunction(input: {
       // own JSPI hop must not turn this completed sync call into a Promise.
       if (guestDtor) return finishHostEntry();
     } catch (e) {
-      unwind(e);
-      if (!isCapabilitySignal(e)) poison(e);
+      if (consumeSchedulerFailure(store, e)) return terminalPromise();
+      if (e instanceof HostFailureReport) {
+        failCall(e.cause);
+        if (ft.async) return terminalPromise();
+        throw e.cause;
+      }
+      task.onFailure(e);
+      if (ft.async && task.state === "initial") return terminalPromise();
       throw e;
     }
-
-    /**
-     * After an idle exit, settle from onResolve, not the last thread's exit
-     * (#315 result-settlement rule; definitions.py `Task.return_`). Background
-     * producers may retain threads indefinitely. Already-captured results
-     * settle immediately; otherwise register resolution and poison waiters.
-     *
-     * This callback only shapes lifted values. It does not stop whichever
-     * driver now owns the task, nor unwind another driver's active FACT scopes.
-     */
-    const backgroundCompletion = (): Promise<unknown> =>
-      new Promise((resolve, reject) => {
-        // An idle verdict can follow resolution while a driver-liveness
-        // clause remains false. Do not wait for an event that already fired.
-        if (resolvedSeen) {
-          try {
-            resolve(finishHostEntry());
-          } catch (e) {
-            unwind(e);
-            reject(e);
-          }
-          return;
-        }
-        const onPoison = (cause: unknown): void => {
-          onResolvedHook = null;
-          // A task blocked before admission has no guest activation to retire.
-          // Resume its cancellable gate so enterImplicitThread's finally
-          // removes the waiting slot, without synthesizing task cancellation.
-          if (
-            task.state === "initial" && thread.waiting() && thread.cancellable
-          ) {
-            thread.abandonWaiting();
-          }
-          unwind(cause);
-          reject(cause);
-        };
-        // Poison notification may have run after the driver returned idle but
-        // before this continuation installed its listener. Preserve an
-        // already-captured task result above; otherwise poisoning first must
-        // reject the pending async export with the recorded cause. Defer this
-        // already-recorded case one microtask so the caller receives and can
-        // observe the returned Promise before it rejects.
-        // CONTRACT: contracts/embedder-api.md:180-185; per-instance poisoning
-        // is the runtime policy in docs/architecture.md:300-307.
-        if (isInstancePoisoned(inst)) {
-          const cause = instancePoisonCause(inst);
-          Promise.resolve().then(() => onPoison(cause));
-          return;
-        }
-        registerPendingLift(inst, onPoison);
-        onResolvedHook = () => {
-          unregisterPendingLift(inst, onPoison);
-          try {
-            // Safe synchronously inside the resolve callback: pure over
-            // already-lifted `ComponentValue`s (`canon_task_return` lifted
-            // them into `resolved`; `resultsToHost` reshapes). Host `.then`
-            // handlers run on a microtask regardless.
-            resolve(finishHostEntry());
-          } catch (e) {
-            unwind(e);
-            reject(e);
-          }
-        };
-      });
+    const crossedPromiseHop = thread.awaiting !== null;
+    invocationReturned = true;
+    // A plain core invocation has actually returned to JS here. Only a JSPI
+    // promising-entry Promise is an implementation hop whose tail may still
+    // contain result lifting/post-return work.
+    if (resolvedSeen && mode !== "jspi") eligible = true;
+    publishIfEligible();
 
     let outcome: DriveExit | Promise<DriveExit>;
-    try {
-      const midWasmCall = () => task.threads.some((t) => store.awaiting.has(t));
-      const hopParked = () => entryHopThreads(store).length > 0;
-      // Driver completion is not thread exhaustion. CONTRACT: an async result
-      // is independent of producer lifetime
-      // (embedder-api.md:180-185; definitions.py:521-526,2360-2369). A
-      // genuine SuspensionPoint may therefore be handed to the settlement
-      // pump once the result exists. Entry hops remain part of result-memory
-      // ordering and must complete first. Sync lifts retain full activation
-      // liveness. Callback tasks may retain waiting producer threads after
-      // task.return; awaiting their final exit would prevent result delivery.
-      const driveDone = () =>
-        resolvedSeen && !hopParked() && (ft.async || !midWasmCall());
-      outcome = drive(
-        store,
-        driveDone,
-        `export '${name}'`,
-        idlePolicy,
-      );
-    } catch (e) {
-      unwind(e);
-      throw e;
+    for (;;) {
+      try {
+        // Call-owned terminal state is published by explicit activation return
+        // or genuine park. No unrelated store quiescence is a memory barrier.
+        const driveDone = () => terminal;
+        outcome = drive(
+          store,
+          driveDone,
+          `export '${name}'`,
+          idlePolicy,
+        );
+        break;
+      } catch (e) {
+        if (consumeSchedulerFailure(store, e)) {
+          // A synchronous driver can encounter a foreign ready task. Routing
+          // that task's failure is one scheduler step, not a reason to change
+          // this call's return shape or abandon its remaining work.
+          continue;
+        }
+        if (e instanceof HostFailureReport) {
+          failCall(e.cause);
+          if (ft.async) return terminalPromise();
+          throw e.cause;
+        }
+        // A store-global host report is checked before the driver's done
+        // predicate. If this call already published, the report belongs to the
+        // subsequent entry/diagnostic channel, not to this healthy result.
+        if (terminal) throw e;
+        task.onFailure(e);
+        if (ft.async) return terminalPromise();
+        throw e;
+      }
     }
     /**
      * Use the captured exit verdict, not a fresh shared-store predicate.
      */
     const finish = (verdict: DriveExit): unknown =>
-      verdict === "idle" ? backgroundCompletion() : finishHostEntry();
+      verdict === "idle" ? terminalPromise() : finishHostEntry();
     if (!isPromiseLike(outcome)) {
       try {
-        return finish(outcome);
+        const value = finish(outcome);
+        return crossedPromiseHop ? terminalPromise() : value;
       } catch (e) {
-        unwind(e);
+        if (consumeSchedulerFailure(store, e)) return terminalPromise();
+        if (e instanceof HostFailureReport) {
+          failCall(e.cause);
+          if (ft.async) return terminalPromise();
+          throw e.cause;
+        }
+        task.onFailure(e);
+        if (ft.async && task.state === "initial") return terminalPromise();
+        if (ft.async && terminal) return terminalPromise();
         throw e;
       }
     }
-    return outcome.then(finish, (e) => {
-      unwind(e);
-      throw e;
-    });
+    // The driver may remain parked on unrelated host work after this call's
+    // result becomes eligible. Observe it for this call's own deadlock/fault,
+    // but return the call-owned completion channel instead (#350/#357).
+    void outcome.then(
+      () => publishIfEligible(),
+      (e) => {
+        if (consumeSchedulerFailure(store, e)) return;
+        if (e instanceof HostFailureReport) {
+          if (!terminal) failCall(e.cause);
+          else store.hostFailure ??= e.cause;
+          return;
+        }
+        if (terminal) {
+          store.hostFailure ??= e;
+          return;
+        }
+        task.onFailure?.(e);
+      },
+    );
+    return terminalPromise();
   };
 
   return (...rawHostArgs: ComponentValue[]): unknown => {
@@ -1396,8 +1475,29 @@ export function createLiftedFunction(input: {
       ? rawHostArgs[0] as unknown as PreparedTransfer
       : null;
     const hostArgs = prepared ?? rawHostArgs;
+    // A completed JSPI hop may have queued its canonical tail without an
+    // active driver. Finish that tail before classifying the window as busy;
+    // never bypass an unsettled hop, which would expose result memory.
+    if (input.refuseOnEntryHops && store.hasServiceableSettled()) {
+      try {
+        store.serviceSettled();
+      } catch (e) {
+        if (!consumeSchedulerFailure(store, e)) {
+          prepared?.cleanup(e);
+          throw e;
+        }
+      }
+    }
     // Synchronous callers refuse before entry rather than waiting on JSPI hops.
-    if (input.refuseOnEntryHops && entryHopThreads(store, inst).length > 0) {
+    if (
+      input.refuseOnEntryHops && entryHopThreads(store, inst).some((t) => {
+        const task = (t as {
+          task?: { onFailure?: unknown; inst?: { activeCalls?: Set<unknown> } };
+        }).task;
+        return task?.onFailure === null || task?.onFailure === undefined ||
+          task.inst?.activeCalls?.has(task) !== false;
+      })
+    ) {
       const refusal = new SyncEntryBusy(name);
       // Prepared arguments may already own resources. This is a pre-entry
       // refusal, so retire that custody without allowing cleanup failure to
@@ -1471,7 +1571,11 @@ async function awaitHopQuiescence(store: Store, inst: unknown): Promise<void> {
         )
       ),
     );
-    store.serviceSettled();
+    try {
+      store.serviceSettled();
+    } catch (e) {
+      if (!consumeSchedulerFailure(store, e)) throw e;
+    }
   }
 }
 

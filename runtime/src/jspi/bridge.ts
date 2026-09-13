@@ -379,6 +379,8 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
   #done = false;
   #finished = false;
   #store: Store;
+  /** The suspending import hook has returned to the platform. */
+  boundaryReturned = false;
 
   /**
    * WHO the engine will resume when this point's promise settles.
@@ -671,5 +673,14 @@ export function blockCurrentActivation<T>(input: {
     owner,
     input.onSettled,
   );
+  Promise.resolve().then(() => {
+    point.boundaryReturned = true;
+    if (
+      point.waiting() && owner?.awaiting !== null &&
+      owner?.awaiting !== undefined
+    ) {
+      input.task?.controlReturned?.(owner);
+    }
+  });
   return point.promise;
 }

@@ -193,6 +193,11 @@ export class Thread implements SchedulableThread {
     }
     if (step.done) {
       this.#state = "done";
+      // CONTRACT: canonical resolution is captured at Task.return_, but the
+      // host result becomes eligible only after this execution quantum has
+      // returned (CanonicalABI.md:961-983). This also keeps sync post-return
+      // inside the quantum that may still fail.
+      this.task.controlReturned?.(this);
       return;
     }
     const req = step.value;
@@ -203,6 +208,19 @@ export class Thread implements SchedulableThread {
       this.#state = "suspended";
       this.awaiting = req.awaitValue;
       this.#store.noteAwaiting(this, req.awaitValue);
+      // If the blocking import's boundary notification already ran, this is
+      // now known to be a genuine park. Otherwise that notification will find
+      // this awaiting owner. Plain-mode test doubles have no SuspensionPoint
+      // and therefore remain an implementation hop.
+      if (
+        this.#store.waiting.some((w) =>
+          (w as { owner?: unknown; boundaryReturned?: boolean }).owner ===
+            this &&
+          (w as { boundaryReturned?: boolean }).boundaryReturned === true
+        )
+      ) {
+        this.task.controlReturned?.(this);
+      }
       return;
     }
     if (req.readyFunc === null) {
@@ -212,6 +230,7 @@ export class Thread implements SchedulableThread {
       this.#state = "suspended";
       this.#startWaiting(req.readyFunc);
     }
+    this.task.controlReturned?.(this);
   }
 
   /**

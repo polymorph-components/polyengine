@@ -122,6 +122,46 @@ Deno.test({
   },
 });
 
+Deno.test("origin fault routing continues to a healthy ready sibling", async () => {
+  const store = new Store();
+  const failed = { value: false };
+  const origin = {
+    onFailure: true,
+    fail(cause: unknown): boolean {
+      assert(cause instanceof Trap, `expected Trap, got ${cause}`);
+      failed.value = true;
+      return true;
+    },
+  };
+  let healthyRan = false;
+  let originReady = true;
+  const originThread = {
+    task: { inst: { handles: [] }, failureOwner: origin },
+    ready: () => originReady,
+    waiting: () => true,
+    resume: () => {
+      originReady = false;
+      store.stopWaiting(originThread);
+      throw new Trap("origin boom");
+    },
+  };
+  store.startWaiting(originThread);
+  const healthyThread = {
+    task: { inst: { handles: [] } },
+    ready: () => !healthyRan,
+    waiting: () => true,
+    resume: () => {
+      healthyRan = true;
+      store.stopWaiting(healthyThread);
+    },
+  };
+  store.startWaiting(healthyThread);
+
+  await driveStoreAsync(store, () => healthyRan, "origin-routing probe");
+  assertEq(failed.value, true);
+  assertEq(healthyRan, true);
+});
+
 Deno.test({
   name:
     "F4b: driveAsync's trap exit leaves no unserviced sibling tail in store.settled",

@@ -160,3 +160,66 @@ Deno.test({
     assertEq(store.pendingHostCalls.size, 0);
   },
 });
+
+Deno.test("sync entry keeps a synchronous result after a foreign routed fault", () => {
+  const store = new Store();
+  const healthyInst = new ComponentInstanceState(0, store);
+  const failedInst = new ComponentInstanceState(1, store);
+  let originFailed = false;
+  let ready = true;
+  let healthyReadyRan = false;
+  const origin = {
+    onFailure: true,
+    fail() {
+      originFailed = true;
+      return true;
+    },
+  };
+  const foreign = {
+    task: { inst: failedInst, failureOwner: origin },
+    ready: () => ready,
+    waiting: () => ready,
+    resume: () => {
+      ready = false;
+      store.stopWaiting(foreign);
+      throw new Error("foreign sync fault");
+    },
+  };
+  store.startWaiting(foreign);
+  const healthyReady = {
+    task: { inst: new ComponentInstanceState(2, store) },
+    ready: () => !healthyReadyRan,
+    waiting: () => !healthyReadyRan,
+    resume: () => {
+      healthyReadyRan = true;
+      store.stopWaiting(healthyReady);
+    },
+  };
+  store.startWaiting(healthyReady);
+  const fn = createLiftedFunction({
+    name: "sync-result",
+    ft: { params: [], results: [{ kind: "u32" }], async: false },
+    opts: {
+      stringEncoding: "utf8",
+      memory: null,
+      realloc: null,
+      postReturn: null,
+      callback: null,
+      async: false,
+      cancellable: false,
+      coreType: { params: [], results: ["i32"] },
+      instance: healthyInst,
+    },
+    core: () => [42],
+    stats: newStats(),
+  });
+  const result = fn();
+  assertEq(result, 42);
+  assertEq(result instanceof Promise, false);
+  assertEq(originFailed, true);
+  assertEq(
+    healthyReadyRan,
+    true,
+    "the export driver must continue to the healthy ready thread",
+  );
+});

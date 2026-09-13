@@ -26,6 +26,7 @@ import {
   BUFFER_MAX_LENGTH,
   type ByteWindow,
   type ComponentInstanceState,
+  consumeSchedulerFailure,
   CopyResult,
   type DirectBuffer,
   type DirectOutcome,
@@ -36,6 +37,7 @@ import {
   SharedStreamImpl,
   type Store,
   storeQuiescent as quiescent,
+  unwrapSchedulerFailure,
 } from "../task/mod.ts";
 
 /**
@@ -249,18 +251,21 @@ class HostActivity {
   pump(): void {
     const store = this.#store;
     if (store === null) return;
-    try {
-      // Settled activation tails gate `tick` (Store.settled); a driver that
-      // never services them wedges the store — this loop runs BETWEEN export
-      // calls, when no driveAsync exists to do it.
-      for (;;) {
+    // Settled activation tails gate `tick` (Store.settled); a driver that
+    // never services them wedges the store — this loop runs BETWEEN export
+    // calls, when no driveAsync exists to do it. An attributed failure is one
+    // completed step; keep draining healthy ready siblings.
+    for (;;) {
+      try {
         const serviced = store.serviceSettled();
         const ticked = store.tick();
         if (!serviced && !ticked) break;
+      } catch (e) {
+        if (consumeSchedulerFailure(store, e)) continue;
+        const cause = unwrapSchedulerFailure(e);
+        store.hostFailure ??= cause;
+        throw cause;
       }
-    } catch (e) {
-      store.hostFailure ??= e;
-      throw e;
     }
     if (this.#pumping) return;
     // Retention alone is not work to drive; leave the host Promise pending.
@@ -293,10 +298,11 @@ class HostActivity {
         );
       }
     } catch (e) {
+      if (consumeSchedulerFailure(store, e)) return;
       // Nothing is awaiting this pump, so park the failure where the next
       // driving loop will surface it (same channel as a host-import
       // rejection).
-      store.hostFailure ??= e;
+      store.hostFailure ??= unwrapSchedulerFailure(e);
     } finally {
       this.#pumping = false;
     }
