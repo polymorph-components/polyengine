@@ -255,6 +255,16 @@ order, not the time readiness became true; pending events use join order.
 Tests can use seeded shuffling through `POLYENGINE_SCHED_SEED` to exercise
 spec-permitted scheduling variation. See `runtime/src/task/scheduler.ts`.
 
+**Call completion.** Canonical resolution is captured at `Task.return_`, in
+the reference-defined order. Public delivery becomes eligible when that call's
+current activation returns or is confirmed parked at a real scheduler
+`SuspensionPoint`; a promising-entry implementation hop is not such a boundary.
+The call then publishes independently of unrelated store work. A later sibling
+fault cannot revoke a published value, while an unpublished originating call is
+failed through its task/instance ownership channel. Cleanup and terminal
+notification are both attempted, and the first poison cause is retained even
+when cleanup fails.
+
 **Overlapping drivers.** Concurrent exports may run overlapping
 `driveAsync` loops on one store. The invariant is that an activation
 consumes a settlement at most once and never resumes from an obsolete

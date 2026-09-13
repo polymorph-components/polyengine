@@ -15,6 +15,7 @@
 
 import { assertEq } from "./support/asserts.ts";
 import {
+  addInstancePoisonedListener,
   instancePoisonCause,
   isInstancePoisoned,
   notifyInstancePoisoned,
@@ -84,4 +85,36 @@ Deno.test("poison cause: non-Error and unprintable causes degrade safely", () =>
     withPoisonCause(unprintable, "base"),
     "base — instance poisoned by: (unprintable poison cause)",
   );
+});
+
+Deno.test("poison cause: thrown undefined remains first and all waiters run", () => {
+  const inst = fakeInst() as {
+    handles: Iterable<unknown>;
+    activeCalls: Set<{ fail(cause: unknown): boolean }>;
+  };
+  inst.activeCalls = new Set();
+  const seen: unknown[] = [];
+  inst.activeCalls.add({
+    fail(cause) {
+      seen.push(cause);
+      throw new Error("cleanup failed");
+    },
+  });
+  inst.activeCalls.add({
+    fail(cause) {
+      seen.push(cause);
+      return true;
+    },
+  });
+  addInstancePoisonedListener((candidate, cause) => {
+    if (candidate === inst) seen.push(cause);
+  });
+
+  notifyInstancePoisoned(inst, undefined);
+  notifyInstancePoisoned(inst, new Error("secondary"));
+
+  assertEq(isInstancePoisoned(inst), true);
+  assertEq(instancePoisonCause(inst), undefined);
+  assertEq(seen.length, 3, "a throwing cleanup must not skip later waiters");
+  assertEq(seen.every((cause) => cause === undefined), true);
 });

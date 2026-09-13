@@ -81,14 +81,14 @@ for (const jspi of [false, true]) {
       // settles it synchronously, inside `push-bad`'s own driver.
       const nextOutcome = caught(() => next);
       await macrotask();
-      // `push-bad` writes the future, which readies `next`'s callback, which
-      // traps. `push-bad`'s own call rejects...
+      // `push-bad` completes its own task before the independent `next`
+      // callback traps. Origin routing (#357) therefore preserves its result.
       const pushErr = await caught(() =>
         (c.exports.pushBad as (v: number) => Promise<void>)(7)
       );
-      assertEq(pushErr !== undefined, true, "push-bad must reject");
-      // ...and so must the Promise nobody was driving. Without the poisoning
-      // seam this hangs forever (the #66 failure, for lifts).
+      assertEq(pushErr, undefined, "completed push-bad must keep its result");
+      // The callback's originating pending call rejects and poisons subsequent
+      // entry; the scheduler sibling that happened to drive it does not.
       const err = await nextOutcome;
       assertEq(err !== undefined, true, "the pending next() must reject");
       assertEq(

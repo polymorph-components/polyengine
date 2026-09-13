@@ -29,6 +29,7 @@ import {
 import {
   ComponentInstanceState,
   currentThread,
+  isInstancePoisoned,
   notifyInstancePoisoned,
   popCurrentThread,
   pushCurrentThread,
@@ -76,6 +77,42 @@ import { guest, haveFixture, instantiateFixture } from "./embedder/support.ts";
 function assert(condition: boolean, message: string): asserts condition {
   if (!condition) throw new Error(`assertion failed: ${message}`);
 }
+
+Deno.test("raw host failure rejects a pre-entry call without poisoning", async () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  inst.backpressure = 1;
+  let cleaned = 0;
+  const prepared = new PreparedValues([], []);
+  prepared.custody.acquire(() => cleaned++);
+  const failure = new TypeError("host conversion failed");
+  store.hostFailure = failure;
+  const call = createLiftedFunction({
+    name: "raw-host-failure",
+    ft: { params: [], results: [], async: true },
+    opts: {
+      stringEncoding: "utf8",
+      memory: null,
+      realloc: null,
+      postReturn: null,
+      callback: () => () => [0],
+      async: true,
+      cancellable: false,
+      coreType: { params: [], results: ["i32"] },
+      instance: inst,
+    },
+    core: () => [0],
+    stats: newStats(),
+  });
+
+  const pending = call(prepared as unknown as ComponentValue) as Promise<
+    unknown
+  >;
+  assertEq(await rejected(pending), failure);
+  assertEq(isInstancePoisoned(inst), false);
+  assertEq(cleaned, 1);
+  assertEq(inst.numWaitingToEnter, 0);
+});
 
 function caught(fn: () => unknown): unknown {
   try {
@@ -297,7 +334,11 @@ for (const timing of ["before-listener", "after-listener"] as const) {
     >;
     assertEq(acquired, 1);
     assertEq(entered, 0);
-    assertEq(inst.numWaitingToEnter, 1);
+    assertEq(
+      inst.numWaitingToEnter,
+      timing === "before-listener" ? 0 : 1,
+      "an origin failure consumed by the starting driver retires admission immediately",
+    );
     if (timing === "after-listener") notifyInstancePoisoned(inst, poison);
     assertEq(await rejected(pending), poison);
     assertEq(cleaned, 1);

@@ -155,9 +155,37 @@ export function notifyInstancePoisoned(
   cause: unknown,
 ): void {
   // Preserve the original cause across follow-on failures.
-  if (!poisonedInstances.has(inst)) poisonedInstances.set(inst, cause);
-  onInstancePoisoned?.(inst, cause);
-  for (const f of instancePoisonedListeners) f(inst, cause);
+  const first = !poisonedInstances.has(inst);
+  if (first) poisonedInstances.set(inst, cause);
+  const original = poisonedInstances.get(inst);
+  if (!first) return;
+  // Cleanup and terminal observers are independent obligations. A failing
+  // retirement hook must neither replace the first poison cause (including
+  // `undefined`) nor prevent pending calls from receiving terminal notice.
+  try {
+    onInstancePoisoned?.(inst, original);
+  } catch {
+    // The originating scheduler entry still routes `original` below.
+  }
+  for (const f of instancePoisonedListeners) {
+    try {
+      f(inst, original);
+    } catch {
+      // One observer cannot suppress the rest.
+    }
+  }
+  const calls = (inst as {
+    activeCalls?: Set<{ fail(cause: unknown): boolean }>;
+  }).activeCalls;
+  if (calls !== undefined) {
+    for (const call of [...calls]) {
+      try {
+        call.fail(original);
+      } catch {
+        // Cleanup from one call cannot suppress terminal notification to peers.
+      }
+    }
+  }
 }
 
 /** Poison causes shared by late-settle retirement and entry diagnostics. */
@@ -551,6 +579,50 @@ export interface SchedulableThread {
   task: any;
 }
 
+/** A scheduler entry observed a failure from a specific task. The envelope is
+ * internal; host/public boundaries consume it and route `cause` to `origin`. */
+export class OriginatedSchedulerFailure {
+  constructor(
+    // deno-lint-ignore no-explicit-any
+    readonly origin: any,
+    readonly cause: unknown,
+  ) {}
+}
+
+/** Consume an originated scheduler fault without attributing it to the
+ * scheduler sibling that happened to drive it. */
+export function consumeSchedulerFailure(_store: Store, e: unknown): boolean {
+  if (!(e instanceof OriginatedSchedulerFailure)) return false;
+  if (e.origin?.onFailure === null || e.origin?.onFailure === undefined) {
+    throw e.cause;
+  }
+  // Always address the specific root. Instance poison observers may already
+  // have failed a different call (or this one); aggregate membership changes
+  // cannot establish that this origin was observed.
+  e.origin.fail(e.cause);
+  return true;
+}
+
+/** Raw cause for direct low-level callers; runtime entry points use
+ * `consumeSchedulerFailure` before crossing a public boundary. */
+export function unwrapSchedulerFailure(e: unknown): unknown {
+  return e instanceof OriginatedSchedulerFailure ? e.cause : e;
+}
+
+function originatedFailure(
+  origin: { onFailure?: unknown } | null | undefined,
+  cause: unknown,
+): OriginatedSchedulerFailure {
+  // Low-level scheduler clients have no call boundary that can consume an
+  // attribution envelope. Preserve their historical/raw throw contract.
+  if (
+    origin?.onFailure === null || origin?.onFailure === undefined
+  ) {
+    throw cause;
+  }
+  return new OriginatedSchedulerFailure(origin, cause);
+}
+
 /**
  * Scheduler state shared by the component instances of an Executor.
  * `waiting` preserves insertion order for the default candidate policy.
@@ -708,9 +780,24 @@ export class Store {
           continue scan;
         }
         this.settled.splice(i, 1);
-        (s.t as {
+        const t = s.t as {
           resumeWith(v: unknown, f?: { error: unknown }): void;
-        }).resumeWith(s.value, s.failure);
+          task?: {
+            inst?: object;
+            failureOwner?: unknown;
+            fail?(cause: unknown): boolean;
+          };
+        };
+        const origin = (t.task?.failureOwner ?? t.task) as
+          | { onFailure?: unknown }
+          | undefined;
+        try {
+          t.resumeWith(s.value, s.failure);
+        } catch (e) {
+          // Autonomous tails belong to their originating task, not whichever
+          // sibling happened to service the store queue (#357).
+          throw originatedFailure(origin, e);
+        }
         did = true;
         continue scan;
       }
@@ -775,6 +862,7 @@ export class Store {
     if (candidates.length === 0) return false;
     const thread = chooseCandidate(candidates);
     const inst = thread.task.inst;
+    const origin = thread.task?.failureOwner ?? thread.task;
     // Capability failures do not poison; other escaping failures do.
     try {
       thread.resume();
@@ -785,7 +873,10 @@ export class Store {
           e,
         );
       }
-      throw e;
+      // A store-wide tick may run a sibling. Consume the fault only when that
+      // task has an owning completion channel; nested FACT calls deliberately
+      // lack one and retain ordinary propagation to their caller.
+      throw originatedFailure(origin, e);
     }
     return true;
   }
