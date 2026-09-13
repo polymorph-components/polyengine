@@ -24,6 +24,7 @@ import { INTERNAL_HOST_REGISTRIES } from "../../src/embedder/instantiate.ts";
 import { sync } from "../../src/embedder/sync.ts";
 import { StreamProducerError } from "@polyengine/protocol";
 import type { SharedFutureImpl } from "../../src/task/mod.ts";
+import { isInstancePoisoned } from "../../src/task/mod.ts";
 
 const turn = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 const ownFixture = "runtime/tests/embedder/future-own.wasm";
@@ -206,6 +207,72 @@ Deno.test({
     // parked on it); the producer settles it now.
     resolve(42);
     assertEq(await pending, 42);
+  },
+});
+
+Deno.test({
+  name: "futures: a host import cannot return a handle bound to another store",
+  ignore: !have || !(await haveFixture(guest("future-user"))),
+  async fn() {
+    const source = await instantiateFixture(guest("future-user"));
+    const future = source.exports.makeFuture(40) as Future<number>;
+    await turn(); // materialize the eager future handle before returning it
+    const destination = await instantiateFixture(FIXTURE, {
+      nextValue: () => future,
+      sendSink: () => Promise.resolve(0),
+      recvPair: () => {
+        throw new Error("unused");
+      },
+    });
+    const error = await caught(() => destination.exports.runNext());
+    assertEq(error instanceof TypeError, true, String(error));
+    assertEq(String(error).includes("cross-store"), true, String(error));
+    assertEq(String(error).includes("Promise.resolve(f)"), true, String(error));
+    assertEq(
+      isInstancePoisoned(destination.handle.componentInstances[0]),
+      true,
+      "host-import result failure poisons the entered destination",
+    );
+    const retry = await caught(() => destination.exports.runNext());
+    assertEq(retry instanceof Error, true, String(retry));
+    assertEq(String(retry).includes("instance poisoned"), true, String(retry));
+    assertEq(
+      await future,
+      41,
+      "refused import return leaves source awaitable",
+    );
+  },
+});
+
+Deno.test({
+  name:
+    "imports: nested cross-store stream result is refused before consumption",
+  ignore: !have || !(await haveFixture(guest("stream-echo"))),
+  async fn() {
+    const source = await instantiateFixture(guest("stream-echo"));
+    const stream = await source.exports.echoDoubled([2, 3]) as Stream<number>;
+    const destination = await instantiateFixture(FIXTURE, {
+      nextValue: () => Promise.resolve(0),
+      sendSink: () => Promise.resolve(0),
+      // tuple<stream<u8>, future<u32>> exercises recursive result conversion.
+      recvPair: () => [stream, Promise.resolve(0)],
+    });
+    const error = await caught(() => destination.exports.runRecv());
+    assertEq(error instanceof TypeError, true, String(error));
+    assertEq(String(error).includes("cross-store"), true, String(error));
+    assertEq(String(error).includes(".readable()"), true, String(error));
+    const retry = await caught(() => destination.exports.runRecv());
+    assertEq(retry instanceof Error, true, String(retry));
+    assertEq(String(retry).includes("instance poisoned"), true, String(retry));
+    const reader = stream.readable().getReader();
+    const first = await reader.read();
+    const second = await reader.read();
+    assertEq(
+      [...(first.value ?? []), ...(second.value ?? [])],
+      [4, 6],
+      "refused nested handle remains readable",
+    );
+    reader.releaseLock();
   },
 });
 

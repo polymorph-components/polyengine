@@ -217,6 +217,8 @@ export interface AdapterOptions {
   bridge: ValueBridge;
   /** Names the site in error messages (`import 'wasi:x/y'.f`, param 2). */
   where: string;
+  /** The executor store values lowered through this adapter will enter. */
+  destinationStore?: unknown;
 }
 
 // ---------------------------------------------------------------------------
@@ -597,11 +599,19 @@ export function fromHost(
     case "borrow":
       return o.bridge.lowerBorrow(v, t);
     case "stream":
-      // deno-lint-ignore no-explicit-any
-      return lowerStreamSource(v as any, elemCodec(t.element, o));
+      return lowerStreamSource(
+        // deno-lint-ignore no-explicit-any
+        v as any,
+        elemCodec(t.element, o),
+        o.destinationStore,
+      );
     case "future":
-      // deno-lint-ignore no-explicit-any
-      return lowerFutureSource(v as any, elemCodec(t.element, o));
+      return lowerFutureSource(
+        // deno-lint-ignore no-explicit-any
+        v as any,
+        elemCodec(t.element, o),
+        o.destinationStore,
+      );
   }
 }
 
