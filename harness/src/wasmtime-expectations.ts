@@ -116,48 +116,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
       class: "diagnostic-mismatch",
       files: [
         {
-          file: "async/backpressure-overflow.json",
-          rows: [{
-            lines: [36],
-            cause:
-              'Error: expected trap "backpressure counter overflow", got "backpressure counter underflow"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/cancel-host.json",
-          rows: [{
-            lines: [256],
-            cause:
-              'Error: expected trap "`subtask.cancel` called after terminal status delivered", got "subtask.cancel on a subtask whose resolution was already delivered"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/cancel-sync-and-waitable.json",
-          rows: [{
-            lines: [68],
-            cause:
-              'Error: expected trap "waitable cannot be used synchronously while added to a waitable set", got "future.cancel-write: synchronous cancel on an end that is in a waitable set"',
-            status: "failed",
-          }, {
-            lines: [121],
-            cause:
-              'Error: expected trap "waitable cannot be used synchronously while added to a waitable set", got "future.cancel-read: synchronous cancel on an end that is in a waitable set"',
-            status: "failed",
-          }, {
-            lines: [174],
-            cause:
-              'Error: expected trap "waitable cannot be used synchronously while added to a waitable set", got "stream.cancel-write: synchronous cancel on an end that is in a waitable set"',
-            status: "failed",
-          }, {
-            lines: [227],
-            cause:
-              'Error: expected trap "waitable cannot be used synchronously while added to a waitable set", got "stream.cancel-read: synchronous cancel on an end that is in a waitable set"',
-            status: "failed",
-          }],
-        },
-        {
           file: "async/future-read.json",
           rows: [{
             lines: [65],
@@ -167,66 +125,11 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
           }],
         },
         {
-          file: "async/intra-futures.json",
-          rows: [{
-            lines: [55],
-            cause:
-              'Error: expected trap "cannot read from and write to intra-component future/stream with non-numeric payload", got "cannot read from and write to intra-component future"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/intra-streams.json",
-          rows: [{
-            lines: [56],
-            cause:
-              'Error: expected trap "cannot read from and write to intra-component future/stream with non-numeric payload", got "cannot read from and write to intra-component stream"',
-            status: "failed",
-          }],
-        },
-        {
           file: "async/stream-cancel-finished-op.json",
           rows: [{
-            lines: [232, 234, 236],
-            cause:
-              'Error: expected trap "cannot read after being notified that the writable end dropped", got "cannot read from stream after being notified that the writable end dropped"',
-            status: "failed",
-          }, {
-            lines: [239, 241, 243],
-            cause:
-              'Error: expected trap "cannot write after being notified that the readable end dropped", got "cannot write to stream after being notified that the readable end dropped"',
-            status: "failed",
-          }, {
             lines: [247, 249, 251],
             cause:
               'Error: expected trap "cannot write after being notified that the readable end dropped", got "cannot write to future after previous write succeeded or readable end dropped"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/subtask-wait.json",
-          rows: [{
-            lines: [82],
-            cause:
-              'Error: expected trap "wasm `unreachable` instruction executed", got "guest trapped: unreachable"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/sync-and-async-waitable.json",
-          rows: [{
-            lines: [123],
-            cause:
-              'Error: expected trap "waitable cannot be used synchronously while added to a waitable set", got "synchronous future copy on an end that is in a waitable set"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/sync-call-context-trap.json",
-          rows: [{
-            lines: [47],
-            cause:
-              'Error: expected trap "wasm `unreachable` instruction executed", got "guest trapped: unreachable"',
             status: "failed",
           }],
         },
@@ -256,16 +159,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
             cause:
               'Error: expected trap "cannot write after being notified that the readable end dropped", got "cannot write to future after previous write succeeded or readable end dropped"',
             status: "failed",
-          }, {
-            lines: [643, 645, 647, 649],
-            cause:
-              'Error: expected trap "cannot write after being notified that the readable end dropped", got "cannot write to stream after being notified that the readable end dropped"',
-            status: "failed",
-          }, {
-            lines: [652, 654, 658, 660],
-            cause:
-              'Error: expected trap "cannot read after being notified that the writable end dropped", got "cannot read from stream after being notified that the writable end dropped"',
-            status: "failed",
           }],
         },
         {
@@ -292,15 +185,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
             lines: [21, 23],
             cause:
               'Error: expected trap "string pointer not aligned to 2", got "misaligned string pointer"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "trap.json",
-          rows: [{
-            lines: [30],
-            cause:
-              'Error: expected trap "wasm `unreachable` instruction executed", got "guest trapped: unreachable"',
             status: "failed",
           }],
         },

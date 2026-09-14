@@ -262,3 +262,66 @@ Deno.test("trapMatches: an unrelated engine trap message does not falsely match 
     "unrelated trap",
   );
 });
+
+Deno.test("trapMatches: verified diagnostic equivalents match only their named operations", () => {
+  const equivalents: Array<[string, string]> = [
+    ["backpressure counter overflow", "backpressure counter underflow"],
+    [
+      "`subtask.cancel` called after terminal status delivered",
+      "subtask.cancel on a subtask whose resolution was already delivered",
+    ],
+    [
+      "waitable cannot be used synchronously while added to a waitable set",
+      "future.cancel-read: synchronous cancel on an end that is in a waitable set",
+    ],
+    [
+      "waitable cannot be used synchronously while added to a waitable set",
+      "synchronous stream copy on an end that is in a waitable set",
+    ],
+    [
+      "cannot read after being notified that the writable end dropped",
+      "cannot read from stream after being notified that the writable end dropped",
+    ],
+    [
+      "cannot write after being notified that the readable end dropped",
+      "cannot write to stream after being notified that the readable end dropped",
+    ],
+    [
+      "cannot read from and write to intra-component future/stream with non-numeric payload",
+      "cannot read from and write to intra-component future",
+    ],
+    [
+      "wasm `unreachable` instruction executed",
+      "guest trapped: unreachable",
+    ],
+  ];
+  for (const [expected, actual] of equivalents) {
+    assertEq(trapMatches(expected, actual), true, `${expected} / ${actual}`);
+  }
+});
+
+Deno.test("trapMatches: narrow diagnostic rows reject adjacent but different traps", () => {
+  const nonEquivalents: Array<[string, string]> = [
+    ["integer overflow", "integer underflow"],
+    ["backpressure counter overflow", "reference count overflow"],
+    [
+      "waitable cannot be used synchronously while added to a waitable set",
+      "wasm trap: deadlock detected: event loop cannot make further progress",
+    ],
+    [
+      "cannot write after being notified that the readable end dropped",
+      "cannot write to future after previous write succeeded or readable end dropped",
+    ],
+    [
+      "cannot read from and write to intra-component future/stream with non-numeric payload",
+      "cannot have concurrent operations active on a future/stream",
+    ],
+    [
+      "uncaught exception propagated out of component",
+      "guest trapped: unreachable",
+    ],
+  ];
+  for (const [expected, actual] of nonEquivalents) {
+    assertEq(trapMatches(expected, actual), false, `${expected} / ${actual}`);
+  }
+});
