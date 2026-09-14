@@ -18,6 +18,7 @@
 import { assertEq } from "./support/asserts.ts";
 import {
   createLiftedFunction,
+  drainWaiterCountForTesting,
   newStats,
   type ResolvedOptions,
 } from "../src/exec/mod.ts";
@@ -152,5 +153,10 @@ Deno.test({
     );
     assertEq(store.hostFailure, undefined);
     assertEq(store.pendingHostCalls.size, 0);
+    assertEq(
+      drainWaiterCountForTesting(store),
+      0,
+      "terminal idle call retained its coordinator waiter",
+    );
   },
 });

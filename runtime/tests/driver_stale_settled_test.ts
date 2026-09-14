@@ -18,7 +18,7 @@
 // assertion below is exactly that — the value arrives once.
 
 import { assertEq } from "./support/asserts.ts";
-import { driveStoreAsync, registerHostCall } from "../src/exec/mod.ts";
+import { requestStoreService } from "../src/exec/mod.ts";
 import { Store } from "../src/task/mod.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
@@ -66,18 +66,8 @@ Deno.test({
     t.awaiting = p1;
     store.noteAwaiting(t, p1);
 
-    // A real, never-settling host call: it keeps `pendingHostCalls` non-empty
-    // so the driver takes the P5 servicing race (the winner path) instead of
-    // the deadlock probe.
-    const stuck = new Promise<void>(() => {});
-    registerHostCall(store, stuck);
-
-    let finished = false;
-    const driving = driveStoreAsync(store, () => finished, "F1 driver");
-
-    // Let the driver reach the race.
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-    await new Promise((r) => setTimeout(r, 0));
+    requestStoreService(store);
+    await Promise.resolve();
     assertEq(t.received.length, 0);
 
     settleA("A");
@@ -97,16 +87,6 @@ Deno.test({
     // NEW park.
     assertEq(store.settled.length, 0);
 
-    // Teardown: let the driver exit and leave `pendingHostCalls` empty so the
-    // settlement pump inherits nothing.
-    finished = true;
-    store.pendingHostCalls.delete(stuck);
-    const wake: Promise<void> = Promise.resolve().then(() => {
-      store.pendingHostCalls.delete(wake);
-    });
-    registerHostCall(store, wake);
-    await driving;
-    assertEq(store.pendingHostCalls.size, 0);
     assertEq(store.hostFailure, undefined);
   },
 });

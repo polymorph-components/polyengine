@@ -93,6 +93,65 @@ Deno.test({
 });
 
 Deno.test({
+  name:
+    "#323: a genuine second suspension releases same-instance entry admission",
+  ignore: shimWasm === null,
+  fn: async () => {
+    const gate = Promise.withResolvers<void>();
+    const gateEntered = Promise.withResolvers<void>();
+    const continued = Promise.withResolvers<void>();
+    const probeCall: { result: Promise<unknown> | null } = { result: null };
+    const translator = await Translator.create(shimWasm!);
+    const component = await instantiate({
+      componentBytes,
+      ...translator.translate(componentBytes),
+    }, {
+      "before-gate": () => Promise.resolve(),
+      hop: suspending(() => {
+        probeCall.result = component.exports.probe() as Promise<unknown>;
+      }),
+      gate: () => {
+        gateEntered.resolve();
+        return gate.promise;
+      },
+      continued: () => continued.resolve(),
+      "probe-entered": () => {},
+    });
+
+    const result = component.exports.run() as Promise<number>;
+    try {
+      await gateEntered.promise;
+      const probeResult = probeCall.result;
+      assert(probeResult !== null, "hop callback did not start the probe");
+      const probe = await Promise.race([
+        probeResult.then((value) => ({ state: "resolved", value })),
+        new Promise<{ state: "timeout" }>((resolve) =>
+          setTimeout(() => resolve({ state: "timeout" }), 50)
+        ),
+      ]);
+      assertEquals(
+        JSON.stringify(probe),
+        JSON.stringify({ state: "resolved", value: 7 }),
+        "same-instance probe did not resolve after the producer genuinely parked",
+      );
+      assertEquals(await result, 42);
+    } finally {
+      gate.resolve();
+    }
+
+    await continued.promise;
+    const later = await assertRejects(
+      () => component.exports.probe() as Promise<unknown>,
+      "post-delivery producer failure must remain observable",
+    );
+    assert(
+      isTrap(later) && String(later).includes("unreachable"),
+      `expected the retained producer trap, got ${later}`,
+    );
+  },
+});
+
+Deno.test({
   name: "#323: a late host rejection remains observable after result delivery",
   ignore: shimWasm === null,
   fn: async () => {

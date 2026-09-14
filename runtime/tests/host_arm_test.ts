@@ -39,6 +39,7 @@ import {
 } from "../src/exec/mod.ts";
 import {
   dropSharedForTeardown,
+  hasHostRetention,
   hasRealHostCall,
   SharedFutureImpl,
   SharedStreamImpl,
@@ -134,6 +135,7 @@ Deno.test({
       !hasRealHostCall(store),
       "the arm is a retention claim, not outstanding host work",
     );
+    assert(hasHostRetention(store), "the lifted end did not retain capability");
 
     // The identity return: the host's only end goes back to the guest.
     fireLowered(shared, store);

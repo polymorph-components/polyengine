@@ -507,6 +507,18 @@ export function maybeCurrentThread(): CurrentThreadLike | undefined {
   return resolveAmbient();
 }
 
+/** Whether guest code is executing on the current JavaScript stack. Engine
+ * continuation claims deliberately do not count: they describe attribution
+ * across a hop, not live execution. Ordinary store service must never enter a
+ * second guest activation while this is true (contracts/intrinsics.md:118-126). */
+export function guestActivationLive(store?: Store): boolean {
+  if (store === undefined) {
+    return threadStack.length > 0 || entryStack.length > 0;
+  }
+  return threadStack.some((t) => t?.task?.inst?.store === store) ||
+    entryStack.some((t) => t?.task?.inst?.store === store);
+}
+
 /**
  * Resolve using the declaring instance: a matching top synchronous bracket,
  * then the newest matching activation claim, then the unscoped fallback.
@@ -644,12 +656,42 @@ export class Store {
    */
   hostFailure: unknown = undefined;
 
+  /** Installed by exec/boundary.ts. Scheduler transitions only announce that
+   * work may now be runnable; one store coordinator owns asynchronous drain. */
+  serviceRequested: (() => void) | null = null;
+  #serviceProgressRevision = 0;
+  #serviceProgressObservers = new Set<() => void>();
+
+  requestService(): void {
+    this.serviceRequested?.();
+  }
+
+  /** Record completed scheduler state change separately from a request to run
+   * the coordinator. Admission waiters use this generation so a coalesced
+   * request cannot wake them before the corresponding tail has executed. */
+  noteServiceProgress(): void {
+    this.#serviceProgressRevision++;
+    const observers = [...this.#serviceProgressObservers];
+    this.#serviceProgressObservers.clear();
+    for (const resolve of observers) resolve();
+  }
+
+  serviceProgressRevision(): number {
+    return this.#serviceProgressRevision;
+  }
+
+  waitForServiceProgress(after: number): Promise<void> {
+    if (this.#serviceProgressRevision !== after) return Promise.resolve();
+    return new Promise((resolve) =>
+      this.#serviceProgressObservers.add(resolve)
+    );
+  }
+
   /**
    * Per-store scheduling gate, not an ambient source. Several resumptions
    * can be outstanding; `tick` waits until all entries are released, without
    * blocking independent stores. An entry ends when its activation runs or
-   * parks (`consumePendingIfRunning`), finishes (`noteAwaiting`), or the
-   * driver removes its own speculative entry.
+   * parks (`consumePendingIfRunning`) or finishes (`noteAwaiting`).
    */
   readonly pendingResumptions: Set<unknown> = new Set<unknown>();
 
@@ -671,7 +713,7 @@ export class Store {
   /** Drop exactly `t` (the driver's own speculative entry). */
   removePendingResumption(t: unknown): void {
     if (AMBIENT_TRACE) traceAmbient("pending-", t);
-    this.pendingResumptions.delete(t);
+    if (this.pendingResumptions.delete(t)) this.requestService();
   }
 
   /**
@@ -680,7 +722,14 @@ export class Store {
    */
   consumePendingIfRunning(): void {
     const a = activationOf();
-    if (a !== null && a !== undefined) this.pendingResumptions.delete(a);
+    if (
+      a !== null && a !== undefined && this.pendingResumptions.delete(a)
+    ) {
+      // This request is queued while the activation is still live. The
+      // coordinator's live-execution guard delays service until the canonical
+      // park/return boundary has actually unwound.
+      this.requestService();
+    }
   }
 
   /**
@@ -690,17 +739,23 @@ export class Store {
   // deno-lint-ignore no-explicit-any
   releasePendingOf(t: any): void {
     releaseActivationAmbient(t);
-    this.pendingResumptions.delete(t);
+    let released = this.pendingResumptions.delete(t);
     const implicit = (t as { task?: { implicitThread?: unknown } })?.task
       ?.implicitThread;
     if (implicit !== undefined && implicit !== null) {
-      this.pendingResumptions.delete(implicit);
+      released = this.pendingResumptions.delete(implicit) || released;
     }
+    if (released) this.requestService();
   }
 
   startWaiting(t: SchedulableThread): void {
     assert_(!this.waiting.includes(t), "thread already in the waiting list");
     this.waiting.push(t);
+    // A newly registered SuspensionPoint can turn its owner's `awaiting`
+    // entry from an implementation-only hop into a genuine canonical park.
+    // Notify even when `t` is not ready: the transition removes the hop
+    // barrier and can expose already-queued tails or unrelated ready work.
+    this.requestService();
   }
 
   stopWaiting(t: SchedulableThread): void {
@@ -752,58 +807,60 @@ export class Store {
       (value) => {
         this.settled.push({ t, value, failure: undefined });
         this.releasePendingOf(t);
+        this.requestService();
       },
       (e) => {
         this.settled.push({ t, value: undefined, failure: { error: e } });
         this.releasePendingOf(t);
+        this.requestService();
       },
     );
   }
 
   /**
-   * Dispatch tails in queue order without an entry-lock test. Every driver
-   * must service this queue before and between ticks; exceptions propagate
-   * to that driver. Stale entries are discarded, and `resumeWith` retires
-   * poisoned-instance tails without running their bodies.
+   * Dispatch at most one live tail in queue order. Stale entries are discarded
+   * until a live tail is found or the queue is empty. Autonomous service uses
+   * this step form so it can revalidate entry-hop permission after each guest
+   * activation.
    */
+  serviceSettledStep(): boolean {
+    while (this.settled.length > 0) {
+      const s = this.settled.shift()!;
+      // Another driver already resumed this thread.
+      if (!this.awaiting.has(s.t)) continue;
+      const t = s.t as {
+        resumeWith(v: unknown, f?: { error: unknown }): void;
+        task?: {
+          inst?: object;
+          failureOwner?: unknown;
+          fail?(cause: unknown): boolean;
+        };
+      };
+      const origin = (t.task?.failureOwner ?? t.task) as
+        | { onFailure?: unknown }
+        | undefined;
+      try {
+        t.resumeWith(s.value, s.failure);
+      } catch (e) {
+        // Autonomous tails belong to their originating task, not whichever
+        // sibling happened to service the store queue (#357).
+        throw originatedFailure(origin, e);
+      } finally {
+        // The awaiting identity may have been removed, re-parked, or retired.
+        // Notify state observers after that transition, not when service was
+        // merely requested.
+        this.noteServiceProgress();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /** Explicit callers that need all currently queued tails drain stepwise. */
   serviceSettled(): boolean {
     let did = false;
-    // Rescan from the head after every dispatch: a dispatched tail runs guest
-    // code synchronously, which can change lock/poison state and can re-enter
-    // `serviceSettled` (mutating the queue under us).
-    scan: for (;;) {
-      for (let i = 0; i < this.settled.length; i++) {
-        const s = this.settled[i];
-        // Another driver already resumed this thread.
-        if (!this.awaiting.has(s.t)) {
-          this.settled.splice(i, 1);
-          continue scan;
-        }
-        this.settled.splice(i, 1);
-        const t = s.t as {
-          resumeWith(v: unknown, f?: { error: unknown }): void;
-          task?: {
-            inst?: object;
-            failureOwner?: unknown;
-            fail?(cause: unknown): boolean;
-          };
-        };
-        const origin = (t.task?.failureOwner ?? t.task) as
-          | { onFailure?: unknown }
-          | undefined;
-        try {
-          t.resumeWith(s.value, s.failure);
-        } catch (e) {
-          // Autonomous tails belong to their originating task, not whichever
-          // sibling happened to service the store queue (#357).
-          throw originatedFailure(origin, e);
-        }
-        did = true;
-        continue scan;
-      }
-      // A full scan found nothing stale and nothing serviceable.
-      return did;
-    }
+    while (this.serviceSettledStep()) did = true;
+    return did;
   }
 
   /**
@@ -906,13 +963,13 @@ export function hasRealHostCall(store: Store): boolean {
   return false;
 }
 
-/** Every outstanding host call that is real work (not an activity arm). */
-export function realHostCalls(store: Store): Promise<unknown>[] {
-  const out: Promise<unknown>[] = [];
+/** Host retention suppresses deadlock but is not runnable work or a host
+ * dependency for the coordinator to poll. */
+export function hasHostRetention(store: Store): boolean {
   for (const p of store.pendingHostCalls) {
-    if (!hostActivityArms.has(p)) out.push(p);
+    if (hostActivityArms.has(p)) return true;
   }
-  return out;
+  return false;
 }
 
 /**

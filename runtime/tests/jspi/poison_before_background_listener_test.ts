@@ -2,6 +2,7 @@ import { instantiate } from "../../src/embedder/mod.ts";
 import { Translator } from "../../src/shim/mod.ts";
 import { isTrap, suspending } from "@polyengine/protocol";
 import { assert, assertEquals } from "./asserts.ts";
+import { drainWaiterCountForTesting } from "../../src/exec/mod.ts";
 
 const root = new URL("../../../", import.meta.url);
 
@@ -99,6 +100,14 @@ Deno.test({
       );
       assertEquals(callbackEntered, true, "E callback did not reach its trap");
       assertEquals(fEntered, false, "F entered the poisoned guest");
+      await Promise.resolve();
+      assertEquals(
+        drainWaiterCountForTesting(
+          component.handle.componentInstances[0].store,
+        ),
+        0,
+        "poisoned idle call retained its coordinator waiter",
+      );
     } finally {
       gate.resolve();
     }

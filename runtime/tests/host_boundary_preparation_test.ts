@@ -337,7 +337,7 @@ for (const timing of ["before-listener", "after-listener"] as const) {
     assertEq(
       inst.numWaitingToEnter,
       timing === "before-listener" ? 0 : 1,
-      "an origin failure consumed by the starting driver retires admission immediately",
+      "top-level ordinary service retires an already-poisoned admission",
     );
     if (timing === "after-listener") notifyInstancePoisoned(inst, poison);
     assertEq(await rejected(pending), poison);

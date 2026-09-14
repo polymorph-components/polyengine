@@ -1,12 +1,10 @@
-// The settlement pump (exec/boundary.ts): liveness between export calls.
+// Event-driven store service: liveness between export calls.
 //
-// A host-import promise that settles while NO driver is live only mutates
-// scheduler state — the registration site's continuation readies the guest
-// thread but nothing ticks the store. Before the settlement pump, that work
-// sat queued until the next export call or host stream/future operation; a
+// A host-import promise that settles while no call is driving only mutates
+// scheduler state — its reaction must request the shared store coordinator. A
 // guest whose wakeup is a host clock (the componentize-go keep-alive-ticker
 // shape: a task parked WAIT whose pending host call is a wasi:clocks
-// `wait-for`) was frozen between embedder calls. These tests pin the pump's
+// `wait-for`) must progress between embedder calls. These tests pin the
 // contract at store level, in the style of host_pump_test.ts:
 //
 //   * a `Store` and a fake guest thread (the `SchedulableThread` surface);
@@ -15,13 +13,13 @@
 //     settle continuation deletes itself and readies the guest, and does NOT
 //     tick the store;
 //   * "an export call just returned" modelled as one `driveStoreAsync` round
-//     with an immediately-true `done` — the pump is armed at driver exit.
+//     with an immediately-true `done`.
 //
 // Verified against the pre-pump runtime: T-1 and T-2 time out (the guest is
 // never resumed), T-3 and T-4 pass vacuously/identically.
 
 import { assertEq } from "./support/asserts.ts";
-import { driveStoreAsync } from "../src/exec/mod.ts";
+import { driveStoreAsync, registerHostCall } from "../src/exec/mod.ts";
 import { markHostActivityArm, Store } from "../src/task/mod.ts";
 
 /** The slice of `ComponentInstance` that `Store.tick` touches. */
@@ -66,7 +64,7 @@ function hostImport(
     store.pendingHostCalls.delete(p);
     onSettle();
   });
-  store.pendingHostCalls.add(p);
+  registerHostCall(store, p);
 }
 
 function withTimeout<T>(p: Promise<T>, label: string, ms = 4000): Promise<T> {
@@ -188,7 +186,7 @@ Deno.test({
         store.pendingHostCalls.delete(p);
         store.hostFailure = e;
       });
-    store.pendingHostCalls.add(p);
+    registerHostCall(store, p);
     await exportCallReturns(store);
 
     // Wait out the settlement plus pump unwind.

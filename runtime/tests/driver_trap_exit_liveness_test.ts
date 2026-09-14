@@ -18,7 +18,11 @@
 // exit; run_tests.py `lift_and_run` drains the whole store either way.
 
 import { assertEq } from "./support/asserts.ts";
-import { driveStoreAsync, registerHostCall } from "../src/exec/mod.ts";
+import {
+  driveStoreAsync,
+  registerHostCall,
+  requestStoreService,
+} from "../src/exec/mod.ts";
 import { createDtorEntry } from "../src/exec/boundary.ts";
 import { ComponentInstanceState, Store } from "../src/task/mod.ts";
 import { Trap } from "../src/cabi/mod.ts";
@@ -95,28 +99,32 @@ Deno.test({
     const impl = new ComponentInstanceState(1, store);
     const lifted = createDtorEntry({ dtor: () => undefined, instance: impl });
 
-    let thrown: unknown;
-    try {
-      lifted(0);
-    } catch (e) {
-      thrown = e;
+    assertEq(lifted(0), undefined);
+    for (let i = 0; i < 20 && store.hostFailure === undefined; i++) {
+      await Promise.resolve();
     }
+    const thrown: unknown = store.hostFailure;
     assert(thrown instanceof Trap, `expected the sibling trap, got ${thrown}`);
     assertEq(sibling.resumed, 1);
     assertEq(store.pendingHostCalls.size, 1);
 
-    // The sibling's host call answers. Its continuation readies the sibling
-    // and deletes its own entry — readying is all it does; somebody has to
-    // tick the store, and after a throwing exit that is the settlement pump.
+    // The sibling's host call answers. The raw background trap remains parked
+    // for the next call, so service cannot resume healthy work until that
+    // compatibility channel has been observed.
     settle();
-    for (let i = 0; i < 20 && sibling.resumed < 2; i++) {
-      await new Promise((r) => setTimeout(r, 0));
+    await Promise.resolve();
+    assertEq(sibling.resumed, 1);
+    try {
+      await driveStoreAsync(store, () => false, "observe raw trap");
+    } catch (e) {
+      assertEq(e, thrown);
     }
+    requestStoreService(store);
+    for (let i = 0; i < 20 && sibling.resumed < 2; i++) await Promise.resolve();
 
     assert(
       sibling.resumed >= 2,
-      "the healthy sibling was never resumed: `drive` threw without arming " +
-        "the settlement pump, so its in-flight host call had no keeper",
+      "healthy sibling did not resume after the parked raw failure was observed",
     );
     assertEq(store.pendingHostCalls.size, 0);
   },
@@ -200,6 +208,19 @@ Deno.test({
     store.startWaiting(sibling as any);
     // deno-lint-ignore no-explicit-any
     store.startWaiting(trapper as any);
+    // This synthetic promise park has no real SuspensionPoint owner. Mark its
+    // boundary as returned so the coordinator may service unrelated ready work;
+    // real JSPI parks acquire this evidence through blockCurrentActivation.
+    store.startWaiting(
+      {
+        owner: sibling,
+        boundaryReturned: true,
+        task: sibling.task,
+        ready: () => false,
+        waiting: () => true,
+        resume: () => {},
+      } as unknown as import("../src/task/mod.ts").SchedulableThread,
+    );
 
     const driving = driveStoreAsync(store, () => false, "export 'trapping'");
     let thrown: unknown;

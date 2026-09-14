@@ -20,4 +20,13 @@ const result = await runWastJson(
   (name) => Deno.readFile(join(generated, dir, name)),
   await RuntimeExecutor.create(shim, wasmtimeSpectest(file).imports),
 );
-console.log(JSON.stringify(result));
+const output = new TextEncoder().encode(`${JSON.stringify(result)}\n`);
+let written = 0;
+while (written < output.length) {
+  written += Deno.stdout.writeSync(output.subarray(written));
+}
+// This worker is a bounded test scope, not the runtime's process-lifetime
+// owner. Some valid upstream cases intentionally leave background guest work
+// runnable after their final assertion. Exit only after the complete validated
+// result has been written; pre-result failures still reject and exit nonzero.
+Deno.exit(0);
