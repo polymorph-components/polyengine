@@ -102,12 +102,13 @@ function reportProducerFailure(
     ? cause
     : new StreamProducerError(where, cause);
   const shared = host.value as unknown as {
-    boundStore?: { hostFailure?: unknown } | null;
+    boundStore?: { hostFailure?: unknown; requestService?: () => void } | null;
   };
   producerFailures.set(host.value as object, err);
   const store = shared.boundStore;
   if (store != null && typeof store === "object") {
     if (store.hostFailure === undefined) store.hostFailure = err;
+    store.requestService?.();
   }
   return err;
 }

@@ -112,6 +112,7 @@ export class Thread implements SchedulableThread {
   resumeLater(): void {
     assert_(this.suspended(), "resume_later on a non-suspended thread");
     this.#startWaiting(() => true);
+    this.#store.requestService();
   }
 
   /** Pending `awaitValue` promise, if this thread is parked on one. */
@@ -229,6 +230,7 @@ export class Thread implements SchedulableThread {
     } else {
       this.#state = "suspended";
       this.#startWaiting(req.readyFunc);
+      if (this.ready()) this.#store.requestService();
     }
     this.task.controlReturned?.(this);
   }

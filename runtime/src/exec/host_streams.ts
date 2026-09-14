@@ -16,17 +16,12 @@
 import { assert_ } from "../cabi/trap.ts";
 import { despecialize } from "../cabi/types.ts";
 import type { ComponentValue, ValType } from "../cabi/types.ts";
-import {
-  driveStoreAsync,
-  storeDriverDepth,
-  whenStoreDriverIdle,
-} from "./boundary.ts";
+import { requestStoreService } from "./boundary.ts";
 import {
   abandonSharedFuture,
   BUFFER_MAX_LENGTH,
   type ByteWindow,
   type ComponentInstanceState,
-  consumeSchedulerFailure,
   CopyResult,
   type DirectBuffer,
   type DirectOutcome,
@@ -36,8 +31,6 @@ import {
   SharedFutureImpl,
   SharedStreamImpl,
   type Store,
-  storeQuiescent as quiescent,
-  unwrapSchedulerFailure,
 } from "../task/mod.ts";
 
 /**
@@ -210,7 +203,6 @@ class HostActivity {
   #closed = false;
   /** No retained end; revivable via `rearm()`. */
   #disarmed = false;
-  #pumping = false;
 
   bind(store: Store): void {
     if (this.#store !== null || this.#closed) return;
@@ -236,79 +228,17 @@ class HostActivity {
     }
     r?.();
     this.#arm();
+    if (this.#store !== null) requestStoreService(this.#store);
   }
 
   /**
-   * Drain settled activations and ready threads synchronously, then drive
-   * asynchronous work if the store is not quiescent. This gives host
-   * operations progress between export calls, including guest dependencies
-   * on Promise-returning host imports.
-   *
-   * Record synchronous failures as well as throwing them: retirement may
-   * already have settled the host operation's Promise, whose executor would
-   * then discard the throw. The next driver can still report hostFailure.
+   * Request the store's coalesced drain. Host retention is liveness evidence,
+   * not runnable work and therefore never owns an independent pump.
    */
   pump(): void {
     const store = this.#store;
     if (store === null) return;
-    // Settled activation tails gate `tick` (Store.settled); a driver that
-    // never services them wedges the store — this loop runs BETWEEN export
-    // calls, when no driveAsync exists to do it. An attributed failure is one
-    // completed step; keep draining healthy ready siblings.
-    for (;;) {
-      try {
-        const serviced = store.serviceSettled();
-        const ticked = store.tick();
-        if (!serviced && !ticked) break;
-      } catch (e) {
-        if (consumeSchedulerFailure(store, e)) continue;
-        const cause = unwrapSchedulerFailure(e);
-        store.hostFailure ??= cause;
-        throw cause;
-      }
-    }
-    if (this.#pumping) return;
-    // Retention alone is not work to drive; leave the host Promise pending.
-    if (quiescent(store)) return;
-    this.#pumping = true;
-    void this.#pumpAsync(store);
-  }
-
-  async #pumpAsync(store: Store): Promise<void> {
-    try {
-      // Yield to an existing driver. This is cooperative: another may enter
-      // while we await, so done() checks depth again. Resume sites recheck
-      // awaiting membership and Promise identity before consuming a result
-      // (boundary.ts storeDriverDepth), preventing double resumption.
-      while (!quiescent(store)) {
-        if (storeDriverDepth(store) > 0) {
-          await whenStoreDriverIdle(store);
-          continue;
-        }
-        await driveStoreAsync(
-          store,
-          // Stop on quiescence, before an idle deadlock verdict, or when
-          // another driver enters. Our own depth is 1 inside this loop.
-          // The caller awaits its operation, not this fallback pump.
-          () =>
-            store.pendingHostCalls.size === 0 ||
-            quiescent(store) ||
-            storeDriverDepth(store) > 1,
-          "host stream/future activity",
-        );
-      }
-    } catch (e) {
-      if (consumeSchedulerFailure(store, e)) return;
-      // Nothing is awaiting this pump, so park the failure where the next
-      // driving loop will surface it (same channel as a host-import
-      // rejection).
-      store.hostFailure ??= unwrapSchedulerFailure(e);
-    } finally {
-      this.#pumping = false;
-    }
-    // Guest progress may have settled a task without settling anything in
-    // another driver's pendingHostCalls race. Wake it to recheck done().
-    this.notify();
+    requestStoreService(store);
   }
 
   /** No further host activity is possible on this stream. */
@@ -321,6 +251,7 @@ class HostActivity {
       this.#store.pendingHostCalls.delete(p);
     }
     r?.();
+    this.#store?.requestService();
   }
 
   /**
@@ -336,6 +267,7 @@ class HostActivity {
       this.#store.pendingHostCalls.delete(p);
     }
     r?.();
+    this.#store?.requestService();
   }
 
   /**

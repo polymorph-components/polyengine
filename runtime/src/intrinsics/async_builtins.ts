@@ -171,6 +171,7 @@ export function createBackpressureDec(inst: ComponentInstanceState): CoreFn {
     );
     inst.backpressure -= 1;
     trapIf(inst.backpressure < 0, "backpressure counter underflow");
+    inst.store.requestService();
   };
 }
 

@@ -161,7 +161,7 @@ Deno.test({
   },
 });
 
-Deno.test("sync entry keeps a synchronous result after a foreign routed fault", () => {
+Deno.test("sync entry returns before ordinary foreign work is serviced", async () => {
   const store = new Store();
   const healthyInst = new ComponentInstanceState(0, store);
   const failedInst = new ComponentInstanceState(1, store);
@@ -216,10 +216,13 @@ Deno.test("sync entry keeps a synchronous result after a foreign routed fault", 
   const result = fn();
   assertEq(result, 42);
   assertEq(result instanceof Promise, false);
+  assertEq(originFailed, false);
+  assertEq(healthyReadyRan, false);
+  await Promise.resolve();
   assertEq(originFailed, true);
   assertEq(
     healthyReadyRan,
     true,
-    "the export driver must continue to the healthy ready thread",
+    "ordinary service must continue to the healthy ready thread after entry",
   );
 });

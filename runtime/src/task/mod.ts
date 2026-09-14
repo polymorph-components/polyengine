@@ -255,6 +255,7 @@ export class Task {
         "exit_implicit_thread without holding the exclusive thread",
       );
       this.inst.exclusiveThread = null;
+      this.inst.store.requestService();
     }
   }
 

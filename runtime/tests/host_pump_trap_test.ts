@@ -1,4 +1,4 @@
-// A trap raised by `HostActivity.pump()`'s SYNCHRONOUS half is mishandled.
+// A trap raised by event-driven host activity must not wedge the host end.
 //
 // Every host stream/future op sets `parked.write`/`parked.read` and then calls
 // `activity.pump()` from INSIDE its `new Promise(executor)`. `pump()`'s
@@ -105,10 +105,12 @@ Deno.test({
     let firstOk = false;
     first.then(() => (firstOk = true), (e) => (firstErr = e));
     await settleTurns(3);
-    assert(
-      firstOk || firstErr !== undefined,
-      "the first write neither resolved nor rejected",
-    );
+    // The unrelated trap is parked on the store channel. This operation may
+    // remain pending until its peer acts; cancellation below must still work.
+    assertEq(firstOk, false);
+    assertEq(firstErr, undefined);
+    host.writable.cancelWrite();
+    await settleTurns(1);
 
     // The fault has been delivered (or recorded). The END, however, belongs
     // to the embedder and must still be usable: the trap was raised by an
@@ -151,7 +153,9 @@ Deno.test({
     let settled = false;
     first.then(() => (settled = true), () => (settled = true));
     await settleTurns(3);
-    assert(settled, "the first read neither resolved nor rejected");
+    assertEq(settled, false);
+    host.readable.cancelRead();
+    await settleTurns(1);
 
     let second: Promise<number[]> | undefined;
     let secondThrow: unknown = undefined;

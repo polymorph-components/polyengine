@@ -451,6 +451,7 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
       this.#fail = rej;
     });
     store.startWaiting(this);
+    if (this.ready()) store.requestService();
   }
 
   waiting(): boolean {
@@ -681,6 +682,12 @@ export function blockCurrentActivation<T>(input: {
     ) {
       input.task?.controlReturned?.(owner);
     }
+    // The owner is now represented by a genuine SuspensionPoint rather than
+    // an engine-only entry hop. Same-instance admission observes completed
+    // scheduler state changes, not coalesced requests, so publish this park
+    // transition before asking the coordinator to service newly exposed work.
+    input.store.noteServiceProgress();
+    input.store.requestService();
   });
   return point.promise;
 }

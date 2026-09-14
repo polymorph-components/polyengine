@@ -1,9 +1,8 @@
-// PROBE for issue #298: does `HostActivity.pump()`'s synchronous half run
-// `Store.tick()` while a guest activation is live on the JS stack, and can
-// that interleave with a concurrently parked `driveAsync`?
+// Event-driven host activity must defer ordinary scheduling until the current
+// guest activation returns; one shared store drain then services the work.
 //
 // The shape, store-level in the style of `host_pump_test.ts` /
-// `parked_driver_host_call_test.ts` (no checked-in example guest has the
+// `host_pump_test.ts` (no checked-in example guest has the
 // participants):
 //
 //   * instance A's SYNC export is on the JS stack — modelled by
@@ -15,17 +14,17 @@
 //   * a ready fake thread of instance B records, in its `resume()`, whether
 //     A's activation is live (both A's own body flag and `currentThread()`).
 //
-// P-1 answers the reentrancy question; P-2 the two-loops question.
+// P-1 covers reentrancy; P-2 covers the absence of resident async drivers.
 
 import { assertEq } from "./support/asserts.ts";
 import {
+  createLiftedFunction,
   createLoweredImport,
   driveStoreAsync,
   hostStreamFor,
   newStats,
   registerHostCall,
   type ResolvedOptions,
-  storeDriverDepth,
 } from "../src/exec/mod.ts";
 import {
   ComponentInstanceState,
@@ -117,14 +116,12 @@ class FakeThread {
   readonly witness: {
     aBodyLive: boolean;
     ambient: unknown;
-    driverDepth: number;
   }[] = [];
   readonly task = { inst: {} };
   constructor(
     private readonly probe: () => {
       aBodyLive: boolean;
       ambient: unknown;
-      driverDepth: number;
     },
   ) {}
   ready(): boolean {
@@ -144,12 +141,11 @@ class FakeThread {
 }
 
 // ---------------------------------------------------------------------------
-// P-1: reentrance
+// P-1: no reentrance
 // ---------------------------------------------------------------------------
 
 Deno.test({
-  name:
-    "P-1: the sync half of pump() ticks instance B while instance A's activation is live",
+  name: "P-1: host activity defers B until instance A's activation returns",
   fn: async () => {
     const store = new Store();
     const { shared, host } = hostEndOn<number>(store, U8);
@@ -159,7 +155,6 @@ Deno.test({
     const b = new FakeThread(() => ({
       aBodyLive,
       ambient: ambientOrNull(),
-      driverDepth: storeDriverDepth(store),
     }));
     store.startWaiting(b);
 
@@ -178,24 +173,12 @@ Deno.test({
       aBodyLive = false;
     }
 
-    // THE OBSERVATION. If B was resumed at all, it happened synchronously
-    // inside `a.call()` — nothing else ran.
-    assert(
-      b.resumed > 0,
-      "NOT REACHABLE: the sync half of pump() did not tick B at all",
-    );
+    assertEq(b.resumed, 0, "host activity must not reenter a live activation");
+    await Promise.resolve();
+    assert(b.resumed > 0, "the requested drain did not run B");
     ambientDuringResume = b.witness[0].ambient;
-    assert(
-      b.witness[0].aBodyLive,
-      "NOT REACHABLE: B was resumed outside A's activation",
-    );
-    assertEq(
-      ambientDuringResume === a.thread,
-      true,
-      // `currentThread()` naming A's thread is the machine-checkable form of
-      // "a guest activation is live on the JS stack".
-    );
-    assertEq(b.witness[0].driverDepth, 0);
+    assertEq(b.witness[0].aBodyLive, false);
+    assertEq(ambientDuringResume, null);
 
     // Housekeeping: settle the read so no live pump is left behind.
     shared.drop();
@@ -205,13 +188,62 @@ Deno.test({
   },
 });
 
+Deno.test("nested lifted entry does not tick an unrelated sibling inside the outer guest frame", async () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  let outerLive = false;
+  const sibling = new FakeThread(() => ({
+    aBodyLive: outerLive,
+    ambient: ambientOrNull(),
+  }));
+  store.startWaiting(sibling);
+
+  const opts: ResolvedOptions = {
+    stringEncoding: "utf8",
+    memory: null,
+    realloc: null,
+    postReturn: null,
+    callback: null,
+    async: false,
+    cancellable: false,
+    coreType: { params: [], results: [] },
+    instance: inst,
+  };
+  const nested = createLiftedFunction({
+    name: "nested-noop",
+    ft: FT,
+    opts,
+    core: () => {},
+    stats: newStats(),
+  });
+  const outer = new Task(FT, TASK_OPTS, inst, () => [], () => {});
+  const outerThread = new Thread(outer, (function* () {})());
+
+  outerLive = true;
+  pushCurrentThread(outerThread);
+  try {
+    assertEq(nested(), undefined);
+    assertEq(
+      sibling.resumed,
+      0,
+      "nested call performed an ordinary store tick",
+    );
+  } finally {
+    popCurrentThread(outerThread);
+    outerLive = false;
+  }
+
+  await Promise.resolve();
+  assertEq(sibling.resumed, 1, "deferred ordinary service did not run sibling");
+  assertEq(sibling.witness[0].aBodyLive, false);
+});
+
 // ---------------------------------------------------------------------------
-// P-2: the two-loops question — a parked driveAsync plus the sync half
+// P-2: pending host work does not keep the coordinator running
 // ---------------------------------------------------------------------------
 
 Deno.test({
-  name:
-    "P-2: with a driveAsync parked on the same store, the sync half still ticks B",
+  name: "P-2: a pending host call does not create a resident driver",
   fn: async () => {
     const store = new Store();
     const { shared, host } = hostEndOn<number>(store, U8);
@@ -220,7 +252,6 @@ Deno.test({
     const b = new FakeThread(() => ({
       aBodyLive,
       ambient: ambientOrNull(),
-      driverDepth: storeDriverDepth(store),
     }));
 
     // The incumbent loop: a `driveAsync` parked on a never-settling host call.
@@ -230,7 +261,7 @@ Deno.test({
     const driving = driveStoreAsync(store, () => finished, "test driver");
     for (let i = 0; i < 10; i++) await Promise.resolve();
     await new Promise((r) => setTimeout(r, 1));
-    assert(storeDriverDepth(store) > 0, "the driver should be live");
+    // A pending host call does not own a resident loop.
 
     // Only now make B ready, so the parked driver's snapshot predates it.
     store.startWaiting(b);
@@ -249,8 +280,9 @@ Deno.test({
       aBodyLive = false;
     }
 
+    assertEq(b.resumed, 0, "host activity must not synchronously run B");
+    await Promise.resolve();
     const syncResumes = b.resumed;
-    const depthSeen = b.witness.map((w) => w.driverDepth);
 
     // Let the parked driver have its turns too, and see whether B is resumed
     // a SECOND time (the resume-once question) or the store is poisoned.
@@ -270,11 +302,9 @@ Deno.test({
 
     assert(
       syncResumes > 0,
-      `NOT REACHABLE under a live driver: sync half did not tick B ` +
-        `(driver depth seen: ${JSON.stringify(depthSeen)})`,
+      `event-driven drain did not tick B ` +
+        `(no resident driver is available to rescue it)`,
     );
-    // Reported, not asserted-away: what the probe is here to measure.
-    assertEq(depthSeen[0] > 0, true);
     assertEq(store.hostFailure, undefined);
     assertEq(b.resumed, syncResumes);
   },
@@ -295,7 +325,6 @@ Deno.test({
     const b = new FakeThread(() => ({
       aBodyLive,
       ambient: ambientOrNull(),
-      driverDepth: storeDriverDepth(store),
     }));
     store.startWaiting(b);
 

@@ -265,21 +265,20 @@ failed through its task/instance ownership channel. Cleanup and terminal
 notification are both attempted, and the first poison cause is retained even
 when cleanup fails.
 
-**Overlapping drivers.** Concurrent exports may run overlapping
-`driveAsync` loops on one store. The invariant is that an activation
-consumes a settlement at most once and never resumes from an obsolete
-settlement. `runtime/src/exec/boundary.ts` enforces this with synchronous
-awaiting-membership removal, memoized Promise tags, Promise-identity
-checks, and per-store pending-resumption bookkeeping.
+**Event-driven store service.** Each store has one coalescing runnable-work
+coordinator. Host settlements and scheduler state transitions record their
+result first, then request service; the coordinator stops when no work is
+runnable and never remains parked racing outstanding host Promises. Host stream
+and future retention remains liveness evidence, not a second pump.
 
-The asynchronous host-activity and host-settlement pumps are fallback
-drivers: they stand down cooperatively when another driver is active.
-This is not a ban on synchronous pump participation: `HostActivity.pump()`
-services settled activations and ticks ready threads before its async
-fallback checks driver depth, including while an export driver is live.
-Arrival notifications wake parked drivers so they can yield or reconsider their
-waits. New host-call registrations also wake incumbent drivers rather
-than leaving them parked on an obsolete snapshot of pending work.
+Engine-only promising-entry hops and pending resumption claims are mandatory
+continuations of the current canonical transfer, not extra guest scheduling
+points. Autonomous service therefore waits while an unsettled entry hop exists.
+A hop's own queued settlement may still dispatch, and registration of a genuine
+`SuspensionPoint` park requests service because it removes that barrier. Direct
+call, cancellation, and synchronous entry paths remain distinct from ordinary
+store draining. A bounded work quantum yields to platform timers and I/O only
+between complete canonical steps.
 
 **Between-calls progress.** A host import settling can resume background
 guest work even with no export call in flight. A task waiting for the

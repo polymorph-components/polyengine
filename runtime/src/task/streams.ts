@@ -338,7 +338,7 @@ export class SharedStreamImpl implements SharedBase {
    * between export calls (see exec/host_streams.ts `HostActivity.pump`); a
    * purely guest-to-guest stream never reads it.
    */
-  boundStore: unknown = null;
+  boundStore: object | null = null;
 
   dropped = false;
   pendingInst: unknown = null;
@@ -589,7 +589,7 @@ export class SharedFutureImpl implements SharedBase {
    * between export calls (see exec/host_streams.ts `HostActivity.pump`); a
    * purely guest-to-guest stream never reads it.
    */
-  boundStore: unknown = null;
+  boundStore: object | null = null;
 
   dropped = false;
   /**

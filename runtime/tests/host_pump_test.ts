@@ -30,7 +30,7 @@
 // `TypeError: Cannot read properties of undefined (reading 'awaiting')`.
 
 import { assertEq } from "./support/asserts.ts";
-import { hostStreamFor } from "../src/exec/mod.ts";
+import { hostStreamFor, registerHostCall } from "../src/exec/mod.ts";
 import { SharedStreamImpl, Store } from "../src/task/mod.ts";
 import type { ComponentValue, ValType } from "../src/cabi/types.ts";
 
@@ -163,7 +163,7 @@ Deno.test({
           guest.wake();
         },
       );
-      store.pendingHostCalls.add(p);
+      registerHostCall(store, p);
     });
     store.startWaiting(guest);
 
@@ -293,6 +293,9 @@ Deno.test({
       () => (settled = "resolved"),
       (e) => (settled = `rejected: ${(e as Error).message}`),
     );
+    // The event-driven request runs on the next microtask rather than inside
+    // the host operation. Let that one bounded drain establish quiescence.
+    await Promise.resolve();
     const afterFirstPump = ticks;
 
     // Bounded probe: many macrotask turns must pass with no further ticking

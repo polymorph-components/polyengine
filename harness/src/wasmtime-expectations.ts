@@ -180,7 +180,7 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
           rows: [{
             lines: [65],
             cause:
-              'Error: expected trap "wasm trap: cannot block a synchronous task before returning", got "wasm trap: deadlock detected: event loop cannot make further progress (export \'run\': every suspended activation is waiting on a suspension only this scheduler could resume, and none is ready)"',
+              'Error: expected trap "wasm trap: cannot block a synchronous task before returning", got "wasm trap: deadlock detected: event loop cannot make further progress (export \'run\': no runnable work or host call is outstanding)"',
             status: "failed",
           }],
         },

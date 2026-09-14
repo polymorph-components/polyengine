@@ -10,7 +10,7 @@
 // completion. The transcripts record the values that crossed, never the order
 // in which independent tasks got scheduled.
 
-import { guest, haveFixture, instantiateFixture } from "./harness.ts";
+import { guest, haveFixture, instantiateFixture, local } from "./harness.ts";
 import { transcript } from "./support.ts";
 import { asyncIterable, classify, readable, thenable } from "./probe.ts";
 
@@ -60,29 +60,46 @@ Deno.test({
   },
 });
 
-const futureUserReady = await haveFixture(guest("future-user"));
+const futureUserReady = await haveFixture(local("future-gated"));
 
 Deno.test({
   name: "conventions/b: a Future HANDLE is a lowering source (same store)",
   ignore: !futureUserReady,
   fn: async () => {
     await transcript("b-future-handle-source", async (t) => {
-      const c = await instantiateFixture(guest("future-user"));
+      const c = await instantiateFixture(local("future-gated"));
       // An export whose WIT result is `future<T>` returns the handle
       // EAGERLY — call without awaiting to hold it.
-      const f = c.exports.makeFuture(41) as unknown;
+      const f = c.exports.make() as unknown;
       t.note("export-result", { classified: classify(f), value: f });
 
       // handle disposal: such a handle is DEFERRED — its host end materializes when the
       // producing call completes. Lowering it before then is refused, loudly.
-      await t.attempt("lower-while-in-flight", () => c.exports.doubleFuture(f));
+      await t.attempt("lower-while-in-flight", () => c.exports.double(f));
 
-      // Drive the instance to quiescence with an unrelated single task, so the
-      // producing call has completed. (Deterministic: the probe task's own
-      // completion is what is awaited, and the producer needs no further host
-      // action.)
-      await t.attempt("unrelated-call", () => c.exports.doubleFuture(1));
-      await t.attempt("lower-after-settled", () => c.exports.doubleFuture(f));
+      await t.attempt("unrelated-call", () => c.exports.release());
+      await t.attempt("lower-after-settled", async () => {
+        // release() makes the producer runnable; it does not mean the Future
+        // handle's host end has already been published. Retry only the exact
+        // deferred-handle refusal, which leaves the source unconsumed.
+        for (let attempt = 0; attempt < 20; attempt++) {
+          try {
+            return await c.exports.double(f);
+          } catch (e) {
+            if (
+              !(e instanceof TypeError) ||
+              e.message !==
+                "this Future is still in flight and cannot be passed to a guest yet"
+            ) {
+              throw e;
+            }
+          }
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+        throw new Error(
+          "Future handle remained in flight after 20 platform turns",
+        );
+      });
     });
   },
 });

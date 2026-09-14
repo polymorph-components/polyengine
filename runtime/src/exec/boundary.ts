@@ -29,7 +29,7 @@ import {
   type PreparedTransfer,
   prepareRawValues,
 } from "../cabi/values.ts";
-import { assert_, AssertionError } from "../cabi/trap.ts";
+import { assert_, AssertionError, Trap } from "../cabi/trap.ts";
 import {
   type BlockRequest,
   type Cancelled,
@@ -39,18 +39,17 @@ import {
   entryRefusal,
   EventCode,
   type EventTuple,
+  guestActivationLive,
+  hasHostRetention,
   hasRealHostCall,
   instancePoisonCause,
   isInstancePoisoned,
   NeedsJspi,
   needsJspi,
   notifyInstancePoisoned,
-  OriginatedSchedulerFailure,
   packSubtaskResult,
   PendingCapability,
-  realHostCalls,
   type Store,
-  storeQuiescent,
   Subtask,
   SubtaskState,
   SyncEntryBusy,
@@ -414,12 +413,13 @@ function drive(
   done: () => boolean,
   what: string,
   idle: IdlePolicy = "trap",
+  onBackgroundFailure?: (cause: unknown) => boolean,
 ): DriveExit | Promise<DriveExit> {
   try {
-    return driveLoop(store, done, what, idle);
+    return driveLoop(store, done, what, idle, onBackgroundFailure);
   } catch (e) {
     // Sibling host calls and activation tails survive this driver's failure.
-    ensureSettlementPump(store);
+    requestStoreService(store);
     throw e;
   }
 }
@@ -430,96 +430,408 @@ function driveLoop(
   done: () => boolean,
   what: string,
   idle: IdlePolicy,
+  onBackgroundFailure?: (cause: unknown) => boolean,
 ): DriveExit | Promise<DriveExit> {
-  for (;;) {
-    traceDrive("drive", store, done, "top");
-    // Promise-parked threads need microtasks; a synchronous YIELD loop would
-    // starve them. Hand those stores to the interleaved async drain.
-    while (store.awaiting.size === 0 && store.tick()) {
-      traceDrive("drive", store, done, "ticked");
-      if (store.hostFailure !== undefined) {
-        throw takeHostFailure(store);
-      }
-    }
-    if (store.hostFailure !== undefined) {
-      throw takeHostFailure(store);
-    }
+  traceDrive("drive", store, done, "top");
+  if (store.hostFailure !== undefined) throw takeHostFailure(store);
+  if (done()) {
+    traceDrive("drive", store, done, "EXIT-done");
+    requestStoreService(store);
+    return "done";
+  }
+  const drainState = stateFor(store);
+  // Use the same ordinary-service authority as the asynchronous coordinator.
+  // Nested entry cannot pass its live-activation gate; top-level synchronous
+  // entry may still drain ready work before deciding its deadlock verdict.
+  while (store.awaiting.size === 0 && serviceOrdinaryStep(store)) {
+    if (store.hostFailure !== undefined) throw takeHostFailure(store);
     if (done()) {
-      traceDrive("drive", store, done, "EXIT-done");
-      // No async finally will run: hand off any background work here.
-      ensureSettlementPump(store);
+      requestStoreService(store);
       return "done";
     }
-    // Awaiting activations and pending resumptions need an event-loop turn.
-    if (store.awaiting.size > 0 || store.hasPendingResumptions()) {
-      traceDrive("drive", store, done, "->async(awaiting/pending)");
-      return driveAsync(store, done, what, idle);
+    if (chargeWorkQuantum(drainState)) {
+      // CONTRACT: This is ordinary async scheduling, not definitions.py's
+      // direct driveSyncLift loop. Share the coordinator's quantum and cross a
+      // platform-task boundary before continuing so guest YIELD cannot starve
+      // timers (scheduler-cycle2.md:9-11).
+      void handoffWorkQuantum(store, drainState);
+      return driveAsync(
+        store,
+        done,
+        what,
+        idle,
+        onBackgroundFailure,
+        false,
+      );
     }
-    if (store.pendingHostCalls.size === 0) {
-      // An idle async task remains live for a later driver.
-      if (idle === "exit") {
-        traceDrive("drive", store, done, "EXIT-idle");
-        ensureSettlementPump(store);
-        return "idle";
+  }
+  traceDrive("drive", store, done, "->store-service");
+  return driveAsync(store, done, what, idle, onBackgroundFailure);
+}
+
+/**
+ * Register real host work. Its own reaction requests service after the host
+ * settlement's earlier reaction has committed readiness and removed the call.
+ * The coordinator never races or polls the Promise itself.
+ */
+export function registerHostCall(
+  store: Store,
+  promise: Promise<unknown>,
+): void {
+  store.pendingHostCalls.add(promise);
+  promise.then(
+    () => store.requestService(),
+    () => store.requestService(),
+  );
+}
+
+type DrainWaiter = {
+  promise: Promise<DriveExit>;
+  done: () => boolean;
+  idle: IdlePolicy;
+  what: string;
+  resolve: (exit: DriveExit) => void;
+  reject: (cause: unknown) => void;
+  onBackgroundFailure?: (cause: unknown) => boolean;
+  idleReported: boolean;
+  idleProbeArmed: boolean;
+};
+
+type DrainState = {
+  scheduled: boolean;
+  running: boolean;
+  requested: boolean;
+  yielding: boolean;
+  waiters: Set<DrainWaiter>;
+  budget: number;
+  hopProbe: { hops: Set<unknown>; elapsed: boolean } | null;
+};
+
+const drainStates = new WeakMap<Store, DrainState>();
+const DRAIN_TICK = Promise.resolve();
+const WORK_QUANTUM = 8;
+
+function stateFor(store: Store): DrainState {
+  let state = drainStates.get(store);
+  if (state === undefined) {
+    state = {
+      scheduled: false,
+      running: false,
+      requested: false,
+      yielding: false,
+      waiters: new Set(),
+      budget: WORK_QUANTUM,
+      hopProbe: null,
+    };
+    drainStates.set(store, state);
+    store.serviceRequested = () => requestStoreService(store);
+  }
+  return state;
+}
+
+/** Request the store's single event-driven drain. Requests coalesce, but every
+ * settlement/event remains recorded in its owning state object. */
+export function requestStoreService(store: Store): void {
+  const state = stateFor(store);
+  state.requested = true;
+  if (state.running || state.scheduled || state.yielding) return;
+  state.scheduled = true;
+  DRAIN_TICK.then(() => runStoreDrain(store, state));
+}
+
+/** @internal Test-only visibility into call/service lifecycle ownership. */
+export function drainWaiterCountForTesting(store: Store): number {
+  return drainStates.get(store)?.waiters.size ?? 0;
+}
+
+function ordinaryServiceAllowed(store: Store): boolean {
+  return !guestActivationLive(store) && !store.hasPendingResumptions() &&
+    unsettledEntryHops(store).length === 0;
+}
+
+function hasRunnable(store: Store): boolean {
+  return ordinaryServiceAllowed(store) &&
+    (store.hasServiceableSettled() || store.readyCandidates().length > 0);
+}
+
+/** The sole authority for ordinary store-wide progress. Direct canonical
+ * switches and driveSyncLift remain separate. */
+function serviceOrdinaryStep(store: Store): boolean {
+  if (!ordinaryServiceAllowed(store)) return false;
+  if (store.hasServiceableSettled()) return store.serviceSettledStep();
+  if (hasEntryHop(store)) return false;
+  return store.tick();
+}
+
+/** Admission helpers may finish one queued tail, but may neither tick a ready
+ * sibling nor cross a live/pending/unsettled activation boundary. */
+function serviceAdmissionTailStep(store: Store): boolean {
+  if (!ordinaryServiceAllowed(store)) return false;
+  return store.serviceSettledStep();
+}
+
+function chargeWorkQuantum(state: DrainState): boolean {
+  return --state.budget <= 0;
+}
+
+function handoffWorkQuantum(
+  store: Store,
+  state: DrainState,
+): Promise<void> {
+  state.yielding = true;
+  return new Promise<void>((resolve) => {
+    setTimeout(() => {
+      state.budget = WORK_QUANTUM;
+      state.yielding = false;
+      resolve();
+      requestStoreService(store);
+    }, 0);
+  });
+}
+
+/** Awaiting engine entries that have not reached a genuine SuspensionPoint.
+ * Their Wasm continuation is a mandatory part of the current canonical
+ * transfer and must run before ordinary Store.tick scheduling. */
+function hasEntryHop(store: Store): boolean {
+  return entryHopThreads(store).length > 0;
+}
+
+/** An engine-only hop whose activation has not yet produced its own settled
+ * tail. Autonomous service must not dispatch another tail across this window:
+ * the engine continuation may still register a genuine SuspensionPoint park.
+ * A queued settlement is excluded so its own tail can close the hop rather
+ * than deadlocking behind itself. */
+function unsettledEntryHops(store: Store): unknown[] {
+  if (store.awaiting.size === 0) return [];
+  const queued = new Set(store.settled.map((s) => s.t));
+  return entryHopThreads(store).filter((t) => !queued.has(t));
+}
+
+function sameIdentities(a: Set<unknown>, b: readonly unknown[]): boolean {
+  return a.size === b.length && b.every((value) => a.has(value));
+}
+
+function removeDrainWaiter(store: Store, promise: Promise<unknown>): void {
+  const state = drainStates.get(store);
+  if (state === undefined) return;
+  for (const waiter of state.waiters) {
+    if (waiter.promise === promise) {
+      state.waiters.delete(waiter);
+      // The caller-owned terminal channel has already settled. Resolve this
+      // now-obsolete service observation so its `.then` closure is not left on
+      // an unreachable pending Promise; publishIfEligible is terminal-guarded.
+      waiter.resolve("done");
+      return;
+    }
+  }
+}
+
+function rejectOneWaiter(state: DrainState, cause: unknown): boolean {
+  for (const waiter of state.waiters) {
+    if (
+      waiter.onBackgroundFailure !== undefined &&
+      !waiter.onBackgroundFailure(cause)
+    ) {
+      continue;
+    }
+    state.waiters.delete(waiter);
+    if (waiter.onBackgroundFailure === undefined) waiter.reject(cause);
+    return true;
+  }
+  return false;
+}
+
+function settleWaiters(store: Store, state: DrainState): void {
+  for (const waiter of [...state.waiters]) {
+    if (waiter.done()) {
+      state.waiters.delete(waiter);
+      waiter.resolve("done");
+      continue;
+    }
+    if (
+      hasRunnable(store) || store.hasPendingResumptions() ||
+      hasEntryHop(store) || hasRealHostCall(store) || hasHostRetention(store)
+    ) {
+      continue;
+    }
+    if (waiter.idle === "exit") {
+      // Resolving the driver's idle verdict must not discard the call's
+      // failure route. An async call remains active after going idle, and a
+      // later producer failure still belongs to that unresolved call.
+      if (!waiter.idleReported) {
+        waiter.idleReported = true;
+        waiter.resolve("idle");
       }
-      traceDrive("drive", store, done, "DEADLOCK-TRAP");
+      continue;
+    }
+    if (!waiter.idleProbeArmed) {
+      waiter.idleProbeArmed = true;
+      setTimeout(() => requestStoreService(store), 0);
+      continue;
+    }
+    state.waiters.delete(waiter);
+    try {
       trapIf(
         true,
         `wasm trap: deadlock detected: event loop cannot make further ` +
-          `progress (${what}: no thread is ready and no host call is ` +
-          `outstanding)`,
+          `progress (${waiter.what}: no runnable work or host call is outstanding)`,
+      );
+    } catch (e) {
+      waiter.reject(e);
+    }
+  }
+}
+
+/** Apply idle policy after an unsettled implementation hop has had its one
+ * event-loop opportunity to become a real park or queue its own settlement. */
+function settleUnprogressableHop(state: DrainState): void {
+  for (const waiter of [...state.waiters]) {
+    if (waiter.done()) {
+      state.waiters.delete(waiter);
+      waiter.resolve("done");
+    } else if (waiter.idle === "exit") {
+      if (!waiter.idleReported) {
+        waiter.idleReported = true;
+        waiter.resolve("idle");
+      }
+    } else {
+      state.waiters.delete(waiter);
+      waiter.reject(
+        new Trap(
+          `wasm trap: deadlock detected: event loop cannot make further ` +
+            `progress (${waiter.what}: no runnable work or host call is outstanding)`,
+        ),
       );
     }
-    traceDrive("drive", store, done, "->async(hostcalls)");
-    return driveAsync(store, done, what, idle);
   }
 }
 
-/** A settled parked-thread promise, tagged with the thread that owns it. */
-type AwaitWinner = {
-  t: {
-    awaiting: Promise<unknown> | null;
-    resumeWith(v: unknown, f?: { error: unknown }): void;
-  };
-  /** Park identity: membership alone cannot distinguish a later re-park. */
-  p: Promise<unknown>;
-  value: unknown;
-  failure: { error: unknown } | undefined;
-};
-
-/**
- * Tagged promises, memoized by the *promise* (not the thread) so re-racing on
- * every turn does not attach a fresh continuation to the same promise, and so
- * a thread that parks again later can never pick up a stale tag.
- */
-const taggedAwaits = new WeakMap<Promise<unknown>, Promise<AwaitWinner>>();
-
-function tagAwait(t: AwaitWinner["t"]): Promise<AwaitWinner> {
-  const p = t.awaiting!;
-  let tag = taggedAwaits.get(p);
-  if (tag === undefined) {
-    tag = p.then(
-      (value): AwaitWinner => ({ t, p, value, failure: undefined }),
-      (e): AwaitWinner => ({ t, p, value: undefined, failure: { error: e } }),
-    );
-    taggedAwaits.set(p, tag);
+async function runStoreDrain(store: Store, state: DrainState): Promise<void> {
+  if (state.running) return;
+  state.scheduled = false;
+  // A synchronous prefix may have exhausted the shared budget after this
+  // drain's microtask was queued. Its platform-task handoff owns rescheduling.
+  if (state.yielding) return;
+  state.running = true;
+  try {
+    for (;;) {
+      state.requested = false;
+      // A request made from consumePendingIfRunning is queued before the guest
+      // frame unwinds. Never turn that notification into reentrant scheduling.
+      if (guestActivationLive(store)) {
+        state.requested = true;
+        return;
+      }
+      if (store.hostFailure !== undefined) {
+        const cause = store.hostFailure;
+        if (rejectOneWaiter(state, cause)) {
+          store.hostFailure = undefined;
+          continue;
+        } else return;
+      }
+      try {
+        const unsettledHops = unsettledEntryHops(store);
+        if (unsettledHops.length > 0) {
+          // Host retention and real host calls both make this a valid wait.
+          // Neither is runnable work, so stop until their own notifications.
+          if (hasRealHostCall(store) || hasHostRetention(store)) {
+            state.hopProbe = null;
+            return;
+          }
+          if (
+            state.hopProbe === null ||
+            !sameIdentities(state.hopProbe.hops, unsettledHops)
+          ) {
+            const probe = {
+              hops: new Set(unsettledHops),
+              elapsed: false,
+            };
+            state.hopProbe = probe;
+            setTimeout(() => {
+              if (state.hopProbe === probe) {
+                probe.elapsed = true;
+                requestStoreService(store);
+              }
+            }, 0);
+            return;
+          }
+          if (!state.hopProbe.elapsed) {
+            return;
+          }
+          state.hopProbe = null;
+          settleUnprogressableHop(state);
+          return;
+        }
+        state.hopProbe = null;
+        while (!store.hasPendingResumptions()) {
+          if (!serviceOrdinaryStep(store)) break;
+          if (chargeWorkQuantum(state)) {
+            await handoffWorkQuantum(store, state);
+          }
+          if (
+            store.awaiting.size > 0 && !store.hasServiceableSettled()
+          ) {
+            // JSPI continuations and promise settlements queued by this tick
+            // precede the next ordinary scheduling choice.
+            await Promise.resolve();
+          }
+        }
+      } catch (e) {
+        if (consumeSchedulerFailure(store, e)) continue;
+        const cause = e instanceof HostFailureReport ? e.cause : e;
+        if (!rejectOneWaiter(state, cause)) store.hostFailure ??= cause;
+        continue;
+      }
+      settleWaiters(store, state);
+      if (hasRunnable(store)) continue;
+      // A real claim is released only when its activation executes, parks, or
+      // settles. Those exact transitions request service; do not microtask-poll.
+      if (store.hasPendingResumptions()) return;
+      // Requests raised while this drain was executing belong to the next
+      // microtask. Do not fold them into the current synchronous drain: the
+      // notifying canonical mutation must return first.
+      return;
+    }
+  } finally {
+    state.running = false;
+    if (state.requested) requestStoreService(store);
   }
-  return tag;
 }
 
-/**
- * Shared async driver for host activity and settlement pumps. Service tails,
- * tick, then race awaiting activations and host calls. A pump that must stay
- * pending rather than trap on idle must make `done()` true whenever
- * `pendingHostCalls` is empty; idle traps require the opposite exit decision.
- */
+function driveAsync(
+  store: Store,
+  done: () => boolean,
+  what: string,
+  idle: IdlePolicy = "trap",
+  onBackgroundFailure?: (cause: unknown) => boolean,
+  requestService = true,
+): Promise<DriveExit> {
+  let resolve!: (exit: DriveExit) => void;
+  let reject!: (cause: unknown) => void;
+  const promise = new Promise<DriveExit>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  stateFor(store).waiters.add({
+    promise,
+    done,
+    idle,
+    what,
+    resolve,
+    reject,
+    onBackgroundFailure,
+    idleReported: false,
+    idleProbeArmed: false,
+  });
+  if (requestService) requestStoreService(store);
+  return promise;
+}
+
 export async function driveStoreAsync(
   store: Store,
   done: () => boolean,
   what: string,
 ): Promise<void> {
-  // The exit verdict is for `drive`'s lift caller (see `DriveExit`); the
-  // pumps drive to quiescence and have nothing to decide on it.
   for (;;) {
     try {
       await driveAsync(store, done, what);
@@ -528,479 +840,6 @@ export async function driveStoreAsync(
       if (consumeSchedulerFailure(store, e)) continue;
       if (e instanceof HostFailureReport) throw e.cause;
       throw e;
-    }
-  }
-}
-
-/**
- * Live async drivers per store. Concurrent exports may overlap; fallback
- * pumps stand down cooperatively when another driver arrives. There is no
- * single-driver invariant.
- *
- * Each settlement must be delivered once to its original park. `resumeWith`
- * deletes awaiting membership synchronously; race winners check both that
- * membership and promise identity, then remove queued copies before resuming.
- * Per-promise tags share settlement reactions across racers. Per-store
- * pending-resumption gates give engine continuations a turn before more ticks.
- */
-const driverDepth = new WeakMap<Store, number>();
-const driverIdle = new WeakMap<Store, { p: Promise<void>; r: () => void }>();
-
-export function storeDriverDepth(store: Store): number {
-  return driverDepth.get(store) ?? 0;
-}
-
-/** Resolves once no `driveAsync` loop is live on `store`. */
-export function whenStoreDriverIdle(store: Store): Promise<void> {
-  if (storeDriverDepth(store) === 0) return Promise.resolve();
-  let w = driverIdle.get(store);
-  if (w === undefined) {
-    let r!: () => void;
-    const p = new Promise<void>((res) => (r = res));
-    w = { p, r };
-    driverIdle.set(store, w);
-  }
-  return w.p;
-}
-
-// ---------------------------------------------------------------------------
-// Driver arrival
-// ---------------------------------------------------------------------------
-//
-// Wake incumbents so they release speculative gates and re-evaluate `done`
-// without waiting for a possibly unbounded host call to settle.
-const driverArrivals = new WeakMap<
-  Store,
-  { p: Promise<null>; r: () => void }
->();
-
-/** A one-shot that resolves (to `null`, the race's "nothing settled" value)
- * when another driver starts on `store`. */
-function armDriverArrival(store: Store): Promise<null> {
-  let n = driverArrivals.get(store);
-  if (n === undefined) {
-    let r!: () => void;
-    const p = new Promise<null>((res) => (r = () => res(null)));
-    n = { p, r };
-    driverArrivals.set(store, n);
-  }
-  return n.p;
-}
-
-function fireDriverArrival(store: Store): void {
-  const n = driverArrivals.get(store);
-  if (n === undefined) return;
-  // Deleted before resolving so the next `armDriverArrival` mints a fresh,
-  // unresolved one-shot: a driver that wakes on this and re-parks must not
-  // pick the settled promise back up and spin.
-  driverArrivals.delete(store);
-  n.r();
-}
-
-// ---------------------------------------------------------------------------
-// Host-call arrival
-// ---------------------------------------------------------------------------
-//
-// Promise races watch snapshots. Synchronous export entry or host-activity
-// draining can register a call without starting a new async driver. Announce
-// every registration so parked drivers refresh their snapshots independently
-// of the driver-arrival stand-down signal.
-const hostCallArrivals = new WeakMap<
-  Store,
-  { p: Promise<null>; r: () => void }
->();
-
-/** A one-shot that resolves (to `null`, the race's "nothing settled" value)
- * when a new host call is registered on `store`. */
-function armHostCallArrival(store: Store): Promise<null> {
-  let n = hostCallArrivals.get(store);
-  if (n === undefined) {
-    let r!: () => void;
-    const p = new Promise<null>((res) => (r = () => res(null)));
-    n = { p, r };
-    hostCallArrivals.set(store, n);
-  }
-  return n.p;
-}
-
-function fireHostCallArrival(store: Store): void {
-  const n = hostCallArrivals.get(store);
-  if (n === undefined) return;
-  // Deleted before resolving, exactly as `fireDriverArrival`: a racer that
-  // wakes on this and re-parks must mint a fresh, unresolved one-shot rather
-  // than pick the settled promise back up and spin.
-  hostCallArrivals.delete(store);
-  n.r();
-}
-
-/**
- * Register real host work and wake parked racers. Use this rather than adding
- * directly to `pendingHostCalls`. HostActivity arms are different: they mean
- * the embedder may act, not that an external result is outstanding.
- */
-export function registerHostCall(
-  store: Store,
-  promise: Promise<unknown>,
-): void {
-  store.pendingHostCalls.add(promise);
-  fireHostCallArrival(store);
-}
-
-// ---------------------------------------------------------------------------
-// The settlement pump: liveness between export calls
-// ---------------------------------------------------------------------------
-//
-// Every driver exit, including exceptions, hands off real host calls, queued
-// tails and hop-parked activations. The keeper drives their wakeups without
-// requiring another export call. It stands down for live drivers, stops at
-// quiescence rather than task completion, and parks failures on hostFailure.
-// Activity arms are excluded. Re-arming a live keeper nudges it to refresh its
-// snapshot, including calls registered by a drive it performed itself.
-
-const settlementPumps = new WeakSet<Store>();
-const settlementNudges = new WeakMap<
-  Store,
-  { p: Promise<void>; r: () => void }
->();
-
-function armSettlementNudge(store: Store): Promise<void> {
-  let n = settlementNudges.get(store);
-  if (n === undefined) {
-    let r!: () => void;
-    const p = new Promise<void>((res) => (r = res));
-    n = { p, r };
-    settlementNudges.set(store, n);
-  }
-  return n.p;
-}
-
-function fireSettlementNudge(store: Store): void {
-  const n = settlementNudges.get(store);
-  if (n !== undefined) {
-    settlementNudges.delete(store);
-    n.r();
-  }
-}
-
-/**
- * Work needing an owner after driver exit, including exception exits.
- */
-function pumpWork(store: Store): boolean {
-  return hasRealHostCall(store) || store.settled.length > 0 ||
-    entryHopThreads(store).length > 0;
-}
-
-/**
- * Ensure a settlement pump owns outstanding host calls, tails and entry hops.
- * Idempotent and cheap; called at every driver exit. Never throws.
- */
-export function ensureSettlementPump(store: Store): void {
-  if (settlementPumps.has(store)) {
-    // Already parked (or driving): wake it so it re-snapshots the race —
-    // this call may be reporting host calls registered after it parked.
-    fireSettlementNudge(store);
-    return;
-  }
-  if (store.hostFailure !== undefined) return;
-  if (!pumpWork(store)) return;
-  settlementPumps.add(store);
-  void settlementPumpLoop(store);
-}
-
-async function settlementPumpLoop(store: Store): Promise<void> {
-  let failed = false;
-  try {
-    for (;;) {
-      // Stand down while any driver is live: it races `pendingHostCalls`
-      // itself and services settlements on the guest's behalf.
-      while (storeDriverDepth(store) > 0) {
-        await whenStoreDriverIdle(store);
-      }
-      // A parked failure belongs to the next embedder call (the only place
-      // it can surface); driving into it here would just consume and re-park
-      // it in a loop.
-      if (store.hostFailure !== undefined) return;
-      const real = realHostCalls(store);
-      // Queued tails need no await; orphaned entry hops are raced with host work.
-      const hops = store.settled.length > 0
-        ? []
-        : entryHopThreads(store).map((t) => t.awaiting).filter((
-          p,
-        ): p is Promise<unknown> => p !== null);
-      if (store.settled.length === 0) {
-        if (real.length === 0 && hops.length === 0) return;
-        const nudge = armSettlementNudge(store);
-        // Driver exits nudge this snapshot; active drivers own new work meanwhile.
-        // Registration continuations, not this race, report host rejections.
-        await Promise.race([
-          ...real.map((p) => p.then(() => {}, () => {})),
-          ...hops.map((p) => p.then(() => {}, () => {})),
-          nudge,
-        ]);
-        if (storeDriverDepth(store) > 0) continue;
-      }
-      // Drain after every wake: storeQuiescent does not count ready waiters
-      // left by a host settlement that already removed its call registration.
-      await driveStoreAsync(
-        store,
-        // Stop before idle traps, at quiescence, or when another driver arrives.
-        () =>
-          store.pendingHostCalls.size === 0 ||
-          storeQuiescent(store) ||
-          storeDriverDepth(store) > 1,
-        "settlement pump",
-      );
-    }
-  } catch (e) {
-    failed = true;
-    store.hostFailure ??= e;
-  } finally {
-    settlementPumps.delete(store);
-    // Close the exit race: an `ensureSettlementPump` that saw us live and
-    // fired the nudge after our last snapshot check must not be lost.
-    if (
-      !failed && store.hostFailure === undefined &&
-      storeDriverDepth(store) === 0 && pumpWork(store)
-    ) {
-      ensureSettlementPump(store);
-    }
-  }
-}
-
-async function driveAsync(
-  store: Store,
-  done: () => boolean,
-  what: string,
-  idle: IdlePolicy = "trap",
-): Promise<DriveExit> {
-  const depth = storeDriverDepth(store) + 1;
-  driverDepth.set(store, depth);
-  // Wake incumbents to release speculative gates and let fallback pumps stand down.
-  if (depth > 1) fireDriverArrival(store);
-  try {
-    let claimHops = 0;
-    for (;;) {
-      traceDrive("driveAsync", store, done, "top");
-      // Complete settled activation bookkeeping before any scheduling decision.
-      store.serviceSettled();
-      if (store.hostFailure !== undefined) {
-        throw takeHostFailure(store);
-      }
-      // Yield for this store's engine resumptions. Only their execution/park
-      // or settlement may release them; never clear other owners' entries.
-      if (store.hasPendingResumptions()) {
-        traceDrive("driveAsync", store, done, "yield-pending");
-        // Bound leaked claims, interleaving timer turns to avoid starving
-        // the event loop while diagnosing an internal scheduling failure.
-        claimHops++;
-        assert_(
-          claimHops < 10_000,
-          "driveAsync: a resumed-activation claim was never released " +
-            "(the activation neither parked, finished, nor trapped)",
-        );
-        if (claimHops % 100 === 0) {
-          await new Promise((r) => setTimeout(r, 0));
-        } else {
-          await Promise.resolve();
-        }
-        continue;
-      }
-      claimHops = 0;
-      while (store.tick()) {
-        if (store.hostFailure !== undefined) {
-          throw takeHostFailure(store);
-        }
-        // A READY/YIELD loop must not starve promise settlements. Give engine
-        // continuations a microtask per tick and service any landed tails first.
-        if (store.awaiting.size > 0) {
-          await Promise.resolve();
-          if (store.hasServiceableSettled()) break;
-        }
-      }
-      if (store.hostFailure !== undefined) {
-        throw takeHostFailure(store);
-      }
-      if (done()) {
-        traceDrive("driveAsync", store, done, "EXIT-done");
-        return "done";
-      }
-      // Queued tails and pending resumptions take priority over parking.
-      if (store.hasServiceableSettled() || store.hasPendingResumptions()) {
-        continue;
-      }
-      // Race all activations and host calls. Awaiting one chosen activation
-      // alone could stop the scheduler that its nested suspension needs.
-      if (store.awaiting.size > 0) {
-        // With no external work or pending resumption, allow a timer turn for
-        // engine hops to settle before declaring idle. Internal activation
-        // promises alone do not establish that further progress is possible.
-        if (
-          store.pendingHostCalls.size === 0 && !store.hasPendingResumptions()
-        ) {
-          traceDrive("driveAsync", store, done, "deadlock-probe");
-          // Queued tails belong to serviceSettled; racing their settled tags
-          // repeatedly would create an unbounded microtask loop.
-          const queued = new Set(store.settled.map((s) => s.t));
-          const parked = ([...store.awaiting] as AwaitWinner["t"][]).filter(
-            (t) => !queued.has(t),
-          );
-          const progressed = await Promise.race([
-            ...parked.map((t) => tagAwait(t).then(() => true)),
-            new Promise<boolean>((r) => setTimeout(() => r(false), 0)),
-          ]);
-          traceDrive(
-            "driveAsync",
-            store,
-            done,
-            `deadlock-probe:progressed=${progressed}`,
-          );
-          if (!progressed) {
-            // Revalidate the snapshot after awaiting. Apply the same queued-tail
-            // filter to both snapshots, using the current queue for the new one.
-            const freshQueued = new Set(store.settled.map((s) => s.t));
-            const fresh = ([...store.awaiting] as AwaitWinner["t"][]).filter(
-              (t) => !freshQueued.has(t),
-            );
-            const changed = fresh.length !== parked.length ||
-              fresh.some((t, i) => t !== parked[i]);
-            if (changed) continue;
-            // Even unchanged awaiting membership can acquire external work,
-            // pending resumptions or queued tails during the probe.
-            if (
-              store.pendingHostCalls.size > 0 ||
-              store.hasPendingResumptions() ||
-              store.hasServiceableSettled()
-            ) {
-              continue;
-            }
-            if (store.readyCandidates().length === 0) {
-              if (idle === "exit") {
-                traceDrive("driveAsync", store, done, "EXIT-idle");
-                return "idle";
-              }
-              trapIf(
-                true,
-                `wasm trap: deadlock detected: event loop cannot make ` +
-                  `further progress (${what}: every suspended activation is ` +
-                  `waiting on a suspension only this scheduler could resume, ` +
-                  `and none is ready)`,
-              );
-            }
-            // A thread became ready: tick it rather than awaiting its dependents.
-            continue;
-          }
-          // Consume the settlement, either through the queue or the race below.
-        }
-        // The probe awaited: another driver may have consumed the park, or
-        // noteAwaiting may have queued its tail. Recheck before selecting one.
-        if (store.awaiting.size === 0 || store.hasServiceableSettled()) {
-          continue;
-        }
-        // Race only parks not already owned by the settled queue.
-        const queued = new Set(store.settled.map((s) => s.t));
-        const parked = ([...store.awaiting] as AwaitWinner["t"][]).filter(
-          (t) => !queued.has(t),
-        );
-        if (parked.length === 0) {
-          // Defensive fallback: the checks above imply a non-empty awaiting
-          // set and empty settled queue, so filtering cannot remove all parks.
-          if (store.pendingHostCalls.size > 0) {
-            await Promise.race([
-              ...store.pendingHostCalls,
-              armDriverArrival(store),
-              armHostCallArrival(store),
-            ]).catch(() => {});
-            continue;
-          }
-          traceDrive("driveAsync", store, done, "DEADLOCK-TRAP-deferred");
-          trapIf(
-            true,
-            `wasm trap: deadlock detected: event loop cannot make further ` +
-              `progress (${what}: every settled activation tail is deferred ` +
-              `on a non-enterable instance and no host call is outstanding)`,
-          );
-        }
-        const chosen = parked[0];
-        const chosenTag = tagAwait(chosen);
-        const others: Promise<AwaitWinner | null>[] = parked.slice(1).map(
-          tagAwait,
-        );
-        for (const h of store.pendingHostCalls) {
-          others.push(h.then(() => null, () => null));
-        }
-        // A sole driver may gate ticks speculatively while the engine runs
-        // chosen's activation. Driver arrival breaks the race and releases the
-        // gate, preventing an unbounded host wait from blocking a second loop.
-        // Remove only an identity this loop inserted, never clear the set.
-        // Genuine SuspensionPoint resumptions establish their own entries.
-        const sole = storeDriverDepth(store) === 1;
-        const added = sole && !store.pendingResumptions.has(chosen);
-        if (added) store.addPendingResumption(chosen);
-        let winner: AwaitWinner | null;
-        try {
-          // Arrivals trigger stand-down or snapshot refresh without host settlement.
-          winner = await Promise.race([
-            chosenTag,
-            ...others,
-            armDriverArrival(store),
-            armHostCallArrival(store),
-          ]);
-        } finally {
-          if (added) store.removePendingResumption(chosen);
-        }
-        // Deliver the actual winner only if its park is still current.
-        // Delete queued copies before resumeWith can synchronously re-park;
-        // otherwise serviceSettled could deliver this result to the new park.
-        if (
-          winner !== null && store.awaiting.has(winner.t) &&
-          winner.t.awaiting === winner.p
-        ) {
-          for (let i = store.settled.length - 1; i >= 0; i--) {
-            if (store.settled[i].t === winner.t) store.settled.splice(i, 1);
-          }
-          const task = (winner.t as {
-            task?: { failureOwner?: unknown };
-          }).task;
-          const origin = task?.failureOwner ?? task;
-          try {
-            winner.t.resumeWith(winner.value, winner.failure);
-          } catch (e) {
-            throw new OriginatedSchedulerFailure(origin, e);
-          }
-        }
-        continue;
-      }
-      if (store.pendingHostCalls.size === 0) {
-        if (idle === "exit") {
-          traceDrive("driveAsync", store, done, "EXIT-idle");
-          return "idle";
-        }
-        traceDrive("driveAsync", store, done, "DEADLOCK-TRAP");
-        trapIf(
-          true,
-          `wasm trap: deadlock detected: event loop cannot make further ` +
-            `progress (${what}: no thread is ready and no host call is ` +
-            `outstanding)`,
-        );
-      }
-      traceDrive("driveAsync", store, done, "await-race");
-      // Host settlement order is external. Arrivals must also wake this park
-      // so fallback drivers can stand down and all drivers refresh snapshots.
-      await Promise.race([
-        ...store.pendingHostCalls,
-        armDriverArrival(store),
-        armHostCallArrival(store),
-      ]).catch(() => {});
-    }
-  } finally {
-    const left = storeDriverDepth(store) - 1;
-    driverDepth.set(store, left);
-    if (left === 0) {
-      const w = driverIdle.get(store);
-      driverIdle.delete(store);
-      w?.r();
-      // The last async driver hands off any remaining pump work.
-      ensureSettlementPump(store);
     }
   }
 }
@@ -1170,11 +1009,19 @@ export function createLiftedFunction(input: {
     let terminalCause: unknown;
     let invocationReturned = false;
     let futurePublicationQueued = false;
+    let serviceWaiter: Promise<unknown> | null = null;
     let waiter: {
       promise: Promise<unknown>;
       resolve: (value: unknown) => void;
       reject: (cause: unknown) => void;
     } | null = null;
+
+    const detachServiceWaiter = (): void => {
+      if (serviceWaiter !== null) {
+        removeDrainWaiter(store, serviceWaiter);
+        serviceWaiter = null;
+      }
+    };
 
     const terminalPromise = (): Promise<unknown> => {
       if (waiter === null) {
@@ -1226,12 +1073,14 @@ export function createLiftedFunction(input: {
           `${name}: task resolved as cancelled, but the host never requested cancellation`,
         );
         terminal = true;
+        detachServiceWaiter();
         task.detachCall();
         waiter?.reject(terminalCause);
         return;
       }
       terminalValue = resultsToHost(resolved);
       terminal = true;
+      detachServiceWaiter();
       task.detachCall();
       // This runs only at a control-return boundary, outside canonical state
       // mutation, so Promise thenable inspection is safe here.
@@ -1334,6 +1183,7 @@ export function createLiftedFunction(input: {
     const failCall = (e: unknown): boolean => {
       if (terminal) return false;
       terminal = true;
+      detachServiceWaiter();
       task.detachCall();
       terminalFailed = true;
       terminalCause = e;
@@ -1402,6 +1252,7 @@ export function createLiftedFunction(input: {
           driveDone,
           `export '${name}'`,
           idlePolicy,
+          (cause) => failCall(cause),
         );
         break;
       } catch (e) {
@@ -1447,6 +1298,8 @@ export function createLiftedFunction(input: {
         throw e;
       }
     }
+    serviceWaiter = outcome;
+    if (terminal) detachServiceWaiter();
     // The driver may remain parked on unrelated host work after this call's
     // result becomes eligible. Observe it for this call's own deadlock/fault,
     // but return the call-owned completion channel instead (#350/#357).
@@ -1480,7 +1333,9 @@ export function createLiftedFunction(input: {
     // never bypass an unsettled hop, which would expose result memory.
     if (input.refuseOnEntryHops && store.hasServiceableSettled()) {
       try {
-        store.serviceSettled();
+        while (serviceAdmissionTailStep(store)) {
+          // Recheck permission after every guest tail.
+        }
       } catch (e) {
         if (!consumeSchedulerFailure(store, e)) {
           prepared?.cleanup(e);
@@ -1560,22 +1415,14 @@ function entryHopThreads(
  * gated callers recheck independently, with no FIFO admission guarantee.
  */
 async function awaitHopQuiescence(store: Store, inst: unknown): Promise<void> {
+  requestStoreService(store);
+  await DRAIN_TICK;
   for (;;) {
     const hops = entryHopThreads(store, inst);
     if (hops.length === 0) return;
-    await Promise.race(
-      hops.map((t) =>
-        (t.awaiting ?? Promise.resolve()).then(
-          () => undefined,
-          () => undefined,
-        )
-      ),
-    );
-    try {
-      store.serviceSettled();
-    } catch (e) {
-      if (!consumeSchedulerFailure(store, e)) throw e;
-    }
+    const revision = store.serviceProgressRevision();
+    await store.waitForServiceProgress(revision);
+    await DRAIN_TICK;
   }
 }
 
@@ -2094,6 +1941,7 @@ export function createLoweredImport(input: {
             store.pendingHostCalls.delete(registered);
           }
           outcome = done;
+          store.requestService();
         });
         registered = promise;
         // Mark this park externally wakeable for drivers and teardown.
@@ -2155,6 +2003,8 @@ export function createLoweredImport(input: {
           ) {
             store.hostFailure = e;
           }
+        } finally {
+          store.requestService();
         }
       });
       registered = promise;

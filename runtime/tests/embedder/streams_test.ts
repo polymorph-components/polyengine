@@ -21,6 +21,7 @@ import {
   lowerStream,
 } from "../../src/cabi/async_values.ts";
 import {
+  isInstancePoisoned,
   ReadableStreamEnd,
   SharedFutureImpl,
   SharedStreamImpl,
@@ -522,6 +523,14 @@ const disposalFixture = "runtime/tests/embedder/future-disposal.wasm";
 const disposalReady = await haveFixture(disposalFixture);
 const turn = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+async function waitFor(
+  predicate: () => boolean,
+  message: string,
+): Promise<void> {
+  for (let i = 0; i < 100 && !predicate(); i++) await turn();
+  assertEq(predicate(), true, message);
+}
+
 for (const jspi of [undefined, false, true]) {
   for (const deferred of [false, true]) {
     Deno.test({
@@ -531,10 +540,15 @@ for (const jspi of [undefined, false, true]) {
         for (const method of ["drop", Symbol.dispose] as const) {
           const c = await instantiateFixture(disposalFixture, {}, { jspi });
           const f = c.exports.run() as Future<number>;
+          // The fixture calls task.return before parking its writer. Dropping
+          // the reader wakes that writer and its callback deliberately traps.
           if (!deferred) await turn();
           assertEq(f[method](), undefined);
           assertEq(f[method](), undefined);
-          await turn(); // Deno rejects any unhandled derived disposal promise.
+          await waitFor(
+            () => isInstancePoisoned(c.handle.componentInstances[0]),
+            "reader drop must drive the guest callback to its deliberate trap",
+          );
           const error = await caught(() => Promise.resolve(f));
           assertEq(error instanceof PeerTrappedError, true, String(error));
           assertEq(await caught(() => Promise.resolve(f)), error);
