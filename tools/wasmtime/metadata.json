@@ -1,0 +1,591 @@
+{
+  "source_revision": "4675ee16b703b33948073a5ff6b961367371e7a1",
+  "files": [
+    {
+      "path": "adapter.json",
+      "directives": {
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "alias-region-known-imported-adapter-memory.json",
+      "directives": {
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "alias-region-known-imported-canonical-abi-memory.json",
+      "directives": {}
+    },
+    {
+      "path": "alias-region-known-imported-entities.json",
+      "directives": {
+        "gc": true
+      }
+    },
+    {
+      "path": "alias-region-multiple-instantiations.json",
+      "directives": {
+        "gc": true
+      }
+    },
+    {
+      "path": "alias-region-reexported-ambiguous-entities.json",
+      "directives": {
+        "gc": true
+      }
+    },
+    {
+      "path": "alias-region-reexported-entities-to-imported-module.json",
+      "directives": {
+        "gc": true
+      }
+    },
+    {
+      "path": "alias-region-reexported-known-entities.json",
+      "directives": {
+        "gc": true
+      }
+    },
+    {
+      "path": "aliasing.json",
+      "directives": {}
+    },
+    {
+      "path": "async/async-builtins.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true
+      }
+    },
+    {
+      "path": "async/backpressure-deadlock.json",
+      "directives": {
+        "component_model_async": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/backpressure-overflow.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/callback-yield-then-exit.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/cancel-host.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/cancel-sibling-subtask.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/cancel-starting-subtask-does-not-leak.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/cancel-sync-and-waitable.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/context-in-compositions.json",
+      "directives": {
+        "component_model_async": true,
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "async/context-in-resource-drop.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/drop-deadlock.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/drop-host.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/drop-waitable-set-stackful.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_async_stackful": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/error-context.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_error_context": true
+      }
+    },
+    {
+      "path": "async/exceptions.json",
+      "directives": {
+        "component_model_async": true,
+        "exceptions": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/fused.json",
+      "directives": {
+        "component_model_async": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/future-cancel-read-dropped.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/future-cancel-write-completed.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/future-cancel-write-dropped.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/future-drop-writable-after-notified-drop.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/future-read.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/futures-must-write.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/futures-must-write2.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/futures.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true
+      }
+    },
+    {
+      "path": "async/intra-futures.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true
+      }
+    },
+    {
+      "path": "async/intra-streams.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "async/join-during-sync-read.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "component_model_threading": true
+      }
+    },
+    {
+      "path": "async/lift.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_async_stackful": true
+      }
+    },
+    {
+      "path": "async/lower.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/many-params-with-retptr.json",
+      "directives": {
+        "bulk_memory": true,
+        "component_model_async": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/partial-stream-copies.json",
+      "directives": {
+        "component_model_async": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/reenter-during-yield.json",
+      "directives": {
+        "component_model_async": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/reentrance.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/stackful.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_async_stackful": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/stream-big-read-and-writes.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/stream-cancel-finished-op.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/stream-zero-ops.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/streams-massive-send.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/streams.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/subtask-wait.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/sync-and-async-waitable.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/sync-call-context-slots.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "component_model_threading": true
+      }
+    },
+    {
+      "path": "async/sync-call-context-trap.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true
+      }
+    },
+    {
+      "path": "async/sync-call-context.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true
+      }
+    },
+    {
+      "path": "async/sync-streams.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/task-builtins.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/task-deletion.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_async_stackful": true,
+        "component_model_more_async_builtins": true,
+        "component_model_threading": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/task-return-traps.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_async_stackful": true,
+        "component_model_threading": true
+      }
+    },
+    {
+      "path": "async/trap-if-done.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_more_async_builtins": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/trap-if-transfer-in-waitable-set.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/wait-forever.json",
+      "directives": {
+        "component_model_async": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/wait-forever2.json",
+      "directives": {
+        "component_model_async": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "async/waitable-set-stale-entry.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "async/yield-when-cancelled.json",
+      "directives": {
+        "component_model_async": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "big-strings.json",
+      "directives": {
+        "hogs_memory": true,
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "enum_discriminant.json",
+      "directives": {}
+    },
+    {
+      "path": "enums.json",
+      "directives": {}
+    },
+    {
+      "path": "error-context-trap-in-post-return.json",
+      "directives": {
+        "component_model_error_context": true
+      }
+    },
+    {
+      "path": "exceptions.json",
+      "directives": {
+        "bulk_memory": true,
+        "exceptions": true,
+        "function_references": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "fixed_length_lists.json",
+      "directives": {
+        "component_model_fixed_length_lists": true,
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "gc/empty.json",
+      "directives": {
+        "component_model_gc": true,
+        "gc": true,
+        "gc_types": true,
+        "multi_memory": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "implements-disabled.json",
+      "directives": {
+        "component_model_implements": false
+      }
+    },
+    {
+      "path": "implements.json",
+      "directives": {
+        "component_model_implements": true
+      }
+    },
+    {
+      "path": "import.json",
+      "directives": {}
+    },
+    {
+      "path": "instance.json",
+      "directives": {}
+    },
+    {
+      "path": "linking.json",
+      "directives": {}
+    },
+    {
+      "path": "map-types.json",
+      "directives": {
+        "component_model_map": true
+      }
+    },
+    {
+      "path": "memory64.json",
+      "directives": {
+        "bulk_memory": true,
+        "component_model_memory64": true,
+        "hogs_memory": true,
+        "memory64": true,
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "modules.json",
+      "directives": {
+        "exceptions": true,
+        "reference_types": true
+      }
+    },
+    {
+      "path": "nested-many-instantiations.json",
+      "directives": {}
+    },
+    {
+      "path": "nested.json",
+      "directives": {}
+    },
+    {
+      "path": "resources.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "restrictions.json",
+      "directives": {}
+    },
+    {
+      "path": "simple.json",
+      "directives": {}
+    },
+    {
+      "path": "string-transcode-invalid.json",
+      "directives": {
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "strings.json",
+      "directives": {
+        "multi_memory": true
+      }
+    },
+    {
+      "path": "tags.json",
+      "directives": {
+        "exceptions": true
+      }
+    },
+    {
+      "path": "trap.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "types.json",
+      "directives": {}
+    }
+  ]
+}

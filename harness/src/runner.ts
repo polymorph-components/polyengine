@@ -1,13 +1,7 @@
 // JSON command runner: executes one testgen-generated command file against a
 // CommandExecutor, classifying every command as passed / failed / skipped.
 
-import type {
-  Action,
-  ArtifactRef,
-  Command,
-  Kind,
-  WastJson,
-} from "./schema.ts";
+import type { Action, ArtifactRef, Command, Kind, WastJson } from "./schema.ts";
 import {
   type Artifact,
   type CommandExecutor,
@@ -35,7 +29,8 @@ export function artifactKind(bytes: Uint8Array): Kind {
   const isModule = bytes.length >= 8 &&
     bytes[0] === 0x00 && bytes[1] === 0x61 && bytes[2] === 0x73 &&
     bytes[3] === 0x6d &&
-    bytes[4] === 0x01 && bytes[5] === 0x00 && bytes[6] === 0x00 && bytes[7] === 0x00;
+    bytes[4] === 0x01 && bytes[5] === 0x00 && bytes[6] === 0x00 &&
+    bytes[7] === 0x00;
   return isModule ? "module" : "component";
 }
 
@@ -189,7 +184,9 @@ class FileRunner {
           command.expected,
           outcome.values.length === 0
             ? undefined
-            : (outcome.values.length === 1 ? outcome.values[0] : outcome.values),
+            : (outcome.values.length === 1
+              ? outcome.values[0]
+              : outcome.values),
         );
         if (mismatch !== undefined) throw new Error(mismatch);
         return undefined;
@@ -230,7 +227,14 @@ class FileRunner {
         try {
           await this.executor.instantiate(artifact, "trap");
         } catch (e) {
-          if (e instanceof TrapError) return undefined;
+          if (e instanceof TrapError) {
+            if (!trapMatches(command.text, e.message)) {
+              throw new Error(
+                `expected instantiation trap "${command.text}", got "${e.message}"`,
+              );
+            }
+            return undefined;
+          }
           throw e;
         }
         throw new Error(
@@ -302,7 +306,9 @@ class UnsupportedDirective extends Error {}
  * (V8/SpiderMonkey/JSC differ, e.g. for `unreachable`) is normalized here
  * against the suite's expected (typically wasmtime-worded) text instead.
  */
-const TRAP_MESSAGE_EQUIVALENTS: Array<[expectedPrefix: string, actualSubstrings: string[]]> = [
+const TRAP_MESSAGE_EQUIVALENTS: Array<
+  [expectedPrefix: string, actualSubstrings: string[]]
+> = [
   // resources/handle-table.wast: runtime/src/cabi/handles.ts Table.get/free.
   ["unknown handle index", ["table index out of range", "table entry empty"]],
   // resources/handle-table.wast: runtime/src/cabi/handles.ts lift/lowerOwn
@@ -319,7 +325,11 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<[expectedPrefix: string, actualSubstrings:
   // against the lowercase expected text).
   [
     "wasm trap: wasm `unreachable` instruction executed",
-    ["unreachable", "unreachable executed", "Unreachable code should not be executed"],
+    [
+      "unreachable",
+      "unreachable executed",
+      "Unreachable code should not be executed",
+    ],
   ],
   // async/big-interleaving-test.wast:836 asserts the SHORT form, plain
   // "unreachable". V8's and SpiderMonkey's spellings contain it as a
@@ -340,7 +350,9 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<[expectedPrefix: string, actualSubstrings:
 export function trapMatches(expected: string, actual: string): boolean {
   if (actual.includes(expected)) return true;
   for (const [prefix, actuals] of TRAP_MESSAGE_EQUIVALENTS) {
-    if (expected.startsWith(prefix) && actuals.some((a) => actual.includes(a))) {
+    if (
+      expected.startsWith(prefix) && actuals.some((a) => actual.includes(a))
+    ) {
       return true;
     }
   }

@@ -545,8 +545,13 @@ for deployment guidance.
 | `runtime/tests/conventions/` | Committed transcripts of the public host ABI, gated with protocol versioning |
 
 Wasmtime's component-model tests are supplementary reference material
-([references.md](references.md)), not an additional corpus executed by the
-current generation or gate paths.
+([references.md](references.md)): a pinned Deno lane (`just test-wasmtime`,
+`just test-wasmtime-guests`; see [harness/README.md](../harness/README.md#supplementary-wasmtime-coverage))
+converts and classifies Wasmtime's own WAST and drives two of its upstream
+async guest binaries through the public embedder API, separately from — and
+never merged into — the official corpus's generation, xfails, or engine-shell
+and browser lanes above. It remains supplementary corroboration, not a claim
+of full conformance against Wasmtime.
 
 `crates/testgen` uses `wast` and `json-from-wast` to convert WAST into JSON
 commands and wasm binaries. The TS harness distinguishes core modules

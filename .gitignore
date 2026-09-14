@@ -2,6 +2,7 @@
 # @polyengine/translator packaged asset (copied by `just shim`)
 translator/translator_shim.wasm
 harness/generated/
+harness/generated-wasmtime/
 examples/guests/build/
 node_modules/
 dist/
