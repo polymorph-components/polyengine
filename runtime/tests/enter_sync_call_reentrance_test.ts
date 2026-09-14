@@ -26,8 +26,25 @@ import {
   type TrampolineContext,
 } from "../src/intrinsics/mod.ts";
 import { newStats } from "../src/exec/boundary.ts";
-import { ComponentInstanceState, Store } from "../src/task/mod.ts";
-import { notifyInstancePoisoned } from "../src/task/scheduler.ts";
+import {
+  ComponentInstanceState,
+  Store,
+  SynchronousActivation,
+  Task,
+  Thread,
+} from "../src/task/mod.ts";
+import {
+  ambientResidue,
+  currentTask,
+  currentThread,
+  maybeCurrentThread,
+  notifyInstancePoisoned,
+  withActivation,
+} from "../src/task/scheduler.ts";
+import {
+  blockCurrentActivation,
+  type SuspensionPoint,
+} from "../src/jspi/bridge.ts";
 
 function fixture() {
   const store = new Store();
@@ -64,23 +81,29 @@ const A = 0;
 const C = 1;
 
 Deno.test("enter-sync-call: an idle sibling callee is enterable", () => {
-  const { enter, exit, syncCallStack } = fixture();
+  const { enter, exit, inst } = fixture();
   enter(A, 0, C);
-  assertEq(syncCallStack.length, 1, "bracket opened");
+  assertEq(currentTask().inst === inst(C), true, "callee task is current");
+  assertEq(currentThread().storage, [0, 0], "callee slots start fresh");
   exit();
-  assertEq(syncCallStack.length, 0, "bracket closed");
+  assertEq(maybeCurrentThread(), undefined, "bracket closed");
 });
 
 Deno.test("enter-sync-call: a sibling cycle A -> C -> A no longer traps (CM#705)", () => {
   // Host entered A; A is mid-call into C; C calls back into A. That is
   // simply a valid call (CM#705).
-  const { enter, exit, syncCallStack } = fixture();
+  const { enter, exit, inst } = fixture();
   enter(A, 0, C);
+  const c = currentThread();
+  c.storage[0] = 41;
   enter(C, 0, A);
-  assertEq(syncCallStack.length, 2, "both brackets opened, nothing refused");
+  assertEq(currentTask().inst === inst(A), true);
+  assertEq(currentThread().storage, [0, 0]);
   exit();
+  assertEq(currentThread() === c, true, "parent activation restored");
+  assertEq(c.storage[0], 41);
   exit();
-  assertEq(syncCallStack.length, 0);
+  assertEq(maybeCurrentThread(), undefined);
 });
 
 Deno.test("enter-sync-call: a POISONED callee is refused, naming the trap", () => {
@@ -105,18 +128,133 @@ Deno.test("enter-sync-call: a POISONED callee is refused, naming the trap", () =
 Deno.test("enter-sync-call: a poisoned instance calling ITSELF passes vacuously", () => {
   // `entryRefusal`'s `caller !== callee` guard passes a self-call
   // vacuously, even against a marked instance.
-  const { enter, inst } = fixture();
+  const { enter, exit, inst } = fixture();
   notifyInstancePoisoned(inst(A), new Error("earlier boom"));
   enter(A, 0, A);
+  exit();
 });
 
 Deno.test("enter-sync-call: an acyclic sibling chain A -> B -> C never traps", () => {
-  const { enter, exit, syncCallStack } = fixture();
+  const { enter, exit, inst } = fixture();
   const B = 2;
   enter(A, 0, B);
   enter(B, 0, C);
-  assertEq(syncCallStack.length, 2);
+  assertEq(currentTask().inst === inst(C), true);
   exit();
+  assertEq(currentTask().inst === inst(B), true);
   exit();
-  assertEq(syncCallStack.length, 0);
+  assertEq(maybeCurrentThread(), undefined);
+});
+
+Deno.test("enter-sync-call: trap unwind retires nested task identity", () => {
+  const { enter, inst } = fixture();
+  const parent = { storage: [7, 8], task: { inst: inst(A) } };
+  const boom = new Error("nested trap");
+  let caught: unknown;
+  try {
+    withActivation(parent, () => {
+      enter(A, 0, C);
+      assertEq(currentTask().inst === inst(C), true);
+      throw boom;
+    });
+  } catch (e) {
+    caught = e;
+  }
+  assertEq(caught === boom, true);
+  assertEq([...inst(C).threads].length, 0, "callee task retired on unwind");
+  assertEq(maybeCurrentThread(), undefined, "ambient parent also unwound");
+});
+
+Deno.test("nested sync suspension keeps physical owner and logical task separate", async () => {
+  const store = new Store();
+  const outerInst = new ComponentInstanceState(0, store);
+  const innerInst = new ComponentInstanceState(1, store);
+  const outerTask = new Task(
+    { params: [], results: [], async: true },
+    { async_: true, callback: false, stringEncoding: "utf8", memory: null },
+    outerInst,
+    () => [],
+    () => {},
+  );
+  let logical!: SynchronousActivation;
+  const physical = new Thread(
+    outerTask,
+    (function* () {
+      logical = new SynchronousActivation(innerInst, true, currentThread());
+      const promise = blockCurrentActivation({
+        store,
+        task: logical.task,
+        readyFunc: () => true,
+        cancellable: false,
+        produce: () => undefined,
+      });
+      yield { readyFunc: null, cancellable: false, awaitValue: promise };
+      logical.finish();
+    })(),
+  );
+  physical.resume();
+  const point = store.waiting[0] as SuspensionPoint;
+  assertEq(point.owner === physical, true, "scheduler owner is physical");
+  assertEq(
+    point.logicalOwner === logical.thread,
+    true,
+    "context owner is logical",
+  );
+  assertEq(point.task === logical.task, true, "built-in task remains logical");
+  point.resume();
+  await Promise.resolve();
+  store.serviceSettled();
+  assertEq([...innerInst.threads].length, 0);
+  assertEq(physical.logicalDescendants.size, 0);
+  assertEq(ambientResidue(), { stack: 0, claim: false });
+});
+
+Deno.test("nested sync post-hop trap retires persistent logical descendants", async () => {
+  const store = new Store();
+  const outerInst = new ComponentInstanceState(0, store);
+  const innerInst = new ComponentInstanceState(1, store);
+  const outerTask = new Task(
+    { params: [], results: [], async: true },
+    { async_: true, callback: false, stringEncoding: "utf8", memory: null },
+    outerInst,
+    () => [],
+    () => {},
+  );
+  const boom = new Error("after-hop trap");
+  const physical = new Thread(
+    outerTask,
+    (function* () {
+      const logical = new SynchronousActivation(
+        innerInst,
+        true,
+        currentThread(),
+      );
+      const promise = blockCurrentActivation({
+        store,
+        task: logical.task,
+        readyFunc: () => true,
+        cancellable: false,
+        produce: () => undefined,
+      });
+      yield { readyFunc: null, cancellable: false, awaitValue: promise };
+      throw boom;
+    })(),
+  );
+  physical.resume();
+  (store.waiting[0] as SuspensionPoint).resume();
+  await Promise.resolve();
+  let caught: unknown;
+  try {
+    store.serviceSettled();
+  } catch (e) {
+    caught = e;
+  }
+  assertEq(
+    (caught as { cause?: unknown })?.cause === boom || caught === boom,
+    true,
+  );
+  assertEq([...innerInst.threads].length, 0);
+  assertEq(physical.logicalDescendants.size, 0);
+  assertEq(store.pendingResumptions.size, 0);
+  assertEq(ambientResidue(), { stack: 0, claim: false });
 });

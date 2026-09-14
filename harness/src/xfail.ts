@@ -661,32 +661,6 @@ export const XFAIL: XfailEntry[] = [
     line: 369,
     reason: "same cascade as line 355, see that entry",
   },
-  // --- async/sync-streams.json: test/async/sync-streams.wast expects three
-  // values polyengine does not produce (STARTING vs STARTED at the
-  // sync-lowered `set` call, and a COMPLETED<->DROPPED completion-code swap
-  // on the paired stream.read/write) under CM#705's blocking semantics, so
-  // the file's single all-in-one assert_return hits a guest `unreachable`.
-  // Classed `cm705-sync-sched`
-  // (https://github.com/polymorph-components/polyengine/issues/249).
-  //
-  // For the rest of the file polyengine implements wasmtime's model (#43):
-  // the async-lowered call's initial status is decided only after the callee
-  // instance's runnable work has been drained to quiescence — by which time
-  // the producer has exited and the next task reports STARTED. Adjudicated
-  // 2026-08-10 (issue #43): the test's hard STARTED assertion is
-  // schedule-dependent — an upstream test defect overfitting wasmtime's
-  // deferred-entry policy (pristine definitions.py answers STARTING) — and
-  // polyengine's drain policy satisfies it as written under any seed. ---
-  {
-    file: "async/sync-streams.json",
-    line: 208,
-    reason:
-      "expected return, got trap: guest trapped: unreachable — this file's " +
-      "expected STARTING/STARTED and COMPLETED/DROPPED codes track CM#705's " +
-      "blocking semantics, which polyengine's sync scheduling does not yet " +
-      "produce, so the guest's own assertion traps; cm705-sync-sched, " +
-      "https://github.com/polymorph-components/polyengine/issues/249",
-  },
   // --- async/trap-if-block-and-sync.json: (history: at the prior pin the
   // whole file was blocked by the now-exited wasmparser/wast pin-drift
   // class — see the EXIT note at the top of this file, $Tester's canonical

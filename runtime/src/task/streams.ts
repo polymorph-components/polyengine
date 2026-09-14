@@ -72,7 +72,10 @@ export class GuestBuffer {
     public ptr: number,
     readonly length: number,
   ) {
-    trapIf(length > BUFFER_MAX_LENGTH, "buffer length exceeds MAX_LENGTH");
+    trapIf(
+      length > BUFFER_MAX_LENGTH,
+      "stream read/write count too large",
+    );
     if (t !== null && length > 0) {
       const mem = cx.opts.memory;
       assert_(mem !== null, "buffer requires a memory");
@@ -108,6 +111,17 @@ export class GuestBuffer {
     }
     this.progress += n;
     return vs;
+  }
+
+  /**
+   * Advance a zero-width guest buffer without materializing `n` placeholder
+   * values. This is the allocation-free form of the pinned reference's
+   * `n * [()]`, used only when both rendezvous buffers are guest buffers.
+   */
+  advanceZeroWidth(n: number): void {
+    assert_(this.t === null, "count advance on a payload-bearing buffer");
+    assert_(n <= this.remain(), "count advance beyond remaining");
+    this.progress += n;
   }
 
   /** definitions.py `WritableBufferGuestImpl.write`. */
@@ -261,6 +275,19 @@ function rendezvousCopy(
   const srcDirect = isDirectBuffer(src);
   const dstDirect = isDirectBuffer(dst);
   if (!srcDirect && !dstDirect) {
+    // A payloadless guest-to-guest stream transfers only a count. Constructing
+    // the reference's conceptual unit-value list makes the legal maximum
+    // (2**28 - 1 elements) exceed JS Array's practical allocation limits.
+    // Keep host buffers on the ordinary path so their chunk semantics remain
+    // unchanged.
+    if (
+      src instanceof GuestBuffer && dst instanceof GuestBuffer &&
+      src.t === null && dst.t === null
+    ) {
+      src.advanceZeroWidth(n);
+      dst.advanceZeroWidth(n);
+      return "chunk";
+    }
     dst.write(src.read(n));
     return "chunk";
   }

@@ -79,6 +79,13 @@ adjudicates otherwise. The current pin still returns the pending payload
 unchanged in `cancel_copy`.
 **Found:** 2026-08-08, implementing the stream copy protocol.
 
+This finding remains separate from the provisional drop-delivery rule adopted
+from component-model PR #719 at head
+`35e9769957627c2bee5cd445b998b08b3c652c86`. That rule upgrades an undelivered
+event when its peer is found dropped at consumption; CM-3 instead remaps an
+unobserved stream `COMPLETED|count` to `CANCELLED|count` when this end explicitly
+cancels. A peer-drop `DROPPED|count` therefore wins and is not remapped.
+
 ### Evidence
 
 `definitions.py` `cancel_copy`:

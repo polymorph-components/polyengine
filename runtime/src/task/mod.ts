@@ -10,11 +10,18 @@ import {
   type Cancelled,
   CANCELLED_TRUE,
   chooseCandidate,
+  claimActivationAmbient,
+  type CurrentThreadLike,
   dbgId,
   isInstancePoisoned,
+  isSynchronousAmbient,
+  maybeCurrentThread,
   NeedsJspi,
   notifyInstancePoisoned,
   PendingCapability,
+  physicalOwnerOf,
+  popLogicalActivation,
+  pushLogicalActivation,
   Store,
 } from "./scheduler.ts";
 import { Thread } from "./thread.ts";
@@ -401,6 +408,170 @@ export class Task {
     );
     this.onResolve(null);
     this.state = "resolved";
+  }
+}
+
+/**
+ * A synchronous nested canonical call. The reference always creates a fresh
+ * Task and Thread for `canon_lift`, including realloc and sync-to-sync FACT
+ * calls (definitions.py:2128-2194, 642-658). The native implementation may
+ * defer allocation, but still saves/zeros/restores both context slots
+ * (wasmtime component_sync_call.rs:40-43,98-123,183-203).
+ *
+ * This is an actual Task/Thread identity, not a slots-only shim, so task-scoped
+ * builtins reached by the callee resolve against the callee. The body itself is
+ * driven by the already-running wasm stack; no second generator is needed.
+ */
+export class SynchronousActivation {
+  readonly task: Task;
+  readonly thread: Thread;
+  readonly logicalActivation: CurrentThreadLike["logicalActivation"];
+  readonly parent: CurrentThreadLike | undefined;
+
+  constructor(
+    readonly inst: ComponentInstanceState,
+    asyncTyped: boolean,
+    parent: CurrentThreadLike | undefined,
+  ) {
+    this.parent = parent;
+    this.task = new Task(
+      { params: [], results: [], async: asyncTyped },
+      {
+        async_: false,
+        callback: false,
+        stringEncoding: "utf8",
+        memory: null,
+      },
+      inst,
+      () => [],
+      () => {},
+    );
+    this.thread = new Thread(this.task, (function* () {})());
+    const physical = this.parent === undefined
+      ? this.thread
+      : physicalOwnerOf(this.parent) as Thread;
+    this.thread.physicalOwner = physical;
+    if (physical !== this.thread) {
+      if (physical.logicalDescendants === undefined) {
+        (physical as CurrentThreadLike & {
+          logicalDescendants: Set<CurrentThreadLike>;
+        }).logicalDescendants = new Set();
+      }
+      physical.logicalDescendants.add(this.thread);
+    }
+    this.task.implicitThread = this.thread;
+    if (asyncTyped) {
+      // A sync-ABI implementation of an async-typed function needs the
+      // instance's exclusive slot (definitions.py Task.needs_exclusive and
+      // enter_implicit_thread, lines 447-469). enter-sync-call is already the
+      // admitted synchronous path; an occupied slot would have blocked before
+      // this adapter invocation.
+      assert_(
+        inst.exclusiveThread === null,
+        "synchronous activation entered with exclusive thread occupied",
+      );
+      inst.exclusiveThread = this.thread;
+    }
+    this.task.registerThread(this.thread);
+    this.task.start();
+    this.logicalActivation = {
+      active: true,
+      finish: () => this.finish(),
+      abort: () => this.abort(),
+    };
+    this.thread.logicalActivation = this.logicalActivation;
+    pushLogicalActivation(this.thread);
+  }
+
+  finish(): void {
+    if (!this.logicalActivation!.active) return;
+    trapIf(
+      this.task.numBorrows > 0,
+      "borrow handles still remain at the end of the call",
+    );
+    // FACT exits this task before translating results into the caller and
+    // temporarily restores the saved callee context for post-return
+    // (wasmtime fact/trampoline.rs:853-904). This bookkeeping task intentionally
+    // has an empty host-visible result tuple: core result locals remain in the
+    // adapter. Resolve through the canonical state transition rather than
+    // mutating state as an unregister workaround.
+    this.task.return_([]);
+    this.task.unregisterThread(this.thread);
+    if (this.task.ft.async) {
+      assert_(
+        this.inst.exclusiveThread === this.thread,
+        "synchronous activation lost exclusive thread",
+      );
+      this.inst.exclusiveThread = null;
+      this.inst.store.requestService();
+    }
+    this.logicalActivation!.active = false;
+    this.thread.physicalOwner.logicalDescendants.delete(this.thread);
+    popLogicalActivation(this.thread);
+    if (this.parent && !isSynchronousAmbient(this.parent)) {
+      // The nested wasm continuation has returned through exit-sync-call. Its
+      // caller's continuation is now the executing canonical activation.
+      claimActivationAmbient(this.parent);
+    }
+  }
+
+  abort(): void {
+    if (!this.logicalActivation!.active) return;
+    // Trap/capability unwind does not complete the task, but the synthetic
+    // thread must leave the instance table and ambient chain.
+    // FACT traps can skip exit-sync-call. Release all lenders owned by the
+    // abandoned nested activation before removing its task identity.
+    try {
+      // Cleanup is best-effort here: abort always runs while preserving an
+      // already escaping trap/capability signal. Attempt every lender scope.
+      while (this.thread.syncCallStack.length > 0) {
+        const scope = this.thread.syncCallStack.pop() as {
+          releaseLenders(): void;
+        };
+        try {
+          scope.releaseLenders();
+        } catch {
+          // The original activation failure remains authoritative.
+        }
+      }
+    } finally {
+      const i = this.task.threads.indexOf(this.thread);
+      if (i !== -1) this.task.threads.splice(i, 1);
+      if (this.thread.index !== null) {
+        this.inst.threads.remove(this.thread.index);
+        this.thread.index = null;
+      }
+      if (this.inst.exclusiveThread === this.thread) {
+        this.inst.exclusiveThread = null;
+        this.inst.store.requestService();
+      }
+      this.inst.store.removePendingResumption(this.thread);
+      this.logicalActivation!.active = false;
+      this.thread.physicalOwner.logicalDescendants.delete(this.thread);
+    }
+  }
+}
+
+/** Run a host-invoked synchronous canonical helper (notably realloc). */
+export function withSynchronousActivation<T>(
+  inst: ComponentInstanceState,
+  fn: () => T,
+): T {
+  // This helper enters immediately, so sampling its caller here cannot cross
+  // an asynchronous admission boundary.
+  const activation = new SynchronousActivation(
+    inst,
+    false,
+    maybeCurrentThread(),
+  );
+  try {
+    const result = fn();
+    activation.finish();
+    return result;
+  } catch (e) {
+    activation.abort();
+    popLogicalActivation(activation.thread);
+    throw e;
   }
 }
 

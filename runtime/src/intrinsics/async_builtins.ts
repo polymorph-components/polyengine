@@ -70,6 +70,7 @@ export const BLOCKED = 0xffff_ffff;
 export function createTaskReturn(
   decl: { results: number; resultType: number | null; options: number },
   ctx: AsyncTrampolineContext,
+  declaredInst?: ComponentInstanceState,
 ): CoreFn {
   const opts = ctx.options(decl.options);
   // `resultType` is the interned `plan.types` entry; `results` is the
@@ -80,6 +81,10 @@ export function createTaskReturn(
     ? []
     : ctx.resultTypes(decl.resultType);
   return (...flatArgs: CoreValue[]) => {
+    trapIf(
+      declaredInst !== undefined && !declaredInst.mayLeave,
+      "task.return: cannot leave component instance (may_leave violation)",
+    );
     const task = currentTask() as Task;
     trapIf(
       !task.inst.mayLeave,
@@ -134,8 +139,14 @@ export function createTaskReturn(
 }
 
 /** definitions.py `canon_task_cancel`. */
-export function createTaskCancel(): CoreFn {
+export function createTaskCancel(
+  declaredInst?: ComponentInstanceState,
+): CoreFn {
   return () => {
+    trapIf(
+      declaredInst !== undefined && !declaredInst.mayLeave,
+      "task.cancel: cannot leave component instance (may_leave violation)",
+    );
     const task = currentTask() as Task;
     trapIf(
       !task.inst.mayLeave,
@@ -504,9 +515,14 @@ export function createSubtaskCancel(
 export function createThreadYield(
   decl: { cancellable?: boolean },
   mode: SuspensionMode = "plain",
+  declaredInst?: ComponentInstanceState,
 ): CoreFn {
   const cancellable = decl.cancellable === true;
   return () => {
+    trapIf(
+      declaredInst !== undefined && !declaredInst.mayLeave,
+      "thread.yield: cannot leave component instance",
+    );
     const thread = currentThread<Thread>();
     trapIf(
       !thread.task.inst.mayLeave,

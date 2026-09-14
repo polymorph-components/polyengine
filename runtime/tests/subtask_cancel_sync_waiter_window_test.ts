@@ -154,6 +154,9 @@ function startFactSubtask(
       }
       return wait;
     },
+    postReturn: () => {
+      throw new Error("unexpected post-return");
+    },
     memoryToken: () => null,
     stats: newStats(),
     suspensionMode: "jspi",

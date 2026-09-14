@@ -89,6 +89,7 @@ function mkHarness(): Harness {
     resultTypes: () => [] as ValType[],
     resultTypesForTuple: () => null,
     callback: (_i: number) => null,
+    postReturn: (_i: number) => null,
     memoryToken: () => null,
     stats: newStats(),
     prepared,

@@ -249,7 +249,10 @@ Deno.test("stream.write(n=0xFFFFFFFF) traps instead of parking or completing wit
     // and this must trap. Ours: `length > BUFFER_MAX_LENGTH` sees the signed
     // JS number -1, the comparison is false, and the write silently parks
     // (returns BLOCKED) instead.
-    assertTraps(() => write(wi, 0, NEG_ONE), "MAX_LENGTH");
+    assertTraps(
+      () => write(wi, 0, NEG_ONE),
+      "stream read/write count too large",
+    );
   } finally {
     popCurrentThread(thread);
   }

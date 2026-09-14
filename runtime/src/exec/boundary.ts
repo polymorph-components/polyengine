@@ -58,6 +58,7 @@ import {
   Thread,
   WaitableSet,
   withActivation,
+  withSynchronousActivation,
 } from "../task/mod.ts";
 import { currentTask } from "../task/scheduler.ts";
 import type {
@@ -219,7 +220,13 @@ export function cabiOptions(opts: ResolvedOptions): CanonicalOptions {
     memory: opts.memory,
     realloc: opts.realloc === null ? null : (o, os, a, n) => {
       const realloc = require(opts.realloc, "realloc")!;
-      const p = callCore(realloc, [o, os, a, n]);
+      // definitions.py LiftLowerContext.reallocate creates and invokes a fresh
+      // sync canon_lift (lines 642-658), hence fresh task/thread context. Keep
+      // post-return on its originating task; only realloc takes this boundary.
+      const p = withSynchronousActivation(
+        opts.instance,
+        () => callCore(realloc, [o, os, a, n]),
+      );
       trapIf(p.length !== 1 || typeof p[0] !== "number", "realloc result");
       return (p[0] as number) >>> 0;
     },

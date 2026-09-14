@@ -15,6 +15,7 @@
 
 import { assert_ } from "../cabi/trap.ts";
 import {
+  abortLogicalChildren,
   type BlockRequest,
   type Cancelled,
   CANCELLED_FALSE,
@@ -25,6 +26,7 @@ import {
   PendingCapability,
   popCurrentThread,
   pushCurrentThread,
+  releaseActivationAmbient,
   type SchedulableThread,
   type Store,
   type ThreadBody,
@@ -33,6 +35,16 @@ import {
 type ThreadState = "running" | "suspended" | "waiting" | "done";
 
 export class Thread implements SchedulableThread {
+  /** Physical generator activation used for JSPI awaiting/resumption. */
+  physicalOwner: Thread = this;
+  /** Persistent logical descendants, including while their stack is unpublished. */
+  readonly logicalDescendants: Set<Thread> = new Set<Thread>();
+  /** Present when this Thread is driven by an enclosing wasm sync call. */
+  logicalActivation?: {
+    active: boolean;
+    finish(): void;
+    abort(): void;
+  };
   /**
    * Per-thread slots for `canon_context_get` / `canon_context_set`, not
    * task-shared state. Number storage is for the supported i32 context;
@@ -188,6 +200,9 @@ export class Thread implements SchedulableThread {
       // is finished either way; the exception propagates to whoever was
       // driving the scheduler.
       this.#state = "done";
+      abortLogicalChildren(this);
+      releaseActivationAmbient(this);
+      this.#store.removePendingResumption(this);
       throw e;
     } finally {
       popCurrentThread(this);

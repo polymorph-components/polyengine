@@ -47,10 +47,16 @@ import {
   claimActivationAmbient,
   dbgId,
   maybeCurrentThread,
+  physicalOwnerOf,
   releaseActivationAmbient,
   withActivation,
 } from "../task/mod.ts";
-import type { Cancelled, SchedulableThread, Store } from "../task/mod.ts";
+import type {
+  Cancelled,
+  CurrentThreadLike,
+  SchedulableThread,
+  Store,
+} from "../task/mod.ts";
 
 /** Which suspension discipline an instantiation runs under. */
 export type SuspensionMode = "plain" | "jspi";
@@ -152,7 +158,8 @@ export function trampolineCanBlock(
   t: { kind: string; async?: unknown; options?: unknown },
   optionsAsync: (index: number) => boolean,
 ): boolean {
-  return t.kind === "async-start-call" || t.kind === "subtask-cancel" ||
+  return t.kind === "async-start-call" || t.kind === "enter-sync-call" ||
+    t.kind === "subtask-cancel" ||
     trampolineNeedsSuspension(t, optionsAsync);
 }
 
@@ -247,6 +254,16 @@ function sentinelFor(owner: unknown): void {
   SENTINEL_TICK.then(() => claimActivationAmbient(owner));
 }
 const SENTINEL_TICK = Promise.resolve();
+const continuationOwners = new WeakMap<object, unknown>();
+
+/** Override the logical owner when a blocking import creates its continuation
+ * only at resume time (currently deferred `enter-sync-call`). */
+export function setContinuationOwner(
+  promise: Promise<unknown>,
+  owner: unknown,
+): void {
+  continuationOwners.set(promise, owner);
+}
 
 /** Queue attribution before the wrapped Promise settles. Engine continuation
  * timing need not make the sentinel and wasm chunk adjacent; instance-scoped
@@ -257,11 +274,14 @@ function attributeContinuation<T>(
 ): Promise<T> {
   return Promise.resolve(r).then(
     (v) => {
-      sentinelFor(owner);
+      // A deferred enter-sync-call can replace the logical continuation while
+      // this Promise is pending. Preserve that leaf rather than reasserting
+      // the import-time caller over it.
+      sentinelFor(continuationOwners.get(r as object) ?? owner);
       return v;
     },
     (e) => {
-      sentinelFor(owner);
+      sentinelFor(continuationOwners.get(r as object) ?? owner);
       throw e;
     },
   );
@@ -277,9 +297,13 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
     // The activation calling us — read while its bracket (or its hop claim)
     // is still the ambient.
     const owner = maybeCurrentThread() ?? null;
-    const invoke = () =>
-      (fn as unknown as (...a: unknown[]) => unknown)(...args);
     let r: unknown;
+    let continuation = owner;
+    const invoke = () => {
+      const result = (fn as unknown as (...a: unknown[]) => unknown)(...args);
+      continuation = maybeCurrentThread() ?? owner;
+      return result;
+    };
     try {
       // Bracket our own JS frame with the caller. Without this, a built-in
       // that synchronously enters ANOTHER activation's wasm (`async-start-call`
@@ -289,6 +313,9 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
       // `fact_calls.ts:820`'s determinacy wait). The nesting is a stack, and
       // this is the frame that owns it.
       r = owner === null ? invoke() : withActivation(owner, invoke);
+      // A FACT enter-sync-call can publish a nested canonical activation while
+      // this Suspending import runs. The wasm continuation after the mandatory
+      // hop belongs to that exact nested frame, not to the import's parent.
     } catch (e) {
       // A synchronous trap out of a built-in also unwinds the guest through
       // the hop, and the guest's trap-path built-ins run there.
@@ -299,8 +326,8 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
       // Plain values still return through an engine hop. Claim synchronously
       // for pre-hop reads and queue a sentinel before returning; other claims
       // may interleave before wasm resumes, as described above.
-      claimActivationAmbient(owner);
-      sentinelFor(owner);
+      claimActivationAmbient(continuation);
+      sentinelFor(continuation);
       return r;
     }
     if (SP_TRACE) {
@@ -318,9 +345,11 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
  *
  * The dangerous direction, per jspi pin (c), is a `Suspending` import
  * reachable from a non-`promising` activation — that traps unconditionally,
- * even on the plain-value path. Entry wrapping in jspi mode is unconditional
- * (every lifted export, callback, and block-capable FACT callee), so the
- * structural invariant is `importsWrapped ⇒ entriesWrapped`, per mode.
+ * even on the plain-value path. Entry construction records both the total and
+ * wrapped counts, so this check proves every constructed lifted entry used the
+ * mode selected for the instantiation. A component with no lifted entries is
+ * valid: declaration-only components can instantiate core modules importing
+ * blocking built-ins without providing any path that calls those imports.
  *
  * Entries-without-imports is legitimate: per-declaration classification
  * (`trampolineNeedsSuspension`) wraps no imports in a component whose
@@ -332,23 +361,25 @@ export function suspendingImport<T extends (...a: never[]) => unknown>(
  */
 export function assertModeConsistent(
   mode: SuspensionMode,
-  entriesWrapped: boolean,
+  entriesConstructed: number,
+  entriesWrapped: number,
   importsWrapped: boolean,
 ): void {
-  if (mode === "plain") {
-    assert_(
-      !entriesWrapped && !importsWrapped,
-      `plain mode with wrapped entries=${entriesWrapped} / ` +
-        `imports=${importsWrapped} — wrapping ran under the wrong mode`,
-    );
-    return;
-  }
   assert_(
-    entriesWrapped || !importsWrapped,
-    `suspension mode jspi wrapped imports without wrapping any entry ` +
-      `(entries=${entriesWrapped}, imports=${importsWrapped}) — a ` +
-      `Suspending import reached from a non-promising activation traps ` +
-      `unconditionally (jspi pin (c))`,
+    entriesConstructed >= 0 && entriesWrapped >= 0 &&
+      entriesWrapped <= entriesConstructed,
+    `invalid entry wrapping counts: constructed=${entriesConstructed}, ` +
+      `wrapped=${entriesWrapped}`,
+  );
+  const expectedWrapped = mode === "jspi" ? entriesConstructed : 0;
+  assert_(
+    entriesWrapped === expectedWrapped,
+    `${mode} mode constructed ${entriesConstructed} entries but wrapped ` +
+      `${entriesWrapped}; every constructed entry must use the selected mode`,
+  );
+  assert_(
+    mode === "jspi" || !importsWrapped,
+    `plain mode with wrapped imports — wrapping ran under the wrong mode`,
   );
 }
 
@@ -396,6 +427,8 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
    */
   // deno-lint-ignore no-explicit-any
   readonly owner: any;
+  /** Canonical task/context identity active inside the physical continuation. */
+  readonly logicalOwner: CurrentThreadLike | null;
 
   constructor(
     store: Store,
@@ -415,6 +448,7 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
     private readonly produce: (cancelled: Cancelled) => T,
     // deno-lint-ignore no-explicit-any
     owner?: any,
+    logicalOwner?: CurrentThreadLike | null,
     /**
      * `finally`-style hook: runs EXACTLY ONCE, on whichever terminal
      * transition this point takes — produce-success, produce-throw, or
@@ -439,6 +473,7 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
   ) {
     this.#store = store;
     this.owner = owner ?? maybeCurrentThread() ?? task?.implicitThread ?? null;
+    this.logicalOwner = logicalOwner ?? this.owner;
     if (SP_TRACE) {
       console.error(
         `[sp] mint ${dbgId(this)} owner=${dbgId(this.owner)} task=${
@@ -554,9 +589,11 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
       // still be retired here or the store stays gated on a finished window.
       this.#store.consumePendingIfRunning();
       if (maybeCurrentThread() === undefined) {
-        claimActivationAmbient(this.owner);
+        claimActivationAmbient(this.logicalOwner);
       }
-      this.#store.addPendingResumption(this.task?.implicitThread ?? null);
+      // Scheduling gates track the physical JSPI continuation. `logicalOwner`
+      // is only the canonical context published while that continuation runs.
+      this.#store.addPendingResumption(this.owner);
       this.#fail(e);
       return;
     }
@@ -580,8 +617,10 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
     // first `Suspending` call (site (ii)); the retired tier-3 slot used to
     // cover the window before that, and the measurement behind its retirement
     // (#158, see `resolveAmbient`) says nothing ever read it there.
-    if (maybeCurrentThread() === undefined) claimActivationAmbient(this.owner);
-    this.#store.addPendingResumption(this.task?.implicitThread ?? null);
+    if (maybeCurrentThread() === undefined) {
+      claimActivationAmbient(this.logicalOwner);
+    }
+    this.#store.addPendingResumption(this.owner);
     this.#settle(value);
   }
 
@@ -658,13 +697,15 @@ export function blockCurrentActivation<T>(input: {
   // ambient claim ends here. Reading it after the release yields `undefined`
   // and strands the point with no owner (measured: `cancellable.wast:322`
   // then reported `pending-capability: instantiation-time task context`).
-  const owner = maybeCurrentThread() ?? input.task?.implicitThread ?? null;
+  const logicalOwner = maybeCurrentThread() ?? input.task?.implicitThread ??
+    null;
+  const owner = logicalOwner === null ? null : physicalOwnerOf(logicalOwner);
   // The activation is parking: if it still carried the pending-resumption
   // entry from the settle that resumed it, that entry's window closes here
   // (the other closing edge — the activation FINISHING — is handled by
   // `Store.noteAwaiting`'s settle continuation).
   input.store.consumePendingIfRunning();
-  releaseActivationAmbient(owner);
+  releaseActivationAmbient(logicalOwner);
   const point = new SuspensionPoint<T>(
     input.store,
     input.task,
@@ -672,6 +713,7 @@ export function blockCurrentActivation<T>(input: {
     input.cancellable,
     input.produce,
     owner,
+    logicalOwner,
     input.onSettled,
   );
   Promise.resolve().then(() => {

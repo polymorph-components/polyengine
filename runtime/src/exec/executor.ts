@@ -291,13 +291,15 @@ class Executor {
    * identity, so task.return and its lifted export must share this wrapper.
    */
   readonly liveMemories = new Map<number, LiveMemory>();
-  /** Set by the entry/import wrapping sites; checked in `finish`. */
-  wrappedEntries = false;
+  /** Counted by the entry wrapping site; checked in `finish`. */
+  entriesConstructed = 0;
+  wrappedEntries = 0;
   wrappedImports = false;
 
   /** Record that an entry / import wrapping site ran under the current mode. */
   noteEntry(): SuspensionMode {
-    if (this.suspensionMode === "jspi") this.wrappedEntries = true;
+    this.entriesConstructed++;
+    if (this.suspensionMode === "jspi") this.wrappedEntries++;
     return this.suspensionMode;
   }
 
@@ -530,6 +532,23 @@ class Executor {
             );
           }
           const importObject: WebAssembly.Imports = {};
+          const adapter = this.wire.modules[init.module];
+          const adapterImports =
+            init.instance === null && adapter?.kind === "adapter"
+              ? adapter.intrinsics
+              : null;
+          if (
+            adapterImports !== null && adapterImports.length !== declared.length
+          ) {
+            throw new PlanError(
+              `adapter module ${init.module}: ${declared.length} compiled imports but ` +
+                `${adapterImports.length} manifest entries`,
+            );
+          }
+          const postReturnWrappers = new Map<
+            CoreFn,
+            { owner: ComponentInstanceState; wrapper: CoreFn }
+          >();
           // Collect suspendability from this core module's imports. FACT
           // needs callee-specific evidence, not the whole plan's mode choice.
           this.sawBlockingImport = false;
@@ -547,7 +566,64 @@ class Executor {
           const seenAt = new Map<string, { index: number; value: unknown }>();
           declared.forEach((imp, i) => {
             const before = this.sawBlockingImport;
-            const value = this.importValue(init.args[i]);
+            const def = init.args[i];
+            const manifest = adapterImports?.[i];
+            if (
+              adapterImports !== null &&
+              (manifest === undefined ||
+                manifest.module !== imp.module || manifest.name !== imp.name ||
+                !sameCoreDef(manifest.def, def))
+            ) {
+              throw new PlanError(
+                `adapter module ${init.module}: import ${i} does not match its manifest`,
+              );
+            }
+            let value = this.importValue(def);
+            if (adapterImports !== null && imp.module === "post_return") {
+              // Pinned FACT assigns this exact namespace only to the lifted
+              // function's post-return import (wasmtime-environ fact.rs:322-327).
+              // Wrap this adapter edge, never the extracted function globally:
+              // the same core function may also be called as an ordinary export.
+              if (
+                manifest?.module !== "post_return" ||
+                typeof value !== "function"
+              ) {
+                throw new PlanError(
+                  `adapter module ${init.module}: invalid post_return import ${i}`,
+                );
+              }
+              const owner = this.coreDefOwner(def);
+              if (owner === null) {
+                throw new PlanError(
+                  `adapter module ${init.module}: post_return import ${i} has no ` +
+                    `declaring component instance`,
+                );
+              }
+              const original = value as CoreFn;
+              const prior = postReturnWrappers.get(original);
+              if (prior !== undefined && prior.owner !== owner) {
+                throw new PlanError(
+                  `adapter module ${init.module}: one post_return function has ` +
+                    `multiple declaring component instances`,
+                );
+              }
+              let wrapped = prior?.wrapper;
+              if (wrapped === undefined) {
+                wrapped = (...args: unknown[]) => {
+                  if (!owner.mayLeave) {
+                    throw new Trap("cannot leave component instance");
+                  }
+                  owner.mayLeave = false;
+                  // Deliberately no finally: definitions.py canon_lift leaves
+                  // may_leave false when post-return traps (lines 2144-2149).
+                  const result = original(...args);
+                  owner.mayLeave = true;
+                  return result;
+                };
+                postReturnWrappers.set(original, { owner, wrapper: wrapped });
+              }
+              value = wrapped;
+            }
             if (!before && this.sawBlockingImport && SUSPENDABLE_TRACE) {
               console.error(
                 `[suspendable] module ${init.module}: import ` +
@@ -731,9 +807,10 @@ class Executor {
     // Structural check of jspi/bridge.ts's invariant, run once both wrapping
     // sites have had their chance: entries are wrapped while building exports
     // (just above) and imports while running `instantiate-module`. Neither
-    // flag can be set by accident — only the wrapping helpers set them.
+    // values can be set by accident — only the wrapping helpers set them.
     assertModeConsistent(
       this.suspensionMode,
+      this.entriesConstructed,
       this.wrappedEntries,
       this.wrappedImports,
     );
@@ -982,6 +1059,32 @@ class Executor {
     }
   }
 
+  /** Component instance statically declaring a callable CoreDef, if known. */
+  coreDefOwner(def: WireCoreDef): ComponentInstanceState | null {
+    if (def.kind === "trampoline") {
+      const decl = this.wire.trampolines[def.index] as
+        | { instance?: unknown }
+        | undefined;
+      return typeof decl?.instance === "number"
+        ? this.componentInstance(decl.instance)
+        : null;
+    }
+    if (def.kind !== "export") return null;
+
+    // RuntimeInstanceIndex is the ordinal of instantiate-module initializers.
+    // Derive its owner from that existing source of truth rather than keeping a
+    // second ownership map (contracts/plan-format.md:70-80).
+    let runtimeInstance = 0;
+    for (const init of this.wire.initializers) {
+      if (init.op !== "instantiate-module") continue;
+      if (runtimeInstance++ !== def.instance) continue;
+      return init.instance === null
+        ? null
+        : this.componentInstance(init.instance);
+    }
+    return null;
+  }
+
   resolveCoreExport(ref: WireCoreExport): Importable {
     const instance = this.instances[ref.instance];
     if (instance === undefined) {
@@ -1047,6 +1150,15 @@ class Executor {
         if (fn === undefined) {
           throw new PlanError(
             `callback ${i} accessed before its extract-callback initializer ran`,
+          );
+        }
+        return fn;
+      },
+      postReturn: (i) => {
+        const fn = this.postReturns[i];
+        if (fn === undefined) {
+          throw new PlanError(
+            `post-return ${i} accessed before its extract-post-return initializer ran`,
           );
         }
         return fn;
@@ -1256,4 +1368,20 @@ function describe(v: unknown): string {
   if (v === undefined) return "undefined";
   if (typeof v === "object") return `a ${v.constructor?.name ?? "object"}`;
   return `a ${typeof v}`;
+}
+
+/** Exact equality for the small, closed CoreDef wire union. */
+function sameCoreDef(a: WireCoreDef, b: WireCoreDef): boolean {
+  if (a.kind !== b.kind) return false;
+  switch (a.kind) {
+    case "export":
+      return b.kind === "export" && a.instance === b.instance &&
+        a.item.name === b.item.name && a.item.space === b.item.space;
+    case "instance-flags":
+      return b.kind === "instance-flags" && a.instance === b.instance;
+    case "trampoline":
+      return b.kind === "trampoline" && a.index === b.index;
+    case "unsafe-intrinsic":
+      return b.kind === "unsafe-intrinsic" && a.intrinsic === b.intrinsic;
+  }
 }

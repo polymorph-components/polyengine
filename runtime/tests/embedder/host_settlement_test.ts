@@ -13,6 +13,7 @@ import type { HostResourceRegistry } from "../../src/embedder/resources.ts";
 import {
   type ComponentInstanceState,
   currentTask,
+  currentThread,
   isInstancePoisoned,
   NeedsJspi,
 } from "../../src/task/mod.ts";
@@ -41,10 +42,21 @@ for (const rejection of [false, true]) {
       const p = deferred();
       const started = Promise.withResolvers<void>();
       let caller!: ComponentInstanceState;
+      let callee!: ComponentInstanceState;
       const c = await instantiateFixture(factFixture, {
         r: R,
         makeSync: suspending(() => {
-          caller = currentTask().inst;
+          callee = currentTask().inst;
+          const physical = currentThread().physicalOwner;
+          if (physical === undefined) {
+            throw new Error("FACT callee has no physical caller");
+          }
+          caller = physical.task.inst;
+          assertEq(
+            caller === callee,
+            false,
+            "FACT caller and callee are distinct",
+          );
           started.resolve();
           return p.promise;
         }),
@@ -55,7 +67,7 @@ for (const rejection of [false, true]) {
       const cause = await caught(() => sync(c.exports.trap)());
       assertEq(cause instanceof Trap, true);
       assertEq(
-        isInstancePoisoned(c.handle.componentInstances[1]),
+        isInstancePoisoned(callee),
         true,
         "FACT callee poisoned",
       );
