@@ -77,6 +77,9 @@ function runPrepared(input: {
     callback: () => {
       throw new Error("no callback expected");
     },
+    postReturn: () => {
+      throw new Error("unexpected post-return");
+    },
     memoryToken: () => null,
     stats: newStats(),
     prepared,
@@ -255,4 +258,55 @@ Deno.test("FACT: a subtask reports STARTING until [async-start] actually runs", 
   assert(rec.startArgs !== null, "[async-start] ran");
   // Sanity: the eager path resolved, so no handle was allocated.
   assertEq(SubtaskState.RETURNED, 2);
+});
+
+Deno.test("FACT: post-return and callback index spaces do not alias", () => {
+  const store = new Store();
+  const inst = new ComponentInstanceState(0, store);
+  let callbackRan = false;
+  let postReturnRan = false;
+  const ctx = {
+    componentInstance: () => inst,
+    resultTypes: () => [] as ValType[],
+    resultTypesForTuple: () => null,
+    callback: (i: number) => {
+      assertEq(i, 0);
+      return () => {
+        callbackRan = true;
+        throw new Error("callback must not be used as post-return");
+      };
+    },
+    postReturn: (i: number) => {
+      assertEq(i, 0);
+      return () => {
+        postReturnRan = true;
+      };
+    },
+    memoryToken: () => null,
+    stats: newStats(),
+    prepared: { current: null },
+    factStartScopes: [],
+    suspensionMode: "plain" as const,
+  };
+  const prep = createPrepareCall(
+    { memory: null },
+    ctx as unknown as FactCallContext,
+  );
+  const startCall = createAsyncStartCall(
+    { callback: null, postReturn: 0 },
+    ctx as unknown as FactCallContext,
+  );
+  prep(
+    () => undefined,
+    () => undefined,
+    0,
+    0,
+    0,
+    0,
+    0,
+    PREPARE_ASYNC_NO_RESULT,
+  );
+  assertEq(startCall(() => undefined, 0, 0, 0), 2);
+  assertEq(postReturnRan, true);
+  assertEq(callbackRan, false);
 });

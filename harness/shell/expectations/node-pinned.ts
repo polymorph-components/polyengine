@@ -35,9 +35,9 @@ export const nodePinned: ShellLaneExpectation = {
   totals: {
     commands: 1511,
     executed: 1411,
-    passed: 1285,
+    passed: 1286,
     failed: 0,
-    xfail: 126,
+    xfail: 125,
     pendingRuntime: 95,
     pendingCapability: 0,
     unsupportedDirective: 5,

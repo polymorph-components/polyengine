@@ -183,17 +183,25 @@ function streamCopy(input: {
   ): EventTuple => {
     reclaim();
     assert_(end.copying(), "stream event on a non-copying end");
-    end.state = result === CopyResult.DROPPED ? CopyState.DONE : CopyState.IDLE;
+    // CONTRACT: WebAssembly/component-model#719 at head 35e9769957627c2:
+    // stream drop is observed when the pending event is consumed, not when it
+    // is armed. Preserve all progress accumulated before delivery. This runs
+    // before takeCancelEvent's CM-3 COMPLETED -> CANCELLED remap, so peer drop
+    // has precedence and remains DROPPED.
+    const delivered = end.shared.dropped ? CopyResult.DROPPED : result;
+    end.state = delivered === CopyResult.DROPPED
+      ? CopyState.DONE
+      : CopyState.IDLE;
     assert_(
       buffer.progress <= BUFFER_MAX_LENGTH,
       "stream progress out of packing range",
     );
     // Low four bits hold the result; the remaining bits count elements.
     assert_(
-      result >= 0 && result < 2 ** 4,
+      delivered >= 0 && delivered < 2 ** 4,
       "stream event: packed result out of 4-bit range",
     );
-    return [eventCode, i, (result | (buffer.progress << 4)) >>> 0];
+    return [eventCode, i, (delivered | (buffer.progress << 4)) >>> 0];
   };
 
   end.state = CopyState.COPYING;
@@ -258,11 +266,18 @@ function futureCopy(input: {
       "future event/progress disagreement",
     );
     assert_(end.copying(), "future event on a non-copying end");
+    // CONTRACT: WebAssembly/component-model#719 at head 35e9769957627c2:
+    // transferred payload makes COMPLETED final even if the peer later drops;
+    // only an undelivered CANCELLED is upgraded when its peer is gone.
+    const delivered = result === CopyResult.CANCELLED && end.shared.dropped
+      ? CopyResult.DROPPED
+      : result;
     // A future is single-shot: both COMPLETED and DROPPED retire the end.
-    end.state = result === CopyResult.DROPPED || result === CopyResult.COMPLETED
+    end.state = delivered === CopyResult.DROPPED ||
+        delivered === CopyResult.COMPLETED
       ? CopyState.DONE
       : CopyState.IDLE;
-    return [eventCode, i, result];
+    return [eventCode, i, delivered];
   };
 
   end.state = CopyState.COPYING;
@@ -522,6 +537,13 @@ export function createErrorContextDebugMessage(
       errorContextTrapMessage("error-context.debug-message", e),
     );
     const cx = new LiftLowerContext(cabiOptions(opts), inst, null);
+    const mem = cx.opts.memory;
+    assert_(mem !== null, "error-context.debug-message requires a memory");
+    const resultSize = 2 * mem.ptrSize();
+    trapIf(
+      ptr % mem.ptrSize() !== 0 || ptr + resultSize > mem.length,
+      "invalid debug message pointer",
+    );
     storeString(cx, (e as ErrorContext).debugMessage, ptr);
   };
 }

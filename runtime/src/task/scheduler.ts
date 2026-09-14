@@ -318,6 +318,19 @@ export interface CurrentThreadLike {
   storage: number[];
   // deno-lint-ignore no-explicit-any
   task: any;
+  /** Generator-backed activation whose JSPI Promise/awaiting entry drives us. */
+  physicalOwner?: CurrentThreadLike;
+  /** Promise park owned by generator-backed threads. */
+  awaiting?: Promise<unknown> | null;
+  /** Logical FACT descendants which survive synchronous-stack unpublication. */
+  logicalDescendants?: Set<CurrentThreadLike>;
+  /** A canonical call frame represented without a separately-driven body. */
+  logicalActivation?: {
+    active: boolean;
+    finish(): void;
+    abort(): void;
+    parent?: CurrentThreadLike;
+  };
 }
 
 export function pushCurrentThread(t: CurrentThreadLike): void {
@@ -325,8 +338,48 @@ export function pushCurrentThread(t: CurrentThreadLike): void {
 }
 
 export function popCurrentThread(t: CurrentThreadLike): void {
+  // A nested logical activation can outlive this JS bracket across a JSPI hop.
+  // Remove only its synchronous publication; completion/abort are separate.
+  while (
+    threadStack.length > 0 && threadStack[threadStack.length - 1] !== t
+  ) {
+    const nested = threadStack.pop() as CurrentThreadLike;
+    assert_(
+      nested.logicalActivation !== undefined,
+      "current-thread stack contains an unrelated activation",
+    );
+  }
   const top = threadStack.pop();
   assert_(top === t, "current-thread stack imbalance");
+}
+
+/** Abnormal wasm-stack unwind: retire logical descendants whose exits skipped. */
+export function abortLogicalChildren(t: CurrentThreadLike): void {
+  const physical = physicalOwnerOf(t);
+  for (const nested of [...(physical.logicalDescendants ?? [])]) {
+    nested.logicalActivation?.abort();
+    releaseActivationAmbient(nested);
+  }
+}
+
+export function physicalOwnerOf(t: CurrentThreadLike): CurrentThreadLike {
+  return t.physicalOwner ?? t;
+}
+
+/** Publish a synchronous nested canonical activation as `current_thread`. */
+export function pushLogicalActivation(t: CurrentThreadLike): void {
+  threadStack.push(t);
+}
+
+/** Finish a nested activation whether it is still synchronous or JSPI-resumed. */
+export function popLogicalActivation(t: CurrentThreadLike): "stack" | "claim" {
+  if (threadStack[threadStack.length - 1] === t) {
+    threadStack.pop();
+    return "stack";
+  } else {
+    releaseActivationAmbient(t);
+    return "claim";
+  }
 }
 
 /**
@@ -340,8 +393,20 @@ export function withActivation<T>(t: any, fn: () => T): T {
   entryStack.push(t);
   try {
     return fn();
+  } catch (e) {
+    abortLogicalChildren(t);
+    throw e;
   } finally {
     entryStack.pop();
+    while (
+      threadStack.length > 0 && threadStack[threadStack.length - 1] !== t
+    ) {
+      const nested = threadStack.pop() as CurrentThreadLike;
+      assert_(
+        nested.logicalActivation !== undefined,
+        "withActivation crossed an unrelated activation",
+      );
+    }
     const top = threadStack.pop();
     assert_(top === t, "withActivation: current-thread stack imbalance");
   }
@@ -426,6 +491,9 @@ export function dbgId(t: unknown): string {
 export function releaseActivationAmbient(t: any): void {
   if (t === null || t === undefined) return;
   if (AMBIENT_TRACE) traceAmbient("release", t);
+  // This releases only an engine-hop claim. Synchronous publication belongs
+  // to push/popCurrentThread and withActivation; touching it here double-pops
+  // a live bracket when a logical child parks in a Suspending import.
   let i = activationClaims.indexOf(t);
   if (i === -1) {
     const implicit = (t as { task?: { implicitThread?: unknown } })?.task
@@ -505,6 +573,11 @@ export function currentThread<T = CurrentThreadLike>(): T {
 
 export function maybeCurrentThread(): CurrentThreadLike | undefined {
   return resolveAmbient();
+}
+
+/** Whether `t` is supplied by a live synchronous JS bracket, not a claim. */
+export function isSynchronousAmbient(t: CurrentThreadLike): boolean {
+  return threadStack[threadStack.length - 1] === t;
 }
 
 /** Whether guest code is executing on the current JavaScript stack. Engine
@@ -723,7 +796,8 @@ export class Store {
   consumePendingIfRunning(): void {
     const a = activationOf();
     if (
-      a !== null && a !== undefined && this.pendingResumptions.delete(a)
+      a !== null && a !== undefined &&
+      this.pendingResumptions.delete(physicalOwnerOf(a))
     ) {
       // This request is queued while the activation is still live. The
       // coordinator's live-execution guard delays service until the canonical
@@ -739,11 +813,15 @@ export class Store {
   // deno-lint-ignore no-explicit-any
   releasePendingOf(t: any): void {
     releaseActivationAmbient(t);
-    let released = this.pendingResumptions.delete(t);
+    const physical = physicalOwnerOf(t);
+    let released = this.pendingResumptions.delete(physical);
     const implicit = (t as { task?: { implicitThread?: unknown } })?.task
       ?.implicitThread;
     if (implicit !== undefined && implicit !== null) {
-      released = this.pendingResumptions.delete(implicit) || released;
+      released = this.pendingResumptions.delete(
+        physicalOwnerOf(implicit as CurrentThreadLike),
+      ) ||
+        released;
     }
     if (released) this.requestService();
   }

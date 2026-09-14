@@ -47,6 +47,17 @@ only to CM-3. A schedule-dependent assertion cannot invoke the exception:
 if two conforming schedulers can answer differently, the assertion pins a
 policy rather than semantics. Wasmtime behavior alone is insufficient.
 
+**Pending upstream stream/future assumption.** Until
+[component-model PR #719](https://github.com/WebAssembly/component-model/pull/719)
+is adjudicated, this checkout adopts only its drop-delivery rule at head
+`35e9769957627c2bee5cd445b998b08b3c652c86`; the submodule remains pinned at
+`7c676115e93cd7d54c1732d95c54c6a3de7c5ae0`. A stream event tests for peer
+drop when the event is consumed, upgrades the result to `DROPPED`, preserves
+the accumulated element count, and retires the end. A future `COMPLETED` stays
+`COMPLETED` because its payload transferred; a pending future `CANCELLED`
+upgrades to `DROPPED` with zero progress if the peer is gone. Already-delivered
+events are not rewritten. The PR's broader paired-end refactor is not adopted.
+
 ## 2. Non-goals
 
 - **WASI in the runtime core.** Providers live in the separate
@@ -321,6 +332,8 @@ Named differences from the reference or other hosts:
   This is the sole §1 corpus/reference exception,
   [CM-3](../upstream-component-model-repo-findings.md#cm-3-cancel_copy-returns-a-stale-completed-where-wasmtime-reports-cancelled).
   See `takeCancelEvent` in `runtime/src/intrinsics/stream_builtins.ts`.
+  This cancellation-time `COMPLETED`→`CANCELLED` remap is distinct from the
+  PR #719 consumption-time peer-drop upgrade above; peer drop takes precedence.
 
 ## 7. Canonical ABI decisions
 

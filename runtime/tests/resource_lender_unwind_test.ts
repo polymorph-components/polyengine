@@ -64,6 +64,7 @@ function mkHarness(postReturn: (() => void) | null = null): Harness {
     resultTypes: () => [] as ValType[],
     resultTypesForTuple: () => null,
     callback: (_i: number) => postReturn,
+    postReturn: (_i: number) => postReturn,
     memoryToken: () => null,
     stats: newStats(),
     prepared,

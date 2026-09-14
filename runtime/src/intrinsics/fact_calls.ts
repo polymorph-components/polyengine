@@ -147,6 +147,8 @@ export interface FactCallContext {
   resultTypesForTuple(tupleIndex: number): ValType[] | null;
   /** `RuntimeCallbackIndex` -> the callee's callback core function. */
   callback(index: number): CoreFn;
+  /** `RuntimePostReturnIndex` -> the callee's post-return core function. */
+  postReturn(index: number): CoreFn;
   /** `RuntimeMemoryIndex` -> the memory `task.return` must match, if any. */
   memoryToken(index: number): unknown;
   stats: ExecutionStats;
@@ -661,7 +663,7 @@ export function createAsyncStartCall(
       callback,
       postReturn: decl.postReturn === null
         ? null
-        : ctx.callback(decl.postReturn),
+        : ctx.postReturn(decl.postReturn),
       ctx,
       // `compile_async_to_async_adapter` sets START_FLAG_ASYNC_CALLEE;
       // `compile_async_to_sync_adapter` passes 0.
@@ -769,11 +771,6 @@ export function createAsyncStartCall(
     // so any held gate belongs to the currently executing activation.
     if (ctx.suspensionMode === "jspi") {
       const store = prepared.callerInst.store;
-      const calleeInst = prepared.calleeInst;
-      // The caller's task: excluded from the drain scan (it is the asker).
-      // `maybeCurrentTask` rather than `currentTask` because a host-driven
-      // entry can reach here with no ambient task at all.
-      const callerTask = maybeCurrentTask();
       // STARTING + parked == parked at the entry gate: `[async-start]` runs
       // immediately after `enter_implicit_thread` succeeds, so any callee
       // that got past the gate has already left STARTING.
@@ -784,7 +781,11 @@ export function createAsyncStartCall(
         thread.waiting();
       const determinate = (): boolean =>
         gatedAtEntry()
-          ? !store.hasRunnableWork(calleeInst, callerTask)
+          // canon_lower reports STARTING as soon as the new callee blocks on
+          // admission. Running an unrelated exclusive holder here can make
+          // the new call complete before its caller observes it, contrary to
+          // definitions.py:2257-2282 and task-builtins.wast:530-532.
+          ? true
           : subtask.resolved() ||
             thread.done() ||
             store.waiting.some((w) => w.task === task);

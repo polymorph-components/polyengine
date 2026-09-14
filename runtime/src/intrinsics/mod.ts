@@ -14,7 +14,17 @@ import { trapIf } from "../cabi/trap.ts";
 import { assert_ } from "../cabi/trap.ts";
 import type { ResourceTableInfo } from "../cabi/types.ts";
 import type { ComponentInstanceState } from "../task/mod.ts";
-import { dbgId, entryRefusal, maybeCurrentThread } from "../task/mod.ts";
+import {
+  claimActivationAmbient,
+  currentTask,
+  dbgId,
+  entryRefusal,
+  maybeCurrentThread,
+  popLogicalActivation,
+  SynchronousActivation,
+} from "../task/mod.ts";
+import { blockCurrentActivation, setContinuationOwner } from "../jspi/mod.ts";
+import { needsJspi } from "../task/scheduler.ts";
 import type { WireTrampoline } from "../plan/format.ts";
 import type { CoreFn, ExecutionStats } from "../exec/boundary.ts";
 import { UnsupportedFeatureError } from "./errors.ts";
@@ -164,6 +174,8 @@ export class SyncCallScope {
   numBorrows = 0;
   readonly lenders: ResourceHandle[] = [];
 
+  constructor(readonly activation?: SynchronousActivation) {}
+
   /**
    * definitions.py `Subtask.add_lender`: borrowed handles can be lent onward
    * too. `canon_resource_drop` checks `num_lends` for both own and borrow
@@ -243,6 +255,8 @@ export interface TrampolineContext {
   resultTypes(index: number): import("../cabi/types.ts").ValType[];
   /** `RuntimeCallbackIndex` -> the extracted callback core function. */
   callback(index: number): CoreFn;
+  /** `RuntimePostReturnIndex` -> the extracted post-return core function. */
+  postReturn(index: number): CoreFn;
   /** `RuntimeMemoryIndex` -> an identity token for `task.return` checks. */
   memoryToken(index: number): unknown;
   /** The single in-flight FACT preparation (see `PreparedCall`). */
@@ -422,10 +436,71 @@ function createTrampolineBody(
         // the prepare/start protocol creates any separate callee task.
         void async_;
         ctx.stats.enterSyncCalls++;
+        // Capture before a possible admission park. The store later calls
+        // `produce` without the caller's synchronous bracket, but the nested
+        // activation remains a logical child of this canonical caller.
+        const caller = maybeCurrentThread();
         // Normal return must match enter/exit on the same activation's stack;
         // trap unwind releases any scopes whose exit was skipped.
-        const scopes = syncScopes(ctx, "enter");
-        scopes.push(new SyncCallScope());
+        const enter = () => {
+          const activation = typeof calleeInstance === "number"
+            ? new SynchronousActivation(
+              ctx.componentInstance(calleeInstance >>> 0),
+              async_ !== 0,
+              caller,
+            )
+            : undefined;
+          // Resolve again after publishing the callee: its activation owns the
+          // bracket, including resource transfers and nested calls.
+          syncScopes(ctx, "enter-callee").push(new SyncCallScope(activation));
+          return activation;
+        };
+        if (typeof calleeInstance !== "number" || async_ === 0) return enter();
+        if (caller === undefined) {
+          // Core start functions can legally make an unblocked synchronous
+          // guest call without an enclosing canonical task. There is no stack
+          // to suspend if admission is blocked, so retain the existing
+          // synchronous-only limitation rather than inventing a root task.
+          const callee = ctx.componentInstance(calleeInstance >>> 0);
+          if (callee.backpressure === 0 && callee.exclusiveThread === null) {
+            return enter();
+          }
+          needsJspi("enter-sync-call from core start cannot block");
+        }
+        const callee = ctx.componentInstance(calleeInstance >>> 0);
+        const blocked = () =>
+          callee.backpressure > 0 || callee.exclusiveThread !== null;
+        if (!blocked() && callee.numWaitingToEnter === 0) return enter();
+        if (ctx.suspensionMode !== "jspi") {
+          needsJspi("enter-sync-call blocked by backpressure or exclusivity");
+        }
+        callee.numWaitingToEnter += 1;
+        const admission = blockCurrentActivation({
+          store: callee.store,
+          task: currentTask(),
+          readyFunc: () => !blocked(),
+          // CONTRACT: this is the already-running caller's synchronous wait,
+          // not a new callee task's `enter_implicit_thread` wait
+          // (definitions.py:458-465). It cannot consume caller cancellation.
+          cancellable: false,
+          produce: () => {
+            const activation = enter();
+            if (activation !== undefined) {
+              // Deferred admission runs from the store drain, outside the
+              // captured caller bracket. Convert the child's temporary stack
+              // publication into the claim consumed by the resumed wasm
+              // continuation; leaving it on threadStack would look live and
+              // prevent autonomous service of a later callee yield.
+              popLogicalActivation(activation.thread);
+              claimActivationAmbient(activation.thread);
+              setContinuationOwner(admission, activation.thread);
+            }
+          },
+          onSettled: () => {
+            callee.numWaitingToEnter -= 1;
+          },
+        });
+        return admission;
       };
     case "exit-sync-call":
       return (..._args: unknown[]) => {
@@ -443,11 +518,21 @@ function createTrampolineBody(
         );
         // definitions.py `Task.return_`: the callee may not return while it
         // still holds borrow handles.
-        trapIf(
-          scope!.numBorrows > 0,
-          "borrow handles still remain at the end of the call",
-        );
-        scope!.releaseLenders();
+        try {
+          trapIf(
+            scope!.numBorrows > 0,
+            "borrow handles still remain at the end of the call",
+          );
+          scope!.releaseLenders();
+          scope!.activation?.finish();
+        } catch (e) {
+          scope!.releaseLenders();
+          scope!.activation?.abort();
+          if (scope!.activation !== undefined) {
+            popLogicalActivation(scope!.activation.thread);
+          }
+          throw e;
+        }
       };
 
     // Guest-side resource built-ins; reps and handle indices are i32.
@@ -514,9 +599,10 @@ function createTrampolineBody(
           options: number;
         },
         ctx as AsyncTrampolineContext,
+        declaredInstance(decl, ctx),
       );
     case "task-cancel":
-      return createTaskCancel();
+      return createTaskCancel(declaredInstance(decl, ctx));
     case "backpressure-inc":
       return createBackpressureInc(declaredInstance(decl, ctx));
     case "backpressure-dec":
@@ -552,6 +638,7 @@ function createTrampolineBody(
       return createThreadYield(
         decl as unknown as { cancellable?: boolean },
         ctx.suspensionMode,
+        declaredInstance(decl, ctx),
       );
 
     // --- FACT cross-component calls (see ./fact_calls.ts) -----------------

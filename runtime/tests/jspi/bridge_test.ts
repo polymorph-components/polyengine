@@ -175,33 +175,37 @@ Deno.test("bridge: JSPI-less degradation — plain mode wraps nothing", () => {
 
 Deno.test("bridge: the invariant is checked, not hoped for", () => {
   // plain mode: neither site wrapped.
-  assertModeConsistent("plain", false, false);
+  assertModeConsistent("plain", 1, 0, false);
   // jspi mode: both sites wrapped.
-  assertModeConsistent("jspi", true, true);
+  assertModeConsistent("jspi", 1, 1, true);
   // jspi mode with NO wrapped imports is legal: per-declaration
   // classification (trampolineNeedsSuspension) wraps nothing in a component
   // whose built-ins are all async forms, while the mode can still be jspi
   // via planNeedsSuspension's lift-shape over-approximation.
-  assertModeConsistent("jspi", true, false);
-  // The dangerous mixtures are rejected — fact (c) makes these fatal:
-  // a Suspending import with no promising entry, and any wrapping at all
-  // in plain mode.
+  assertModeConsistent("jspi", 1, 1, false);
+  // A declaration-only component has no entry path from which its wrapped
+  // imports can be reached, so it needs no synthetic promising entry.
+  assertModeConsistent("jspi", 0, 0, true);
+  // Every entry that does exist must be wrapped according to the selected
+  // mode, and imports must never be wrapped in plain mode.
   for (
-    const [mode, e, i] of [
-      ["jspi", false, true],
-      ["plain", true, false],
-      ["plain", false, true],
+    const [mode, constructed, wrapped, imports] of [
+      ["jspi", 1, 0, true],
+      ["jspi", 2, 1, false],
+      ["plain", 1, 1, false],
+      ["plain", 0, 0, true],
     ] as const
   ) {
     let threw = false;
     try {
-      assertModeConsistent(mode, e, i);
+      assertModeConsistent(mode, constructed, wrapped, imports);
     } catch {
       threw = true;
     }
     assert(
       threw,
-      `mixture (${mode}, entries=${e}, imports=${i}) must be rejected`,
+      `mixture (${mode}, constructed=${constructed}, wrapped=${wrapped}, ` +
+        `imports=${imports}) must be rejected`,
     );
   }
 });
@@ -304,6 +308,17 @@ Deno.test("bridge: planNeedsSuspension recognises both sources of blocking", () 
     }),
     false,
     "async-start-call",
+  );
+  // Like async-start-call, enter-sync-call is wrapped when the surrounding
+  // plan already selected JSPI, but it does not itself promote eager FACT
+  // pass-through callees. Admission can only park under runtime contention.
+  assertEq(
+    planNeedsSuspension({
+      canonicalOptions: [],
+      trampolines: [{ kind: "enter-sync-call" }],
+    }),
+    false,
+    "enter-sync-call",
   );
 });
 

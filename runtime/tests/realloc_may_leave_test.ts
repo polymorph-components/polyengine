@@ -15,7 +15,13 @@ import {
   newStats,
   type ResolvedOptions,
 } from "../src/exec/boundary.ts";
-import { ComponentInstanceState, Store } from "../src/task/mod.ts";
+import {
+  ComponentInstanceState,
+  currentTask,
+  currentThread,
+  Store,
+  type Thread,
+} from "../src/task/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
 import { LiftLowerContext, mkCanonicalOptions } from "../src/cabi/mod.ts";
 import { adaptHostFunction } from "../src/exec/host_settlement.ts";
@@ -139,6 +145,35 @@ Deno.test("#147: host-entry param lowering runs realloc inside the may_leave win
     new TextDecoder().decode(new Uint8Array(h.memory.buffer, ptr, len)),
     "hello #147",
   );
+});
+
+Deno.test("realloc has a fresh synchronous task and both context slots", () => {
+  const h = mkHarness();
+  let outer: Thread | undefined;
+  h.duringRealloc = () => {
+    const nested = currentThread<Thread>();
+    assertEq(nested === outer, false);
+    assertEq(currentTask().inst === h.inst, true);
+    assertEq(currentTask().ft.async, false);
+    assertEq(nested.storage, [0, 0]);
+    nested.storage[0] = 99;
+    nested.storage[1] = 100;
+  };
+  const lifted = createLiftedFunction({
+    name: "takes-string",
+    ft: TAKES_STRING,
+    opts: h.mkOpts({ coreType: { params: ["i32", "i32"], results: [] } }),
+    core: () => {
+      outer = currentThread<Thread>();
+      assertEq(outer.storage, [0, 0]);
+      return [];
+    },
+    stats: newStats(),
+  });
+
+  lifted("fresh");
+  assertEq(outer?.storage, [0, 0], "realloc slots do not leak into callee");
+  assertEq([...h.inst.threads].length, 0, "nested realloc task retired");
 });
 
 Deno.test("#147: a host-entry realloc that lowers an import traps", () => {

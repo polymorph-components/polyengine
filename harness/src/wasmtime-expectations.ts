@@ -79,15 +79,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
           }],
         },
         {
-          file: "async/context-in-compositions.json",
-          rows: [{
-            lines: [435, 436, 437],
-            cause:
-              "Error: expected return, got trap: cannot enter component instance 2 — instance poisoned by: Trap: guest trapped: unreachable",
-            status: "failed",
-          }],
-        },
-        {
           file: "async/context-in-resource-drop.json",
           rows: [{
             lines: [325, 326, 327, 328],
@@ -100,15 +91,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
           rows: [{
             lines: [66],
             cause: "Error: no current instance",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/stream-big-read-and-writes.json",
-          rows: [{
-            lines: [43],
-            cause:
-              'Error: expected trap "stream read/write count too large", got "cannot enter component instance 0 — instance poisoned by: RangeError: Invalid array length"',
             status: "failed",
           }],
         },
@@ -437,90 +419,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
     {
       class: "runtime-semantics",
       files: [
-        {
-          file: "async/context-in-compositions.json",
-          rows: [{
-            lines: [155, 434],
-            cause:
-              "Error: expected return, got trap: guest trapped: unreachable",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/error-context.json",
-          rows: [{
-            lines: [86],
-            cause: "AssertionError: store out of bounds",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/futures.json",
-          rows: [{
-            lines: [54, 64],
-            cause:
-              "AssertionError: suspension mode jspi wrapped imports without wrapping any entry (entries=false, imports=true) — a Suspending import reached from a non-promising activation traps unconditionally (jspi pin (c))",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/stackful.json",
-          rows: [{
-            lines: [110, 132],
-            cause:
-              "AssertionError: suspension mode jspi wrapped imports without wrapping any entry (entries=false, imports=true) — a Suspending import reached from a non-promising activation traps unconditionally (jspi pin (c))",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/stream-big-read-and-writes.json",
-          rows: [{
-            lines: [42],
-            cause: "RangeError: Invalid array length",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/streams.json",
-          rows: [{
-            lines: [73, 83],
-            cause:
-              "AssertionError: suspension mode jspi wrapped imports without wrapping any entry (entries=false, imports=true) — a Suspending import reached from a non-promising activation traps unconditionally (jspi pin (c))",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/sync-call-context-slots.json",
-          rows: [{
-            lines: [76, 152],
-            cause:
-              "Error: expected return, got trap: guest trapped: unreachable",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/sync-call-context.json",
-          rows: [{
-            lines: [61, 126, 207, 298, 389, 447, 544],
-            cause:
-              "Error: expected return, got trap: guest trapped: unreachable",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/task-builtins.json",
-          rows: [{
-            lines: [34, 56, 74],
-            cause:
-              "AssertionError: suspension mode jspi wrapped imports without wrapping any entry (entries=false, imports=true) — a Suspending import reached from a non-promising activation traps unconditionally (jspi pin (c))",
-            status: "failed",
-          }, {
-            lines: [201, 466, 723],
-            cause:
-              "Error: expected return, got trap: guest trapped: unreachable",
-            status: "failed",
-          }],
-        },
         {
           file: "import.json",
           rows: [{

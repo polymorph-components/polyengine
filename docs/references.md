@@ -24,6 +24,11 @@ reference, and WAST corpus used by this checkout. Its principal sources are:
 
 Current upstream sources are at
 [WebAssembly/component-model](https://github.com/WebAssembly/component-model).
+The narrow provisional semantics adopted from
+[PR #719](https://github.com/WebAssembly/component-model/pull/719) are fixed to
+head `35e9769957627c2bee5cd445b998b08b3c652c86` and recorded in
+[architecture §1](architecture.md#1-goals); they do not move the submodule pin
+or adopt that PR's structural refactor.
 The [Component Model book](https://component-model.bytecodealliance.org/)
 is introductory documentation, not the semantic tie-breaker.
 Local discrepancies belong in
