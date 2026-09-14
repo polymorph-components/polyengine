@@ -62,7 +62,6 @@ function fixture() {
     syncCallStack,
     factStartScopes: [],
     stats: newStats(),
-    trapState: { pending: undefined },
   } as unknown as TrampolineContext;
   const enter = createTrampoline(
     { kind: "enter-sync-call", index: 0 } as never,

@@ -142,7 +142,6 @@ export class Task {
    * trampoline may lack a mapping; only known types may be compared.
    */
   factResultTypesKnown = false;
-
   /**
    * Host-call lifecycle hooks. `onControlReturn` is deliberately separate
    * from `onResolve`: definitions.py delivers canonical resolution inside
@@ -283,6 +282,19 @@ export class Task {
     thread.index = null;
   }
 
+  /** Exceptional explicit-thread exit. Remove scheduler/table membership
+   * without applying unregisterThread's successful last-thread resolution
+   * check; the original escaping trap remains authoritative. */
+  abortThread(thread: Thread): void {
+    const i = this.threads.indexOf(thread);
+    if (i !== -1) this.threads.splice(i, 1);
+    if (thread.index !== null) {
+      this.inst.threads.remove(thread.index);
+      thread.index = null;
+    }
+    if (thread.waiting()) this.inst.store.stopWaiting(thread);
+  }
+
   /**
    * definitions.py `Task.request_cancellation`. Delivered to a
    * cancellable thread if one exists; otherwise recorded as pending, to be
@@ -315,18 +327,28 @@ export class Task {
     if (excludeImplicit) {
       candidates = candidates.filter((t) => t !== this.implicitThread);
     }
-    // The implicit thread's SuspensionPoints obey the same exclusivity test.
-    if (!excludeImplicit) {
-      const store = this.inst.store as unknown as {
-        waiting: ({ task?: unknown } & Cancellable)[];
-      };
-      for (const w of store.waiting) {
-        if (
-          w.task === this && w.cancellable === true &&
-          !candidates.includes(w)
-        ) {
-          candidates.push(w);
-        }
+    // Explicit-thread SuspensionPoints are independent of the callback lock;
+    // only the implicit thread's point is excluded while another thread holds it.
+    const store = this.inst.store as unknown as {
+      waiting: ({
+        task?: unknown;
+        logicalOwner?: unknown;
+        owner?: unknown;
+      } & Cancellable)[];
+    };
+    for (const w of store.waiting) {
+      // A SuspensionPoint names its canonical recipient as logicalOwner; older
+      // low-level points may only expose physical owner. Plain Thread entries
+      // are their own recipient. Normalize before applying the callback lock so
+      // the implicit thread cannot be filtered above and re-added here merely
+      // because its direct waiting entry has no logicalOwner field.
+      const recipient = w.logicalOwner ?? w.owner ?? w;
+      if (
+        w.task === this && w.cancellable === true &&
+        (!excludeImplicit || recipient !== this.implicitThread) &&
+        !candidates.includes(w)
+      ) {
+        candidates.push(w);
       }
     }
     // Poisoned instances cannot run a cancellation recipient.
@@ -446,6 +468,12 @@ export class SynchronousActivation {
       () => [],
       () => {},
     );
+    // A logical FACT callee has no host-visible completion channel of its own.
+    // Preserve the root call identity captured at entry so a later genuine
+    // park can distinguish an already-published result from a live sync call.
+    // See definitions.py:2186-2194 for the synchronous callee drive.
+    this.task.failureOwner = (parent?.task?.failureOwner ?? parent?.task ??
+      this.task) as Task;
     this.thread = new Thread(this.task, (function* () {})());
     const physical = this.parent === undefined
       ? this.thread

@@ -97,12 +97,57 @@ and their tracking issues are declared in
 to [#372](https://github.com/polymorph-components/polyengine/issues/372)
 (runtime-semantics, diagnostic-mismatch, imported-module, cascade,
 provider-control, exception-handling — plan v0 / diagnostic gaps against
-Wasmtime's own assertions, not the spec corpus above). `deferred-threads`
-skips map to [#12](https://github.com/polymorph-components/polyengine/issues/12).
-A handful of files are excluded outright (unbounded memory stress, GC, or
-Wasmtime-specific validation configuration this translator doesn't share) —
-see `WASMTIME_EXCLUSIONS` for the current list and reasons; the run fails if an
+Wasmtime's own assertions, not the spec corpus above). The supplementary thread
+fixtures now execute rather than being skipped. This does not imply
+unrestricted explicit-thread conformance: valid non-final or derived
+start-function signatures can be rejected by the runtime's nominal `ref.test`
+validator, as documented in `contracts/intrinsics.md`; the current Wasmtime
+fixtures use the supported canonical-final signatures and do not test that
+interface restriction
+([#12](https://github.com/polymorph-components/polyengine/issues/12)).
+A handful of files are excluded outright; see `WASMTIME_EXCLUSIONS` for the
+current list and reasons. In particular, `streams-massive-send.wast` asserts
+Wasmtime's host-defined 128 MiB per-hostcall transfer-fuel policy using an
+exponentially expanded nested-list value. The Component Model specifies no such
+fuel limit, and executing it in this in-process V8 harness can exhaust the
+bounded heap before a catchable result. This exclusion is not a claim that the
+runtime has an equivalent production resource limit. The run fails if an
 exclusion goes stale (the file gone from the manifest).
+
+Two Wasmtime-private controls are treated by purpose rather than name. The
+`context-in-resource-drop.wast` `wasmtime/gc` import is supplied only for that
+file as a real synchronous host call. Wasmtime uses GC to force a deferred
+destructor frame; polyengine eagerly materializes the logical task/thread, so
+the boundary itself exercises context preservation and no JavaScript GC is
+forced. Conversely, `set-max-table-capacity` is not emulated: its leak-detection
+purpose is covered by
+`runtime/tests/wasmtime/cancel_starting_reuse_test.ts`, which performs 1,000
+STARTING-cancel-deliver-drop cycles and asserts bounded handle-slot reuse.
+
+Some exact supplementary trap strings describe the same rejected operation at
+different levels of detail. `runner.ts` records exact-only equivalents for the
+five non-thread `task-return-traps.wast` diagnostic rows. Eleven future-write
+rows remain classified instead: in each named fixture the reader was dropped,
+but Wasmtime retains separate local/transmit completion guards while
+polyengine's reference-shaped `WritableFutureEnd` has one `CopyState.DONE` and
+reports its broader “previous write succeeded or readable end dropped” text.
+That row-specific diagnostic divergence is spec-compatible, but it is not a
+global message equivalence because the runtime text also covers a distinct
+successful-prior-write condition.
+
+At the current pin, the remaining async subset is 13 classified failures and
+zero skips: those eleven diagnostic rows, the unavailable native
+`set-max-table-capacity` provider row, and its one no-current-instance cascade.
+The capacity knob is intentionally not a production capability; the bounded
+reuse test above covers its leak-detection purpose without pretending to
+reproduce Wasmtime's host configuration surface.
+
+The official Deno/Chromium aggregate at the current Component Model pin is
+1,511 commands, 1,506 executed, 1,468 passed, 38 exact xfails, zero
+runtime/capability skips, and five unsupported text directives. Seeded runs
+omit the three-command `async-calls-sync` deterministic-profile fixture, giving
+1,508 commands, 1,503 executed, and 1,465 passed with the same 38 xfails and
+five unsupported directives.
 
 `just test-wasmtime-guests` builds the two upstream async guest binaries this
 WAST corpus doesn't cover as executables — `async_round_trip_stackless` and

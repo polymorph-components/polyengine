@@ -244,7 +244,6 @@ Deno.test("FACT resource transfer validates local source and tags destination", 
     resourceTableInstance: (i: number) => i < 2 ? f.src : f.dst,
     syncCallStack: scopes,
     factStartScopes: [],
-    trapState: { pending: null },
   } as unknown as TrampolineContext;
   for (
     const kind of ["resource-transfer-own", "resource-transfer-borrow"] as const

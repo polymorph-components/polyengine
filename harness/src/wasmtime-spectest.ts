@@ -6,14 +6,18 @@ import {
 
 export interface SpectestProbe {
   readonly imports: HostImports;
-  readonly counters: { readonly drops: number; readonly lastDrop: number };
+  readonly counters: {
+    readonly drops: number;
+    readonly lastDrop: number;
+    readonly forcedHostBoundaries: number;
+  };
 }
 
 /** Port of locked wasmtime crates/wast/src/spectest.rs:90-224.
  * Raw HostImports expose reps but not Wasmtime's `Resource::owned()` bit, so
  * those upstream ownership assertions are not duplicated here. */
 export function wasmtimeSpectest(sourceFile = ""): SpectestProbe {
-  const state = { drops: 0, lastDrop: 0 };
+  const state = { drops: 0, lastDrop: 0, forcedHostBoundaries: 0 };
   const resource1 = hostResourceType({
     name: "host.resource1",
     dtor: (rep) => {
@@ -24,7 +28,7 @@ export function wasmtimeSpectest(sourceFile = ""): SpectestProbe {
   return {
     counters: state,
     imports: {
-      "host-echo-u32": async (v: unknown) => v,
+      "host-echo-u32": (v: unknown) => Promise.resolve(v),
       "host-return-two": () => 2,
       host: {
         "return-three": () => 3,
@@ -68,6 +72,18 @@ export function wasmtimeSpectest(sourceFile = ""): SpectestProbe {
         ),
         "return-hi": () => "hi",
       },
+      ...(sourceFile === "async/context-in-resource-drop.json"
+        ? {
+          // Wasmtime's GC forces a deferred destructor frame. Polyengine has
+          // already materialized that logical Task/Thread; this real host call
+          // preserves the boundary observation without forcing JavaScript GC.
+          wasmtime: {
+            gc: () => {
+              state.forcedHostBoundaries++;
+            },
+          },
+        }
+        : {}),
     },
   };
 }

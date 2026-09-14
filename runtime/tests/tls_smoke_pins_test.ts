@@ -185,7 +185,6 @@ Deno.test("pin: transfer-borrow works inside a FACT [async-start] window", () =>
     resourceToken: (i: number) => (i === 0 ? srcRt : dstRt),
     syncCallStack: [] as SyncCallScope[],
     factStartScopes,
-    trapState: { pending: null },
   } as unknown as TrampolineContext;
 
   const transfer = createTrampoline(

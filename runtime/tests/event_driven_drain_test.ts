@@ -254,6 +254,67 @@ Deno.test({
   },
 });
 
+Deno.test({
+  name:
+    "pending same-instance entry is offered before a perpetual callback yield",
+  ignore: !isSupported(),
+  fn: async () => {
+    const wasm = await instantiateActivation({
+      block: new WebAssembly.Suspending((x: number) => x),
+    });
+    const store = new Store();
+    const inst = new ComponentInstanceState(0, store);
+    const hop = {
+      awaiting: new Promise<void>(() => {}),
+      activePark: null,
+      task: { inst },
+    };
+    store.awaiting.add(hop);
+
+    const run = createLiftedFunction({
+      name: "admit-at-boundary",
+      ft: { params: [{ kind: "u32" }], results: [{ kind: "u32" }] },
+      opts: {
+        stringEncoding: "utf8",
+        memory: null,
+        realloc: null,
+        postReturn: null,
+        callback: null,
+        async: false,
+        cancellable: false,
+        coreType: { params: ["i32"], results: ["i32"] },
+        instance: inst,
+      },
+      core: wasm.other,
+      stats: newStats(),
+      suspensionMode: "jspi",
+    });
+
+    const result = run(42) as Promise<number>;
+    // The old observer waited for a whole drain batch. A ready thread that
+    // perpetually requeues itself could therefore starve this entry forever.
+    const yielder = new YieldingThread();
+    store.startWaiting(yielder);
+    const park = {
+      owner: hop,
+      task: hop.task,
+      ready: () => false,
+      waiting: () => true,
+      resume() {},
+    };
+    store.startWaiting(park);
+
+    assertEquals(await result, 1042);
+    assert(
+      yielder.resumed <= 1,
+      `pending admission was starved for ${yielder.resumed} ordinary turns`,
+    );
+    store.stopWaiting(yielder);
+    store.stopWaiting(park);
+    store.awaiting.delete(hop);
+  },
+});
+
 Deno.test("ordinary service stops when the first tail creates an unqueued hop", async () => {
   const store = new Store();
   let secondRan = false;

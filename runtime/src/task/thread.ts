@@ -10,8 +10,8 @@
 //   thread.storage[2]            storage: [0, 0]   (context.{get,set})
 //   thread.index                 index (inst.threads table slot)
 //
-// Shared-everything thread switching is not implemented (#12); resume drives
-// one generator, while JSPI suspension is represented by the bridge.
+// A generator owns each logical activation; JSPI SuspensionPoints represent
+// parks inside its wasm entry and are linked through `explicitPark`.
 
 import { assert_ } from "../cabi/trap.ts";
 import {
@@ -34,11 +34,20 @@ import {
 
 type ThreadState = "running" | "suspended" | "waiting" | "done";
 
+/** The explicit-resume surface supplied by a JSPI SuspensionPoint. */
+export interface ThreadPark extends SchedulableThread {
+  readonly boundaryReturned?: boolean;
+  explicitResumeLater(): void;
+  explicitlySuspended(): boolean;
+}
+
 export class Thread implements SchedulableThread {
   /** Physical generator activation used for JSPI awaiting/resumption. */
   physicalOwner: Thread = this;
   /** Persistent logical descendants, including while their stack is unpublished. */
   readonly logicalDescendants: Set<Thread> = new Set<Thread>();
+  /** Current wasm-level `thread.suspend*` park, if this activation has one. */
+  activePark: ThreadPark | null = null;
   /** Present when this Thread is driven by an enclosing wasm sync call. */
   logicalActivation?: {
     active: boolean;
@@ -122,9 +131,27 @@ export class Thread implements SchedulableThread {
 
   /** definitions.py `Thread.resume_later`. */
   resumeLater(): void {
-    assert_(this.suspended(), "resume_later on a non-suspended thread");
+    if (this.activePark !== null) {
+      this.activePark.explicitResumeLater();
+      return;
+    }
+    assert_(
+      this.suspended() && this.awaiting === null,
+      "resume_later on a non-suspended thread",
+    );
     this.#startWaiting(() => true);
     this.#store.requestService();
+  }
+
+  /** Canonical suspended state accepted by `thread.*-then-resume`. */
+  explicitlySuspended(): boolean {
+    return this.activePark?.explicitlySuspended() ??
+      (this.suspended() && this.awaiting === null);
+  }
+
+  /** Scheduler object whose readiness represents this logical thread. */
+  schedulable(): SchedulableThread {
+    return this.activePark ?? this;
   }
 
   /** Pending `awaitValue` promise, if this thread is parked on one. */

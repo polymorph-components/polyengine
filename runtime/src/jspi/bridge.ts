@@ -45,18 +45,23 @@ import {
 } from "./mechanics.ts";
 import {
   claimActivationAmbient,
+  componentBoundaryTrapCarrier,
   dbgId,
   maybeCurrentThread,
   physicalOwnerOf,
   releaseActivationAmbient,
+  rethrowComponentBoundaryTrap,
+  takeComponentBoundaryTrap,
   withActivation,
 } from "../task/mod.ts";
 import type {
   Cancelled,
   CurrentThreadLike,
+  RequiredSyncPark,
   SchedulableThread,
   Store,
 } from "../task/mod.ts";
+import type { Thread, ThreadPark } from "../task/thread.ts";
 
 /** Which suspension discipline an instantiation runs under. */
 export type SuspensionMode = "plain" | "jspi";
@@ -110,6 +115,11 @@ export function trampolineNeedsSuspension(
     case "sync-start-call":
     case "waitable-set-wait":
     case "thread-yield":
+    case "thread-suspend":
+    case "thread-suspend-then-resume":
+    case "thread-yield-then-resume":
+    case "thread-suspend-then-promote":
+    case "thread-yield-then-promote":
       return true;
     case "subtask-cancel":
     case "stream-cancel-read":
@@ -265,9 +275,12 @@ export function setContinuationOwner(
   continuationOwners.set(promise, owner);
 }
 
-/** Queue attribution before the wrapped Promise settles. Engine continuation
- * timing need not make the sentinel and wasm chunk adjacent; instance-scoped
- * ambient lookup also filters sibling-instance claims. */
+/** Queue attribution before the wrapped Promise settles. Rejections are first
+ * replaced by a native-Wasm trap tied to the captured continuation owner: JSPI
+ * preserves that RuntimeError's identity and resumes Wasm with an uncatchable
+ * trap, whereas rejecting with an ordinary JS value is caught by `catch_all`.
+ * Engine continuation timing need not make the sentinel and wasm chunk
+ * adjacent; instance-scoped ambient lookup also filters sibling claims. */
 function attributeContinuation<T>(
   owner: unknown,
   r: PromiseLike<T>,
@@ -281,7 +294,16 @@ function attributeContinuation<T>(
       return v;
     },
     (e) => {
-      sentinelFor(continuationOwners.get(r as object) ?? owner);
+      const continuation = continuationOwners.get(r as object) ?? owner;
+      sentinelFor(continuation);
+      if (continuation !== null && continuation !== undefined) {
+        const carried = takeComponentBoundaryTrap(e);
+        if (carried !== undefined) rethrowComponentBoundaryTrap(carried);
+        throw componentBoundaryTrapCarrier(
+          e,
+          continuation as CurrentThreadLike,
+        );
+      }
       throw e;
     },
   );
@@ -403,7 +425,8 @@ const SP_TRACE = (() => {
   }
 })();
 
-export class SuspensionPoint<T = unknown> implements SchedulableThread {
+export class SuspensionPoint<T = unknown>
+  implements SchedulableThread, ThreadPark {
   readonly promise: Promise<T>;
   #settle!: (v: T) => void;
   #fail!: (e: unknown) => void;
@@ -429,6 +452,15 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
   readonly owner: any;
   /** Canonical task/context identity active inside the physical continuation. */
   readonly logicalOwner: CurrentThreadLike | null;
+  /** Whether this is spec-level blocking or JS host latency accommodated by
+   * the JSPI embedding. Only the former participates in sync-callee driving. */
+  readonly blockReason:
+    | "component-model"
+    | "host-import"
+    | "mandatory-continuation";
+  readonly #syncBlockWhen?: () => boolean;
+  readonly #explicitSuspend: boolean;
+  #explicitReady = false;
 
   constructor(
     store: Store,
@@ -470,10 +502,22 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
      *   * it must not resume/abandon this or any other suspension point.
      */
     private readonly onSettled?: () => void,
+    blockReason:
+      | "component-model"
+      | "host-import"
+      | "mandatory-continuation" = "component-model",
+    explicitSuspend = false,
+    syncBlockWhen?: () => boolean,
   ) {
     this.#store = store;
     this.owner = owner ?? maybeCurrentThread() ?? task?.implicitThread ?? null;
     this.logicalOwner = logicalOwner ?? this.owner;
+    this.blockReason = blockReason;
+    this.#syncBlockWhen = syncBlockWhen;
+    this.#explicitSuspend = explicitSuspend;
+    if (this.logicalOwner !== null && "activePark" in this.logicalOwner) {
+      (this.logicalOwner as Thread).activePark = this;
+    }
     if (SP_TRACE) {
       console.error(
         `[sp] mint ${dbgId(this)} owner=${dbgId(this.owner)} task=${
@@ -495,19 +539,47 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
 
   ready(): boolean {
     if (this.#done) return false;
+    if (this.#explicitReady) return true;
     if (this.readyFunc !== null && this.readyFunc()) return true;
     // definitions.py `ready_or_cancelled` (`Thread.wait_until` line 369),
     // ported to task/thread.ts:waitUntil: a cancel that arrived while this
     // task was not cancellable (parked as `pending-cancel`) makes the block
     // point ready on its own, otherwise the wakeup is lost until some
     // unrelated event happens to satisfy `readyFunc` — possibly never.
-    // A `SuspensionPoint` is a frame OF the implicit thread, so the "and the
-    // lock is free" conjunct (`Task.implicitThreadCancellable`, the live
-    // `lock_available` of the reference's callback loop) applies here
-    // unconditionally — the same exclusion `Task.requestCancellation` puts on
-    // its scan of `store.waiting`.
-    return this.cancellable && this.#taskHasPendingCancel() &&
-      this.task.implicitThreadCancellable() === true;
+    // Only the implicit callback thread is gated by callback exclusivity.
+    // Explicit sibling threads remain cancellation candidates independently.
+    const lockAvailable = this.logicalOwner === this.task?.implicitThread
+      ? this.task.implicitThreadCancellable() === true
+      : true;
+    return this.cancellable && this.#taskHasPendingCancel() && lockAvailable;
+  }
+
+  explicitlySuspended(): boolean {
+    return this.#explicitSuspend && !this.#explicitReady && !this.#done;
+  }
+
+  refreshSyncRequirement(): void {
+    if (!this.boundaryReturned || !this.waiting()) return;
+    const logicalTask = this.logicalOwner?.task;
+    const root = logicalTask?.failureOwner;
+    const rootLive = root?.inst?.activeCalls instanceof Set
+      ? root.inst.activeCalls.has(root)
+      : true;
+    const semanticBlock = this.blockReason === "component-model" ||
+      (this.blockReason === "mandatory-continuation" &&
+        this.#syncBlockWhen?.() === true);
+    if (semanticBlock && logicalTask?.ft?.async === false && rootLive) {
+      this.#store.requireSyncProgress(this as unknown as RequiredSyncPark);
+    }
+  }
+
+  explicitResumeLater(): void {
+    assert_(
+      this.explicitlySuspended(),
+      "resume_later on a non-suspended thread",
+    );
+    this.#explicitReady = true;
+    this.#store.requestService();
   }
 
   /**
@@ -642,6 +714,13 @@ export class SuspensionPoint<T = unknown> implements SchedulableThread {
   #finish(): void {
     if (this.#finished) return;
     this.#finished = true;
+    if (
+      this.logicalOwner !== null && "activePark" in this.logicalOwner &&
+      (this.logicalOwner as Thread).activePark === this
+    ) {
+      (this.logicalOwner as Thread).activePark = null;
+    }
+    this.#store.finishSyncProgress(this as unknown as RequiredSyncPark);
     if (this.onSettled === undefined) return;
     try {
       this.onSettled();
@@ -677,6 +756,16 @@ export function blockCurrentActivation<T>(input: {
    * settle paths that never call `produce` (issue #102).
    */
   onSettled?: () => void;
+  /** Host Promise latency is an embedding wait, not Component Model blocking. */
+  blockReason?:
+    | "component-model"
+    | "host-import"
+    | "mandatory-continuation";
+  /** A mandatory continuation can become a genuine CM wait after its named
+   * dependency reaches a canonical return/park boundary. */
+  syncBlockWhen?: () => boolean;
+  /** This park is the resumable state of a `thread.suspend*` operation. */
+  explicitSuspend?: boolean;
 }): Promise<T> {
   // GATE LIFETIME: pristine reference semantics (definitions.py
   // `block_internal` line 378 does NOT touch `inst.exclusive_thread`). A
@@ -715,9 +804,18 @@ export function blockCurrentActivation<T>(input: {
     owner,
     logicalOwner,
     input.onSettled,
+    input.blockReason,
+    input.explicitSuspend,
+    input.syncBlockWhen,
   );
   Promise.resolve().then(() => {
     point.boundaryReturned = true;
+    // CONTRACT: a sync-typed logical `canon_lift` must run the callee
+    // instance's ready threads and trap if none can progress
+    // (definitions.py:2186-2194). Capture the actual logical activation at
+    // park construction; outer-driver idle policy and unrelated host retention
+    // are not semantic evidence for this decision.
+    point.refreshSyncRequirement();
     if (
       point.waiting() && owner?.awaiting !== null &&
       owner?.awaiting !== undefined
@@ -728,7 +826,6 @@ export function blockCurrentActivation<T>(input: {
     // an engine-only entry hop. Same-instance admission observes completed
     // scheduler state changes, not coalesced requests, so publish this park
     // transition before asking the coordinator to service newly exposed work.
-    input.store.noteServiceProgress();
     input.store.requestService();
   });
   return point.promise;

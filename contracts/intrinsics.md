@@ -19,11 +19,12 @@ semantics remain governed by the pinned spec and `definitions.py`, subject to
    [architecture §5](../docs/architecture.md#5-the-jspi-frame-rule-load-bearing-constraint).
 2. **Trap and capability failures differ.** Guest violations raise `Trap`.
    Unsupported operations raise capability errors and must not satisfy
-   conformance trap assertions. Component Model traps must be uncatchable, but
-   this runtime's JS exceptions do not fully provide that guarantee: a guest
-   `try_table catch_all` can catch a host trap. Adapter exception barriers
-   preserve the original diagnostic through `HostTrapState`; they do not
-   eliminate the limitation.
+   conformance trap assertions. Guest-facing trampoline failures cross Wasm as
+   native traps so `try_table catch_all` cannot intercept them; the runtime
+   binds each carrier identity to its semantic cause and originating physical
+   and logical activations, preserving both through nested barriers before
+   restoring the cause at the component boundary. Raw core-Wasm exceptions
+   escaping a canonical lift likewise become Component Model traps.
 3. **Instance invariants are runtime obligations.** JSPI does not enforce
    `may_leave`, borrow scopes, or task exclusivity. Reentrance into a live
    instance is valid. Entry refusal is the runtime's per-instance poisoning
@@ -82,15 +83,35 @@ directly. `modules[].intrinsics` records import names and resolved categories.
 
 Implemented groups are host import lowering; resource new/rep/drop and transfer;
 transcoding; backpressure; task return/cancel; waitable sets and join; subtask
-drop/cancel; stream/future operations; error contexts; context get/set; and
-thread yield. Other explicit thread builtins are representable in the plan but
-unsupported by the runtime.
+drop/cancel; stream/future operations; error contexts; context get/set; and the
+explicit-thread family: `thread.index`, `thread.new-indirect`,
+`thread.resume-later`, `thread.suspend`, `thread.yield`, and the
+`suspend`/`yield`-then-`resume`/`promote` forms. Explicit threads use the same
+task scheduler and JSPI activation bridge as the implicit thread. Publishing a
+task result does not destroy its remaining explicit threads; the worker owns
+host-call teardown after result delivery.
+
+`thread.new-indirect` currently accepts the canonical final `(i32) -> ()` and
+`(i64) -> ()` start-function types. Its native `ref.test` validator rejects
+some functions whose valid non-final/derived type is structurally equivalent
+but has a different nominal reference identity. This is a runtime interface
+capability restriction, not a Component Model validation rule and not a claim
+that such guests are invalid. The JavaScript WebAssembly API exposes neither
+function-signature reflection nor the reference-type relation needed to decide
+the general case without calling the function (which `thread.new-indirect`
+must not do during validation); native Wasmtime has a similar current
+restriction but is corroborating evidence only. Full support requires
+translator-supplied core-function metadata or table instrumentation/type
+normalization and remains tracked by
+[#12](https://github.com/polymorph-components/polyengine/issues/12).
 
 Trampolines are materialized on first reference during instantiation.
 Unsupported referenced kinds fail then with a capability diagnostic; unused
 entries do not prevent instantiation. A supported blocking operation may still
-require JSPI at call time. The runtime's `createTrampoline` switch is the
-current implementation inventory; [plan-format.md](plan-format.md) defines the
+require JSPI at call time. The inventory above is the explicit supported
+surface; it is not a claim of unrestricted thread conformance because of the
+`thread.new-indirect` type restriction. The runtime's `createTrampoline` switch
+is the implementation inventory; [plan-format.md](plan-format.md) defines the
 wire representation.
 
 ## Manifest

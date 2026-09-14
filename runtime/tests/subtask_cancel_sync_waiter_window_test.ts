@@ -338,13 +338,13 @@ Deno.test(
 
 Deno.test(
   "#345 FACT/JSPI: unresolved async cancel returns BLOCKED, then join/poll resolves",
-  () => {
+  async () => {
     const f = startFactSubtask();
     f.st.getPendingEvent();
     const lender = { numLends: 0 };
     f.st.addLender(lender);
     assertEq(
-      f.asGuest(() =>
+      await f.asGuest(() =>
         createSubtaskCancel({ async: true }, f.caller, "jspi")(f.i)
       ),
       BLOCKED,

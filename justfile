@@ -195,6 +195,7 @@ shell-lane lane *args: shim corpus
 # Bun is findings-only (required: false); infrastructure failures still gate.
 # Pinned shell lanes: SpiderMonkey/Node on both Linux arches, JSC on x64 only, plus Bun.
 shells:
+    deno test --allow-read=. --allow-run tools/shell/run-lane_test.ts
     just shell-lane sm-pinned
     @if [ "$(uname -m)" = "x86_64" ]; then just shell-lane jsc-pinned; else echo "jsc-pinned: skipped (no arm64 channel)"; fi
     just shell-lane node-pinned

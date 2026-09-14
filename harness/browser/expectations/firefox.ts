@@ -20,11 +20,11 @@ export const firefox: LaneExpectation = {
   // does not gate on them (`required: false`).
   totals: {
     commands: 1511,
-    executed: 1411,
-    passed: 1286,
+    executed: 1506,
+    passed: 1468,
     failed: 0,
-    xfail: 125,
-    pendingRuntime: 95,
+    xfail: 38,
+    pendingRuntime: 0,
     pendingCapability: 0,
     unsupportedDirective: 5,
   },

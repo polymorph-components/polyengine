@@ -5,6 +5,9 @@ import {
   WASMTIME_SKIP_EXPECTATIONS,
 } from "../src/wasmtime-expectations.ts";
 import { classify } from "../src/wasmtime-classifier.ts";
+import type { WastJson } from "../src/schema.ts";
+import { runWastJson } from "../src/runner.ts";
+import { RuntimeExecutor } from "../src/runtime-executor.ts";
 
 function assert(condition: boolean, message: string): void {
   if (!condition) throw new Error(message);
@@ -74,6 +77,10 @@ Deno.test("classifier rejects stale passes and unexpected skips", () => {
 
 Deno.test("skip expectations require exact line and full cause", () => {
   const entry = WASMTIME_SKIP_EXPECTATIONS[0];
+  if (entry === undefined) {
+    assert(WASMTIME_SKIP_EXPECTATIONS.length === 0, "unexpected skip entry");
+    return;
+  }
   const base = {
     type: "module",
     status: "skipped" as const,
@@ -141,5 +148,72 @@ Deno.test("spectest resource probe preserves rep and destructor counters", async
   assert(
     probe.counters.drops === 1 && probe.counters.lastDrop === 7,
     "resource counters lost",
+  );
+});
+
+Deno.test("spectest exposes gc only for the deferred-frame boundary fixture", async () => {
+  const { wasmtimeSpectest } = await import("../src/wasmtime-spectest.ts");
+  const ordinary = wasmtimeSpectest("async/futures.json");
+  assert(
+    !("wasmtime" in ordinary.imports),
+    "wasmtime provider leaked into an unrelated fixture",
+  );
+
+  const probe = wasmtimeSpectest("async/context-in-resource-drop.json");
+  const wasmtime = probe.imports.wasmtime as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
+  assert(typeof wasmtime.gc === "function", "gc provider is absent");
+  assert(
+    probe.counters.forcedHostBoundaries === 0,
+    "counter did not start at zero",
+  );
+  wasmtime.gc();
+  assert(
+    probe.counters.forcedHostBoundaries === 1,
+    "gc provider invocation was not observed",
+  );
+  assert(
+    !("set-max-table-capacity" in wasmtime),
+    "native table-capacity control must not be emulated",
+  );
+});
+
+Deno.test("context-in-resource-drop crosses the scoped gc host boundary", async () => {
+  const { wasmtimeSpectest } = await import("../src/wasmtime-spectest.ts");
+  const root = new URL("../../", import.meta.url);
+  const generated = new URL(
+    "harness/generated-wasmtime/async/",
+    root,
+  );
+  const doc = JSON.parse(
+    await Deno.readTextFile(
+      new URL("context-in-resource-drop.json", generated),
+    ),
+  ) as WastJson;
+  const probe = wasmtimeSpectest("async/context-in-resource-drop.json");
+  const executor = await RuntimeExecutor.create(
+    await Deno.readFile(
+      new URL(
+        "target/wasm32-unknown-unknown/release/translator_shim.wasm",
+        root,
+      ),
+    ),
+    probe.imports,
+  );
+  const result = await runWastJson(
+    doc,
+    (name) => Deno.readFile(new URL(name, generated)),
+    executor,
+  );
+
+  assert(
+    result.results.every((row) => row.status === "passed"),
+    `fixture did not pass: ${JSON.stringify(result.results)}`,
+  );
+  assert(
+    probe.counters.forcedHostBoundaries === 4,
+    `expected four destructor host-boundary calls, got ${probe.counters.forcedHostBoundaries}`,
   );
 });

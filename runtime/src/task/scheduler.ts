@@ -300,6 +300,9 @@ export function chooseCandidate<T>(candidates: readonly T[]): T {
   return candidates[nextRandom() % candidates.length];
 }
 
+/** Deterministic direct-switch selection. Unlike ordinary ready scheduling,
+ * `thread.*-then-resume` names its target and is not a policy choice. */
+
 // ---------------------------------------------------------------------------
 // Current-thread context (definitions.py `current_thread`)
 // ---------------------------------------------------------------------------
@@ -331,6 +334,120 @@ export interface CurrentThreadLike {
     abort(): void;
     parent?: CurrentThreadLike;
   };
+}
+
+// A native core-Wasm trap crosses an imported-JS frame without becoming a
+// catchable Wasm exception. Component traps cannot be represented by throwing a
+// JS value: `try_table catch_all` catches those. Keep the semantic cause on the
+// physical activation and use this function only as the uncatchable carrier.
+const NATIVE_COMPONENT_TRAP = (() => {
+  const bytes = new Uint8Array([
+    0x00,
+    0x61,
+    0x73,
+    0x6d,
+    0x01,
+    0x00,
+    0x00,
+    0x00,
+    0x01,
+    0x04,
+    0x01,
+    0x60,
+    0x00,
+    0x00,
+    0x03,
+    0x02,
+    0x01,
+    0x00,
+    0x07,
+    0x05,
+    0x01,
+    0x01,
+    0x66,
+    0x00,
+    0x00,
+    0x0a,
+    0x05,
+    0x01,
+    0x03,
+    0x00,
+    0x00,
+    0x0b,
+  ]);
+  return new WebAssembly.Instance(new WebAssembly.Module(bytes)).exports
+    .f as () => never;
+})();
+export interface ComponentTrapRecord {
+  cause: unknown;
+  owner: object;
+  logicalOwner?: CurrentThreadLike;
+}
+const componentTrapCarriers = new WeakMap<object, ComponentTrapRecord>();
+
+/** Raise a Component Model trap through guest Wasm without exposing a
+ * catchable JS exception. `fallbackOwner` attributes core start-function traps
+ * without publishing a fake currentTask(). */
+export function raiseComponentBoundaryTrap(
+  cause: unknown,
+  fallbackOwner?: object,
+): never {
+  const current = maybeCurrentThread();
+  const origin = current ?? fallbackOwner;
+  if (origin === undefined) throw cause;
+  throw componentBoundaryTrapCarrier(cause, origin);
+}
+
+/** Re-emit an attributed cause without consulting the current ambient. */
+export function rethrowComponentBoundaryTrap(
+  record: ComponentTrapRecord,
+): never {
+  throw componentBoundaryTrapCarrierForRecord(record);
+}
+
+/** Construct the native trap carrier when the semantic decision is made by a
+ * scheduler turn rather than on the guest's live JS stack. */
+export function componentBoundaryTrapCarrier(
+  cause: unknown,
+  current: object,
+): unknown {
+  const logicalOwner = "storage" in current && "task" in current
+    ? current as CurrentThreadLike
+    : undefined;
+  const owner = logicalOwner === undefined
+    ? current
+    : physicalOwnerOf(logicalOwner);
+  return componentBoundaryTrapCarrierForRecord({ cause, owner, logicalOwner });
+}
+
+function componentBoundaryTrapCarrierForRecord(
+  record: ComponentTrapRecord,
+): unknown {
+  try {
+    NATIVE_COMPONENT_TRAP();
+  } catch (carrier) {
+    if (typeof carrier === "object" && carrier !== null) {
+      componentTrapCarriers.set(carrier, record);
+    }
+    return carrier;
+  }
+  throw new Error("native component trap unexpectedly returned");
+}
+
+/** Consume only an exact carrier identity. There is intentionally no
+ * owner-based fallback: a caught/abandoned carrier must not relabel a later,
+ * unrelated RuntimeError on the same activation. */
+export function takeComponentBoundaryTrap(
+  carrier?: unknown,
+): ComponentTrapRecord | undefined {
+  if (typeof carrier === "object" && carrier !== null) {
+    const exact = componentTrapCarriers.get(carrier);
+    if (exact !== undefined) {
+      componentTrapCarriers.delete(carrier);
+      return exact;
+    }
+  }
+  return undefined;
 }
 
 export function pushCurrentThread(t: CurrentThreadLike): void {
@@ -612,6 +729,28 @@ export function currentThreadForInstance<T = CurrentThreadLike>(
   return currentThread<T>();
 }
 
+/** Current activation for a declaration-owned instance. Unlike the generic
+ * fallback, this refuses a stale sibling claim from another instance. */
+export function currentThreadExactlyForInstance<T = CurrentThreadLike>(
+  inst: unknown,
+): T {
+  const t = resolveAmbientForInstance(inst);
+  if (t === undefined) {
+    throw new PendingCapability(
+      "task-scoped canonical built-in has no current thread for its declared instance",
+    );
+  }
+  return t as T;
+}
+
+/** Exact logical current thread for task-scoped built-ins. Synchronous nested
+ * activations in the same instance must retain their own task identity. */
+export function currentTaskThreadForInstance<T = CurrentThreadLike>(
+  inst: unknown,
+): T {
+  return currentThreadExactlyForInstance<T>(inst);
+}
+
 function resolveAmbientForInstance(
   inst: unknown,
 ): CurrentThreadLike | undefined {
@@ -662,6 +801,18 @@ export interface SchedulableThread {
   resume(cancelled?: Cancelled): void;
   // deno-lint-ignore no-explicit-any
   task: any;
+  /** Refresh a dynamic synchronous-lift obligation at a safe service boundary. */
+  refreshSyncRequirement?(): void;
+}
+
+/** A genuine Component Model park reached by a synchronous logical callee.
+ * The host driver must apply definitions.py's instance-local sync lift loop,
+ * rather than the outer export's async idle policy. */
+export interface RequiredSyncPark extends SchedulableThread {
+  abandon(reason: unknown): void;
+  waiting(): boolean;
+  readonly logicalOwner: CurrentThreadLike;
+  readonly owner: CurrentThreadLike;
 }
 
 /** A scheduler entry observed a failure from a specific task. The envelope is
@@ -715,6 +866,26 @@ function originatedFailure(
 export class Store {
   readonly waiting: SchedulableThread[] = [];
 
+  /** Active sync-callee parks, in registration order. These are deliberately
+   * instance-local obligations, not global liveness/deadlock evidence. */
+  readonly requiredSyncParks: RequiredSyncPark[] = [];
+
+  refreshSyncRequirements(): void {
+    for (const waiting of this.waiting) waiting.refreshSyncRequirement?.();
+  }
+
+  requireSyncProgress(point: RequiredSyncPark): void {
+    if (!this.requiredSyncParks.includes(point)) {
+      this.requiredSyncParks.push(point);
+      this.requestService();
+    }
+  }
+
+  finishSyncProgress(point: RequiredSyncPark): void {
+    const i = this.requiredSyncParks.indexOf(point);
+    if (i !== -1) this.requiredSyncParks.splice(i, 1);
+  }
+
   /**
    * Host-import promises this store is waiting on. Non-empty means progress
    * is possible but only after a microtask turn — see `drive` in
@@ -732,32 +903,9 @@ export class Store {
   /** Installed by exec/boundary.ts. Scheduler transitions only announce that
    * work may now be runnable; one store coordinator owns asynchronous drain. */
   serviceRequested: (() => void) | null = null;
-  #serviceProgressRevision = 0;
-  #serviceProgressObservers = new Set<() => void>();
 
   requestService(): void {
     this.serviceRequested?.();
-  }
-
-  /** Record completed scheduler state change separately from a request to run
-   * the coordinator. Admission waiters use this generation so a coalesced
-   * request cannot wake them before the corresponding tail has executed. */
-  noteServiceProgress(): void {
-    this.#serviceProgressRevision++;
-    const observers = [...this.#serviceProgressObservers];
-    this.#serviceProgressObservers.clear();
-    for (const resolve of observers) resolve();
-  }
-
-  serviceProgressRevision(): number {
-    return this.#serviceProgressRevision;
-  }
-
-  waitForServiceProgress(after: number): Promise<void> {
-    if (this.#serviceProgressRevision !== after) return Promise.resolve();
-    return new Promise((resolve) =>
-      this.#serviceProgressObservers.add(resolve)
-    );
   }
 
   /**
@@ -901,9 +1049,13 @@ export class Store {
    * this step form so it can revalidate entry-hop permission after each guest
    * activation.
    */
-  serviceSettledStep(): boolean {
+  serviceSettledStepFor(inst?: unknown): boolean {
     while (this.settled.length > 0) {
-      const s = this.settled.shift()!;
+      const index = inst === undefined
+        ? 0
+        : this.settled.findIndex((s) => s.t?.task?.inst === inst);
+      if (index === -1) return false;
+      const [s] = this.settled.splice(index, 1);
       // Another driver already resumed this thread.
       if (!this.awaiting.has(s.t)) continue;
       const t = s.t as {
@@ -925,13 +1077,16 @@ export class Store {
         throw originatedFailure(origin, e);
       } finally {
         // The awaiting identity may have been removed, re-parked, or retired.
-        // Notify state observers after that transition, not when service was
-        // merely requested.
-        this.noteServiceProgress();
+        // The coordinator rechecks admission and sync obligations immediately
+        // after this complete canonical step.
       }
       return true;
     }
     return false;
+  }
+
+  serviceSettledStep(): boolean {
+    return this.serviceSettledStepFor();
   }
 
   /** Explicit callers that need all currently queued tails drain stepwise. */
@@ -988,12 +1143,12 @@ export class Store {
    * when a pending resumption or queued tail must be serviced first.
    */
   tick(): boolean {
-    // Let this store's settled suspensions reach their engine continuations
-    // before scheduling another thread.
-    if (this.pendingResumptions.size > 0) return false;
-    // Finish queued bookkeeping before observing readiness.
-    if (this.hasServiceableSettled()) return false;
     const candidates = this.readyCandidates();
+    // A direct thread switch is a canonical transfer, not an ordinary
+    // scheduling point. Its named target runs before unrelated settled tails
+    // or engine-hop claims can consume the scheduler turn.
+    if (this.pendingResumptions.size > 0) return false;
+    if (this.hasServiceableSettled()) return false;
     if (candidates.length === 0) return false;
     const thread = chooseCandidate(candidates);
     const inst = thread.task.inst;
@@ -1011,6 +1166,29 @@ export class Store {
       // A store-wide tick may run a sibling. Consume the fault only when that
       // task has an owning completion channel; nested FACT calls deliberately
       // lack one and retain ordinary propagation to their caller.
+      throw originatedFailure(origin, e);
+    }
+    return true;
+  }
+
+  /** One definitions.py `canon_lift` sync-loop choice, restricted to the
+   * callee instance. The embedding driver separately admits engine-only tails. */
+  tickForInstance(inst: unknown): boolean {
+    const candidates = this.readyCandidates().filter((t) =>
+      t.task?.inst === inst
+    );
+    if (candidates.length === 0) return false;
+    const thread = chooseCandidate(candidates);
+    const origin = thread.task?.failureOwner ?? thread.task;
+    try {
+      thread.resume();
+    } catch (e) {
+      if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
+        notifyInstancePoisoned(
+          thread.task.inst as { handles: Iterable<unknown> },
+          e,
+        );
+      }
       throw originatedFailure(origin, e);
     }
     return true;

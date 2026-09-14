@@ -51,10 +51,6 @@ export const WASMTIME_FAILURE_CLASSES: Readonly<
     reason: "command has no current instance after its owning setup failure",
     issue: "https://github.com/polymorph-components/polyengine/issues/372",
   },
-  "deferred-threads": {
-    reason: "deferred thread.new-indirect support is not implemented",
-    issue: "https://github.com/polymorph-components/polyengine/issues/12",
-  },
 };
 
 export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
@@ -78,52 +74,11 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
             status: "failed",
           }],
         },
-        {
-          file: "async/context-in-resource-drop.json",
-          rows: [{
-            lines: [325, 326, 327, 328],
-            cause: "Error: no current instance",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/join-during-sync-read.json",
-          rows: [{
-            lines: [66],
-            cause: "Error: no current instance",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/task-deletion.json",
-          rows: [{
-            lines: [323, 324, 325, 326, 327, 328, 329, 330, 331],
-            cause: "Error: no current instance",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/task-return-traps.json",
-          rows: [{
-            lines: [56, 91],
-            cause: "Error: no current instance",
-            status: "failed",
-          }],
-        },
       ],
     },
     {
       class: "diagnostic-mismatch",
       files: [
-        {
-          file: "async/future-read.json",
-          rows: [{
-            lines: [65],
-            cause:
-              'Error: expected trap "wasm trap: cannot block a synchronous task before returning", got "wasm trap: deadlock detected: event loop cannot make further progress (export \'run\': no runnable work or host call is outstanding)"',
-            status: "failed",
-          }],
-        },
         {
           file: "async/stream-cancel-finished-op.json",
           rows: [{
@@ -134,39 +89,11 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
           }],
         },
         {
-          file: "async/task-return-traps.json",
-          rows: [{
-            lines: [19, 104],
-            cause:
-              'Error: expected trap "async-lifted export failed to produce a result", got "task finished all threads without resolving"',
-            status: "failed",
-          }, {
-            lines: [118],
-            cause:
-              'Error: expected trap "invalid `task.return` signature and/or options for current task", got "task.return with a result type that is not the task\'s result type"',
-            status: "failed",
-          }, {
-            lines: [135, 150],
-            cause:
-              'Error: expected trap "invalid `task.return` signature and/or options for current task", got "task.return with canonical options differing from the task\'s"',
-            status: "failed",
-          }],
-        },
-        {
           file: "async/trap-if-done.json",
           rows: [{
             lines: [599, 601, 603, 605, 608, 610, 612, 614],
             cause:
               'Error: expected trap "cannot write after being notified that the readable end dropped", got "cannot write to future after previous write succeeded or readable end dropped"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "exceptions.json",
-          rows: [{
-            lines: [50, 127, 161, 237],
-            cause:
-              'Error: expected trap "uncaught exception propagated out of component", got "guest trapped: unreachable"',
             status: "failed",
           }],
         },
@@ -194,24 +121,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
             lines: [378],
             cause:
               'Error: expected trap "discriminant 2 out of range [0..2)", got "invalid variant discriminant"',
-            status: "failed",
-          }],
-        },
-      ],
-    },
-    {
-      class: "exception-handling",
-      files: [
-        {
-          file: "async/exceptions.json",
-          rows: [{
-            lines: [68, 70, 144, 146, 216],
-            cause: "[object WebAssembly.Exception]",
-            status: "failed",
-          }, {
-            lines: [218],
-            cause:
-              'Error: expected trap "thrown Wasm exception", got "guest trapped: unreachable"',
             status: "failed",
           }],
         },
@@ -267,15 +176,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
             lines: [9],
             cause:
               "PlanError: host import 'wasmtime/set-max-table-capacity' not provided (no key 'wasmtime' in imports)",
-            status: "failed",
-          }],
-        },
-        {
-          file: "async/context-in-resource-drop.json",
-          rows: [{
-            lines: [248],
-            cause:
-              "PlanError: host import 'wasmtime/gc' not provided (no key 'wasmtime' in imports)",
             status: "failed",
           }],
         },
@@ -420,22 +320,7 @@ export const WASMTIME_EXPECTATIONS: readonly WasmtimeExpectation[] =
     )
   );
 
-export const WASMTIME_SKIP_EXPECTATIONS: readonly WasmtimeExpectation[] = [
-  "async/join-during-sync-read.json:8",
-  "async/task-deletion.json:11",
-  "async/task-return-traps.json:21",
-  "async/task-return-traps.json:58",
-].map((key) => {
-  const split = key.lastIndexOf(":");
-  return {
-    file: key.slice(0, split),
-    line: Number(key.slice(split + 1)),
-    status: "skipped" as const,
-    class: "deferred-threads",
-    cause:
-      "pending component runtime: pending-capability: instantiate: component requires host trampoline 'thread-new-indirect' — needs the \"task-core\" capability, not yet implemented in the current executor (contracts/intrinsics.md §B)",
-  };
-});
+export const WASMTIME_SKIP_EXPECTATIONS: readonly WasmtimeExpectation[] = [];
 
 export const WASMTIME_EXCLUSIONS: Readonly<Record<string, string>> = {
   "big-strings.json":

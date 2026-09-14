@@ -55,6 +55,21 @@ const engine = detectEngine();
 // before importing this bundle.
 declare function print(s: string): void;
 
+// A conformance shell invocation is a bounded worker. Explicit guest threads
+// may intentionally remain live after the corpus result is complete, so the
+// embedding preamble/shell must end this dedicated process rather than asking
+// the runtime scheduler to discard valid background work. Node/Bun install an
+// async-safe implementation in host-node.mjs; bare shells provide synchronous
+// print() and quit().
+async function endHostProcess(): Promise<never> {
+  if (typeof g.__polyengineHostEnd === "function") {
+    await g.__polyengineHostEnd();
+  } else if (typeof g.quit === "function") {
+    g.quit(0);
+  }
+  throw new Error("shell host did not terminate after the complete result");
+}
+
 function readBinary(path: string): Uint8Array {
   const abs = path.startsWith("/") ? path : `${repoRoot}/${path}`;
   switch (engine) {
@@ -88,7 +103,9 @@ function engineVersionString(): string | null {
     return `node ${g.process.version} (v8 ${g.process.versions.v8})`;
   }
   if (engine === "bun") {
-    return `bun ${g.process.versions.bun} (webkit ${g.process.versions.webkit ?? "?"})`;
+    return `bun ${g.process.versions.bun} (webkit ${
+      g.process.versions.webkit ?? "?"
+    })`;
   }
   return typeof g.version === "function" ? g.version() : null;
 }
@@ -213,7 +230,9 @@ async function probeCapabilities(): Promise<CapabilityMatrix> {
     jspi,
     multiMemory: probeValidate("tools/shell/probes/multi-memory.wasm"),
     wasmGc: probeValidate("tools/shell/probes/wasm-gc.wasm"),
-    exceptionHandling: probeValidate("tools/shell/probes/exception-handling.wasm"),
+    exceptionHandling: probeValidate(
+      "tools/shell/probes/exception-handling.wasm",
+    ),
     memory64: probeValidate("tools/shell/probes/memory64.wasm"),
     tailCalls: probeValidate("tools/shell/probes/tail-calls.wasm"),
     relaxedSimd: probeValidate("tools/shell/probes/relaxed-simd.wasm"),
@@ -294,6 +313,7 @@ async function main() {
   }
 
   emit("done", {});
+  await endHostProcess();
 }
 
 await main();

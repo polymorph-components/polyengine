@@ -252,6 +252,7 @@ progress. There is no preemption.
 | Resume | Scheduler resolves or consumes the relevant settlement |
 | Callback ABI | Scheduler invokes the callback export with events; no suspended wasm stack |
 | Waitable / waitable set | Host-side event state, consumed by stackful waits or callback return codes |
+| Explicit cooperative threads | Task-owned logical threads; JSPI suspension points carry stackful parks and named direct switches |
 | Sync `canon_lift` | Drive the task to resolution, retaining the reference's deadlock trap |
 | Async `canon_lift` | Exit the driver on idle; an unresolved export Promise stays pending for later progress |
 
@@ -297,6 +298,16 @@ embedder's half of a stream/future remains pending until the embedder
 acts. An idle async-typed export may remain pending indefinitely; sync-typed
 exports retain deadlock detection. See the
 [function contract](../contracts/embedder-api.md#functions-and-async).
+
+**Synchronous boundary and host latency.** A synchronous logical canonical
+callee that reaches a Component Model park drives only work belonging to that
+callee instance and traps when none can progress, as required by the reference
+`canon_lift` loop. A Promise returned by a host import marked `suspending()` is
+an embedding accommodation: its latency is not itself Component Model blocking
+or proof that unrelated Component Model work can progress. Component traps and
+escaping core Wasm exceptions cross guest Wasm via an uncatchable native trap
+carrier keyed to the exact physical activation and semantic cause; there is no
+reusable global cause slot.
 
 **Host-import cancellation.** By default, cancellation resolves the
 subtask promptly as `CANCELLED_BEFORE_RETURNED` and discards late Promise
@@ -409,8 +420,9 @@ the plan; see [descriptor IR](../contracts/descriptor-ir.md#resource-type-identi
 destructor with synchronous canonical options. The destructor may not
 Component-Model-block, though the spec permits spawning an explicit
 thread that blocks without preventing the destructor's implicit thread
-from returning. This does not imply support for the deferred explicit-thread
-built-ins (§11). Both guest- and host-initiated drops of guest resources use
+from returning. Such explicit threads use the scheduler described in §6 and
+are not destroyed merely because the destructor result has returned. Both
+guest- and host-initiated drops of guest resources use
 `createDtorEntry` in `runtime/src/exec/boundary.ts`, creating a fresh
 synchronous task and implicit thread rather than borrowing the caller's
 task. A missing destructor still goes through that lift machinery.
@@ -573,15 +585,34 @@ normalization belongs to `TRAP_MESSAGE_EQUIVALENTS` in
 `harness/src/runner.ts`, not the runtime.
 
 Expected failures are classified, not counted as conformance. Known
-classes include deferred thread support
-([#12](https://github.com/polymorph-components/polyengine/issues/12)),
-sync scheduling gaps
+classes include the explicit-thread type-interface restriction
+([#12](https://github.com/polymorph-components/polyengine/issues/12)), sync scheduling gaps
 ([#249](https://github.com/polymorph-components/polyengine/issues/249)),
 and upstream-unimplemented features
 ([#248](https://github.com/polymorph-components/polyengine/issues/248)).
 Per-lane overlays distinguish engine limitations from runtime failures.
 The current base classification is in [harness/src/xfail.ts](../harness/src/xfail.ts).
 Unexpected failures and stale expected failures fail their gate.
+
+The current Deno and Chromium official-corpus baseline executes 1,506 of
+1,511 commands: 1,468 pass, 38 are exact xfails, and five text directives are
+unsupported. There are no runtime/capability skips. The corpus exercises the
+implemented explicit-thread family using canonical-final start signatures; it
+does not exercise the valid non-final/derived signature restriction described
+in the intrinsic contract, so these counts are not a full-thread-conformance
+claim.
+
+The supplementary Wasmtime lane adapts native test controls only when their
+semantic observation survives the adaptation. Its `gc` helper for the resource
+destructor context test is a real synchronous host boundary: Wasmtime uses that
+call to force a deferred frame, while this runtime eagerly materializes the
+corresponding logical task/thread. No JavaScript GC is forced. Wasmtime's
+table-capacity control is not exposed as a production option; a focused runtime
+test instead checks bounded handle reuse across the same 1,000 cancelled
+STARTING subtasks. The excluded `streams-massive-send` file asserts Wasmtime's
+host-defined 128 MiB transfer-fuel policy over an exponentially expanded value,
+not a Component Model limit; the exclusion does not imply that polyengine has
+an equivalent aggregate transfer budget.
 
 The [justfile](../justfile) is the command surface; CI job bodies live in
 [.github/justfile](../.github/justfile). Required PR checks use the pinned
