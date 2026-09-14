@@ -158,6 +158,7 @@ conformance:
 # harness/generated-wasmtime/results.json.
 test-wasmtime: shim
     cd harness && deno task wasmtime
+    cd harness && deno test --allow-read=.. tests/wasmtime_provider_integration.ts
 
 # Build the two upstream Wasmtime async guests (round-trip, short reads)
 # from the same locked wasmtime-environ revision, into the ignored
