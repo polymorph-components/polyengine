@@ -291,13 +291,15 @@ class UnsupportedDirective extends Error {}
 
 /**
  * Trap-message matching: official interpreters compare expected wast text by
- * prefix/substring against the actual message. Our runtime's trap wording
+ * substring against the actual message. Our runtime's trap wording
  * (runtime/src/cabi, runtime/src/exec) was ported/written independently of
  * the suite's expected strings and is semantically correct but differently
  * worded in several spots (confirmed against `trapIf(...)` call sites) —
- * these pairs are normalized here rather than left as false failures. A
- * message pair not in this table falls back to plain substring matching, so
- * new/incidental wording matches keep working without a table entry.
+ * these exact pairs are recognized here rather than left as false failures.
+ * A message pair not in this table falls back to plain substring matching, as
+ * ordinary WAST assertions require. Exact equality prevents an equivalence
+ * for one operation from accepting a diagnostic which merely contains it,
+ * notably a later refusal carrying the original trap as its poison cause.
  *
  * Rows also cover engine-worded *core*-wasm traps: `mapCoreException` in
  * runtime/src/exec/boundary.ts passes a `WebAssembly.RuntimeError`'s message
@@ -307,15 +309,33 @@ class UnsupportedDirective extends Error {}
  * against the suite's expected (typically wasmtime-worded) text instead.
  */
 const TRAP_MESSAGE_EQUIVALENTS: Array<
-  [expectedPrefix: string, actualSubstrings: string[]]
+  [exactExpected: string, exactActuals: string[]]
 > = [
-  // resources/handle-table.wast: runtime/src/cabi/handles.ts Table.get/free.
-  ["unknown handle index", ["table index out of range", "table entry empty"]],
-  // resources/handle-table.wast: runtime/src/cabi/handles.ts lift/lowerOwn
-  // /Borrow resource-type checks (4 call sites, identical message).
+  // Official resources/handle-table.wast:201-213,261,293. Table.get emits
+  // one of these two exact diagnostics (runtime/src/cabi/handles.ts:33-38).
+  ["unknown handle index 5", ["table index out of range"]],
   [
-    "handle index",
-    ["resource type mismatch"], // "... used with the wrong type, expected ..."
+    "unknown handle index 1",
+    ["table index out of range", "table entry empty"],
+  ],
+  ["unknown handle index 0", ["table entry empty"]],
+  ["unknown handle index 4294967295", ["table index out of range"]],
+  // async/passing-resources.wast:176 reaches an allocated-then-empty slot 3.
+  [
+    "unknown handle index 3",
+    ["table index out of range", "table entry empty"],
+  ],
+  // Pinned Wasmtime resources.wast:296,338,379,435,531,597,665 uses the
+  // exact generic category for both never-allocated and vacated entries.
+  ["unknown handle index", ["table index out of range", "table entry empty"]],
+  // Pinned Wasmtime resources.wast:459-481 passes literal slot 2 to the
+  // outer component's empty table; Table.get rejects it as out of range.
+  ["unknown handle index 2", ["table index out of range"]],
+  // Official resources/handle-table.wast:322,324 and the corresponding
+  // resource-type checks in runtime/src/cabi/handles.ts:239-263.
+  [
+    "handle index 1 used with the wrong type, expected guest-defined resource but found a different guest-defined resource",
+    ["resource type mismatch"],
   ],
   // async/builtin-trap-poisons-instance.wast:9 assert_trap "wasm trap: wasm
   // `unreachable` instruction executed" — core `unreachable` trap, raw engine
@@ -326,9 +346,10 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
   [
     "wasm trap: wasm `unreachable` instruction executed",
     [
-      "unreachable",
-      "unreachable executed",
-      "Unreachable code should not be executed",
+      "guest trapped: unreachable",
+      "guest trapped: unreachable executed",
+      "guest trapped: Unreachable code should not be executed",
+      "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')",
     ],
   ],
   // async/big-interleaving-test.wast:836 asserts the SHORT form, plain
@@ -340,7 +361,10 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
   // empty at the playwright pin bump (polyengine#11).
   [
     "unreachable",
-    ["Unreachable code should not be executed"],
+    [
+      "guest trapped: Unreachable code should not be executed",
+      "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')",
+    ],
   ],
   // Wasmtime's supplementary corpus uses the bare canonical core-trap name
   // (crates/environ/src/trap_encoding.rs:138), unlike the official corpus's
@@ -352,6 +376,7 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
       "guest trapped: unreachable",
       "guest trapped: unreachable executed",
       "guest trapped: Unreachable code should not be executed",
+      "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')",
     ],
   ],
   // definitions.py:2344-2355 gives inc-at-2^16 and dec-below-zero the same
@@ -408,10 +433,8 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
 // assert_trap command.
 export function trapMatches(expected: string, actual: string): boolean {
   if (actual.includes(expected)) return true;
-  for (const [prefix, actuals] of TRAP_MESSAGE_EQUIVALENTS) {
-    if (
-      expected.startsWith(prefix) && actuals.some((a) => actual.includes(a))
-    ) {
+  for (const [exactExpected, exactActuals] of TRAP_MESSAGE_EQUIVALENTS) {
+    if (expected === exactExpected && exactActuals.includes(actual)) {
       return true;
     }
   }

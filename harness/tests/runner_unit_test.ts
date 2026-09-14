@@ -204,7 +204,7 @@ Deno.test("assert_uninstantiable rejects an unrelated trap cause", async () => {
   assertEq(result.results[0].status, "failed", "status");
 });
 
-// TRAP_MESSAGE_EQUIVALENTS: the core `unreachable` trap row. The runtime
+// Exact diagnostic equivalents: the core `unreachable` trap row. The runtime
 // (runtime/src/exec/boundary.ts mapCoreException) passes each JS engine's raw
 // trap text through untouched; this table is where the suite's
 // (wasmtime-worded) expected text is reconciled against each engine's own
@@ -261,6 +261,66 @@ Deno.test("trapMatches: an unrelated engine trap message does not falsely match 
     false,
     "unrelated trap",
   );
+});
+
+Deno.test("trapMatches: Bun's exact core `unreachable` diagnostic matches every corpus expectation", () => {
+  const actual =
+    "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')";
+  for (
+    const expected of [
+      "wasm trap: wasm `unreachable` instruction executed",
+      "unreachable",
+      "wasm `unreachable` instruction executed",
+    ]
+  ) {
+    assertEq(trapMatches(expected, actual), true, expected);
+    assertEq(
+      trapMatches(expected, `${actual} additional suffix`),
+      false,
+      `${expected} rejects an unverified suffix`,
+    );
+  }
+});
+
+Deno.test("trapMatches: ordinary WAST matching remains actual.includes(expected)", () => {
+  assertEq(
+    trapMatches("unreachable", "guest trapped: unreachable executed"),
+    true,
+    "ordinary substring",
+  );
+});
+
+Deno.test("trapMatches: handle-table equivalents require the full corpus diagnostic", () => {
+  const exactPairs: Array<[string, string]> = [
+    ["unknown handle index 5", "table index out of range"],
+    ["unknown handle index 1", "table index out of range"],
+    ["unknown handle index 1", "table entry empty"],
+    ["unknown handle index 0", "table entry empty"],
+    ["unknown handle index 4294967295", "table index out of range"],
+    ["unknown handle index 3", "table index out of range"],
+    ["unknown handle index 3", "table entry empty"],
+    ["unknown handle index", "table index out of range"],
+    ["unknown handle index", "table entry empty"],
+    ["unknown handle index 2", "table index out of range"],
+    [
+      "handle index 1 used with the wrong type, expected guest-defined resource but found a different guest-defined resource",
+      "resource type mismatch",
+    ],
+  ];
+  for (const [expected, actual] of exactPairs) {
+    assertEq(trapMatches(expected, actual), true, `${expected} / ${actual}`);
+  }
+
+  const nonExactPairs: Array<[string, string]> = [
+    ["unknown handle index extended", "table index out of range"],
+    ["prefix unknown handle index 5", "table index out of range"],
+    ["unknown handle index 5 suffix", "table index out of range"],
+    ["unknown handle index 5", "prefix table index out of range"],
+    ["unknown handle index 5", "table index out of range suffix"],
+  ];
+  for (const [expected, actual] of nonExactPairs) {
+    assertEq(trapMatches(expected, actual), false, `${expected} / ${actual}`);
+  }
 });
 
 Deno.test("trapMatches: verified diagnostic equivalents match only their named operations", () => {
@@ -323,5 +383,35 @@ Deno.test("trapMatches: narrow diagnostic rows reject adjacent but different tra
   ];
   for (const [expected, actual] of nonEquivalents) {
     assertEq(trapMatches(expected, actual), false, `${expected} / ${actual}`);
+  }
+});
+
+Deno.test("trapMatches: an equivalent poison cause does not match a later entry refusal", () => {
+  assertEq(
+    trapMatches(
+      "backpressure counter overflow",
+      "component entry refused — instance poisoned by: Trap: backpressure counter underflow",
+    ),
+    false,
+    "poison cause substring",
+  );
+});
+
+Deno.test("trapMatches: exact equivalents reject expected and actual affixes", () => {
+  const expected = "backpressure counter overflow";
+  const actual = "backpressure counter underflow";
+  for (
+    const [changedExpected, changedActual] of [
+      [`prefix ${expected}`, actual],
+      [`${expected} suffix`, actual],
+      [expected, `prefix ${actual}`],
+      [expected, `${actual} suffix`],
+    ]
+  ) {
+    assertEq(
+      trapMatches(changedExpected, changedActual),
+      false,
+      `${changedExpected} / ${changedActual}`,
+    );
   }
 });
