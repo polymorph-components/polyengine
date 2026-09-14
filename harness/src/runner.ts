@@ -342,6 +342,65 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
     "unreachable",
     ["Unreachable code should not be executed"],
   ],
+  // Wasmtime's supplementary corpus uses the bare canonical core-trap name
+  // (crates/environ/src/trap_encoding.rs:138), unlike the official corpus's
+  // longer form above. The runtime still exposes raw engine text through
+  // mapCoreException, so this is the same core `unreachable` operation.
+  [
+    "wasm `unreachable` instruction executed",
+    [
+      "guest trapped: unreachable",
+      "guest trapped: unreachable executed",
+      "guest trapped: Unreachable code should not be executed",
+    ],
+  ],
+  // definitions.py:2344-2355 gives inc-at-2^16 and dec-below-zero the same
+  // trap operation. Pinned Wasmtime deliberately names that shared category
+  // BackpressureOverflow (crates/environ/src/trap_encoding.rs:254-256).
+  ["backpressure counter overflow", ["backpressure counter underflow"]],
+  // definitions.py:2445-2452 rejects exactly resolve_delivered(); these are
+  // the pinned Wasmtime category and runtime call-site spellings for it.
+  [
+    "`subtask.cancel` called after terminal status delivered",
+    ["subtask.cancel on a subtask whose resolution was already delivered"],
+  ],
+  // definitions.py:2512,2566,2618 has one condition for a synchronous
+  // read/write/cancel on an end in a waitable set. Keep the runtime spellings
+  // explicit so unrelated synchronous-operation diagnostics cannot match.
+  [
+    "waitable cannot be used synchronously while added to a waitable set",
+    [
+      "future.cancel-write: synchronous cancel on an end that is in a waitable set",
+      "future.cancel-read: synchronous cancel on an end that is in a waitable set",
+      "stream.cancel-write: synchronous cancel on an end that is in a waitable set",
+      "stream.cancel-read: synchronous cancel on an end that is in a waitable set",
+      "synchronous future copy on an end that is in a waitable set",
+      "synchronous stream copy on an end that is in a waitable set",
+    ],
+  ],
+  // Pinned Wasmtime's guest_read/guest_write terminal-state checks
+  // (futures_and_streams.rs:3512-3514,3757-3759) and the runtime's CopyState.DONE
+  // checks (runtime/src/intrinsics/stream_builtins.ts:156-161) are identical;
+  // only the preposition differs. Do not include the future-write OR-category,
+  // whose message combines a successful prior write with peer drop.
+  [
+    "cannot read after being notified that the writable end dropped",
+    ["cannot read from stream after being notified that the writable end dropped"],
+  ],
+  [
+    "cannot write after being notified that the readable end dropped",
+    ["cannot write to stream after being notified that the readable end dropped"],
+  ],
+  // The same-instance non-numeric guard is the exact check on both sides:
+  // runtime/src/task/streams.ts:587-591,708-711,725-728 and pinned Wasmtime
+  // futures_and_streams.rs:3330-3335. Future/stream names are diagnostic only.
+  [
+    "cannot read from and write to intra-component future/stream with non-numeric payload",
+    [
+      "cannot read from and write to intra-component future",
+      "cannot read from and write to intra-component stream",
+    ],
+  ],
 ];
 
 // Exported for the unit-test suite (tests/runner_unit_test.ts) to pin the
