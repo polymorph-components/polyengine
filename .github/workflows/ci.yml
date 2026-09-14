@@ -30,7 +30,10 @@ jobs:
           submodules: true # third_party/component-model: testgen + conformance corpus
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-unknown-unknown,wasm32-wasip2
+          # wasm32-wasip1 builds the upstream Wasmtime async guests
+          # (tools/wasmtime-guests/build.ts); the corpus itself is not
+          # cargo-built, only converted (docs/architecture.md §11).
+          targets: wasm32-unknown-unknown,wasm32-wasip1,wasm32-wasip2
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@v2
         with:

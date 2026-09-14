@@ -12,6 +12,7 @@ import type { WireExport } from "@polyengine/runtime/plan";
 import { Translator } from "@polyengine/runtime/shim";
 import {
   type ComponentHandle,
+  type HostImports,
   instantiateComponent,
 } from "../../runtime/src/exec/mod.ts";
 import {
@@ -107,17 +108,22 @@ type Definition =
 
 export class RuntimeExecutor implements CommandExecutor {
   readonly #translator: Translator;
+  readonly #imports: HostImports;
   readonly #core = new CoreOnlyExecutor();
   #definitions: Definition[] = [];
   #namedDefinitions = new Map<string, Definition>();
   #registered = new Map<string, AnyInstanceRef>();
 
-  private constructor(translator: Translator) {
+  private constructor(translator: Translator, imports: HostImports) {
     this.#translator = translator;
+    this.#imports = imports;
   }
 
-  static async create(shimWasm: Uint8Array): Promise<RuntimeExecutor> {
-    return new RuntimeExecutor(await Translator.create(shimWasm));
+  static async create(
+    shimWasm: Uint8Array,
+    imports: HostImports = {},
+  ): Promise<RuntimeExecutor> {
+    return new RuntimeExecutor(await Translator.create(shimWasm), imports);
   }
 
   validate(
@@ -166,6 +172,7 @@ export class RuntimeExecutor implements CommandExecutor {
         plan,
         componentBytes: bytes,
         adapters,
+        imports: this.#imports,
         // The wast `invoke` directive is a BLOCKING call: an async-typed
         // export that goes idle with its task unresolved is a deadlock for
         // this runner, not a Promise to leave pending (#292). wasmtime's

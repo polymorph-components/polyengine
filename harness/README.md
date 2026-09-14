@@ -68,6 +68,68 @@ All generated suite directories, including `async/` and `values/`, are run.
 Component-level value imports/exports remain outside the runtime's stated
 parity scope; do not confuse that feature with ordinary canonical-ABI values.
 
+## Supplementary Wasmtime coverage
+
+`tools/wasmtime/` converts Wasmtime's own `tests/misc_testsuite/component-model`
+WAST at the same `wasmtime-environ` revision pinned in `Cargo.lock`, and runs it
+through this harness under a separate classifier
+(`src/wasmtime-classifier.ts`, `src/wasmtime-expectations.ts`). It is
+supplementary reference material (docs/architecture.md §11), not the official
+Component Model corpus above: its expectations, exclusions, and results never
+mix with `src/xfail.ts` or `generated/`.
+
+```sh
+just test-wasmtime          # from the repo root
+just test-wasmtime-guests   # public API scenarios, FIFO and seeded
+```
+
+From `harness/`, `deno task wasmtime` runs generation, shim-check, focused
+harness tests, and the classifying runner. Guest builds require the Rust
+`wasm32-wasip1` and `wasm32-unknown-unknown` targets plus `wasm-tools`.
+
+Results, including full per-class and per-file counts, are written to
+`harness/generated-wasmtime/results.json` — read that file rather than a fixed
+number from this document; counts shift as the pinned revision or translator
+changes. As of the pinned revision above, the run classifies every command
+executed: no unexpected failures or unexplained skips. Known-failure classes
+and their tracking issues are declared in
+`harness/src/wasmtime-expectations.ts` (`WASMTIME_FAILURE_CLASSES`); most map
+to [#372](https://github.com/polymorph-components/polyengine/issues/372)
+(runtime-semantics, diagnostic-mismatch, imported-module, cascade,
+provider-control, exception-handling — plan v0 / diagnostic gaps against
+Wasmtime's own assertions, not the spec corpus above). `deferred-threads`
+skips map to [#12](https://github.com/polymorph-components/polyengine/issues/12).
+A handful of files are excluded outright (unbounded memory stress, GC, or
+Wasmtime-specific validation configuration this translator doesn't share) —
+see `WASMTIME_EXCLUSIONS` for the current list and reasons; the run fails if an
+exclusion goes stale (the file gone from the manifest).
+
+`just test-wasmtime-guests` builds the two upstream async guest binaries this
+WAST corpus doesn't cover as executables — `async_round_trip_stackless` and
+`async_short_reads` from `crates/test-programs/src/bin/` at the same locked
+revision — and drives them through the public embedder API
+(`runtime/tests/wasmtime/public_guests.ts`), once under FIFO scheduling and
+once under `POLYENGINE_SCHED_SEED=1`. `just wasmtime-guests`
+(`tools/wasmtime-guests/build.ts`) does the build alone: it clones the locked
+revision into an ignored scratch checkout, builds with a separate
+`CARGO_TARGET_DIR`, and refuses dirty source inputs, replacing a clean scratch
+checkout when the pin changes. The cached
+upstream checkout under cargo's git cache is read, never written. One of the
+two guest scenarios asserts resource `own<T>` ownership transfer across a
+short-read stream (source wrappers invalidated after transfer, returned
+wrappers exclusively own the value, drop is idempotent); this exercises the
+public wrapper API's ownership bookkeeping, not Wasmtime's internal
+resource-table representation, which this project makes no claim about.
+
+The WAST host provider uses raw resource reps, which do not expose the Rust
+`Resource::owned()` flag. Its corresponding host-side ownership assertions
+are not reproduced; the guest scenarios exercise public ownership transfer.
+
+Both gates report source provenance (`Cargo.lock`'s `wasmtime-environ` git
+revision) and fail on drift — a stale locked revision, a modified guest
+checkout, or a guest artifact that doesn't hash-match its build's own
+provenance — rather than silently running an unreviewed rebuild.
+
 ## Execution
 
 [`CommandExecutor`](src/executor.ts) separates command bookkeeping from engine

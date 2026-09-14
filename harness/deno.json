@@ -1,8 +1,10 @@
 {
   "tasks": {
     "gen": "cargo run -q -p testgen --manifest-path ../Cargo.toml",
+    "gen-wasmtime": "deno run --allow-read=.. --allow-run ../tools/wasmtime/generate.ts",
     "shim-check": "test -f ../target/wasm32-unknown-unknown/release/translator_shim.wasm || cargo build -p translator-shim --manifest-path ../Cargo.toml --target wasm32-unknown-unknown --release",
     "test": "deno test --allow-read=.. --allow-env=CONFORMANCE_EXECUTOR,POLYENGINE_SCHED_SEED tests/",
-    "conformance": "deno task gen && deno task shim-check && deno task test"
+    "conformance": "deno task gen && deno task shim-check && deno task test",
+    "wasmtime": "deno task gen-wasmtime && deno task shim-check && deno test --allow-run --allow-read=.. tests/wasmtime_expectations_test.ts tests/wasmtime_subprocess_test.ts && deno run --allow-read=.. --allow-write=generated-wasmtime --allow-run --allow-env=POLYENGINE_SCHED_SEED ../tools/wasmtime/run.ts"
   }
 }

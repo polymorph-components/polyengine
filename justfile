@@ -9,7 +9,7 @@ default:
 ci: (gha::core) (gha::browser)
 
 # Full pre-commit gates, including local consumer smokes (docs/consumers.md).
-gates: version-guard-local fmt-check lint build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle test-version-guard publish-check test-npm examples test-translate conformance sched-seeds shells browsers smoke-tls smoke-c0
+gates: version-guard-local fmt-check lint build test-rust test-protocol test-runtime test-wasi test-sockets-node test-ct-runner test-bundle test-version-guard publish-check test-npm examples test-translate conformance test-wasmtime test-wasmtime-guests sched-seeds shells browsers smoke-tls smoke-c0
 
 # Fast sanity: builds + native tests + type-checks, no suites.
 check: fmt-check lint build test-rust
@@ -150,6 +150,28 @@ test-npm: npm-build fixtures
 conformance:
     cd harness && deno task conformance
 
+# Supplementary Wasmtime WAST gate (docs/architecture.md §11): the pinned
+# wasmtime-environ revision's own component-model WAST, converted and
+# classified alongside — never merged into — the official corpus's xfails.
+# `deno task wasmtime` chains generation, the focused expectation-inventory
+# tests and the classifying CLI; results land in
+# harness/generated-wasmtime/results.json.
+test-wasmtime: shim
+    cd harness && deno task wasmtime
+
+# Build the two upstream Wasmtime async guests (round-trip, short reads)
+# from the same locked wasmtime-environ revision, into the ignored
+# tools/wasmtime-guests/build/ directory.
+wasmtime-guests:
+    deno run -A tools/wasmtime-guests/build.ts
+
+# Public-embedder round-trip/short-read scenarios adapted from those guests
+# (runtime/tests/wasmtime/public_guests.ts). FIFO first, then the seeded
+# scheduler order, sharing the same prepared guest artifacts.
+test-wasmtime-guests: shim wasmtime-guests
+    deno test --config runtime/deno.json --allow-read=.,/tmp --allow-write=/tmp --allow-env=POLYENGINE_SCHED_SEED runtime/tests/wasmtime/public_guests.ts
+    POLYENGINE_SCHED_SEED=1 deno test --config runtime/deno.json --allow-read=.,/tmp --allow-write=/tmp --allow-env=POLYENGINE_SCHED_SEED runtime/tests/wasmtime/public_guests.ts
+
 # Scheduler-order sensitivity (docs/architecture.md §6) — spec-allowed
 # nondeterminism; FIFO when POLYENGINE_SCHED_SEED is unset.
 # The affected suites re-run under seeded-shuffle scheduling.
@@ -157,6 +179,7 @@ sched-seeds: shim fixtures corpus
     cd runtime && POLYENGINE_SCHED_SEED=1 deno task test
     cd runtime && POLYENGINE_SCHED_SEED=4242 deno task test
     cd harness && POLYENGINE_SCHED_SEED=1 deno task conformance
+    cd harness && POLYENGINE_SCHED_SEED=1 deno task wasmtime
 
 # ----- engine lanes -----------------------------------------------------------
 

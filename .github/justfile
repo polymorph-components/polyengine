@@ -63,6 +63,8 @@ core:
     @just gha::_step examples
     @just gha::_step test-translate
     @just gha::_step conformance
+    @just gha::_step test-wasmtime
+    @just gha::_step test-wasmtime-guests
     @just gha::_step sched-seeds
 
 # Page and worker realms share per-engine expectations; WebKit is best-effort.

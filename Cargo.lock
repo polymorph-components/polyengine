@@ -570,6 +570,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "json-from-wast",
+ "serde",
  "serde_json",
  "wast",
 ]

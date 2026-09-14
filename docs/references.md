@@ -57,8 +57,14 @@ The revision is declared in [Cargo.toml](../Cargo.toml) and resolved in
 - [Adapter translation](https://github.com/bytecodealliance/wasmtime/blob/4675ee16b703b33948073a5ff6b961367371e7a1/crates/environ/src/component/translate/adapt.rs):
   how component linkage is translated into FACT adapters.
 - [Component-model tests at the same revision](https://github.com/bytecodealliance/wasmtime/tree/4675ee16b703b33948073a5ff6b961367371e7a1/tests/misc_testsuite/component-model):
-  supplementary reference material, not a corpus executed by the current
-  project gates or an independent check of the reused frontend.
+  converted and classified separately by `just test-wasmtime` (see
+  [harness/README.md](../harness/README.md#supplementary-wasmtime-coverage));
+  supplementary reference material, not merged into the official corpus or
+  an independent check of the reused frontend.
+- [Async test-programs guests at the same revision](https://github.com/bytecodealliance/wasmtime/tree/4675ee16b703b33948073a5ff6b961367371e7a1/crates/test-programs/src/bin):
+  `async_round_trip_stackless` and `async_short_reads`, built by
+  `just wasmtime-guests` and driven through the public embedder API by
+  `just test-wasmtime-guests`.
 
 ## Toolchain crates (pinned versions in lockfiles)
 

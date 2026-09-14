@@ -7,6 +7,8 @@
 
 import type { WastJson } from "../src/schema.ts";
 import { CoreOnlyExecutor } from "../src/executor.ts";
+import type { CommandExecutor } from "../src/executor.ts";
+import { TrapError } from "../src/executor.ts";
 import { runWastJson, trapMatches } from "../src/runner.ts";
 
 // (module) - the empty core module, hand-encoded.
@@ -14,7 +16,17 @@ const EMPTY_CORE_MODULE = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0]);
 // A core module with a valid preamble (sniffs as kind "module") but an
 // invalid trailing section byte (0xff is not a valid section id), so
 // WebAssembly.validate rejects it on content, not preamble.
-const INVALID_SECTION_MODULE = new Uint8Array([0, 0x61, 0x73, 0x6d, 1, 0, 0, 0, 0xff]);
+const INVALID_SECTION_MODULE = new Uint8Array([
+  0,
+  0x61,
+  0x73,
+  0x6d,
+  1,
+  0,
+  0,
+  0,
+  0xff,
+]);
 // (component) - the empty component: core preamble with version 0x0d,
 // layer 0x0001.
 const EMPTY_COMPONENT = new Uint8Array([0, 0x61, 0x73, 0x6d, 0x0d, 0, 1, 0]);
@@ -43,7 +55,11 @@ function assertEq(actual: unknown, expected: unknown, what: string) {
 
 Deno.test("environment: V8 validates core modules but no component binaries", () => {
   assertEq(WebAssembly.validate(EMPTY_CORE_MODULE), true, "core valid");
-  assertEq(WebAssembly.validate(INVALID_SECTION_MODULE), false, "invalid section");
+  assertEq(
+    WebAssembly.validate(INVALID_SECTION_MODULE),
+    false,
+    "invalid section",
+  );
   // The load-bearing fact behind skip("pending-runtime"): the JS API rejects
   // the component layer preamble outright, so `validate === false` carries
   // no information about a component's actual validity.
@@ -167,6 +183,23 @@ Deno.test("a genuinely invalid core module fails assert-free module command", as
     ]),
     load,
     new CoreOnlyExecutor(),
+  );
+  assertEq(result.results[0].status, "failed", "status");
+});
+
+Deno.test("assert_uninstantiable rejects an unrelated trap cause", async () => {
+  const executor = new CoreOnlyExecutor() as CommandExecutor;
+  executor.instantiate = () => Promise.reject(new TrapError("different cause"));
+  const result = await runWastJson(
+    doc([{
+      type: "assert_uninstantiable",
+      line: 1,
+      filename: "comp.0.wasm",
+      module_type: "binary",
+      text: "expected cause",
+    }]),
+    load,
+    executor,
   );
   assertEq(result.results[0].status, "failed", "status");
 });
