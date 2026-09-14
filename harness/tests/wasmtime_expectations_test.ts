@@ -74,6 +74,10 @@ Deno.test("classifier rejects stale passes and unexpected skips", () => {
 
 Deno.test("skip expectations require exact line and full cause", () => {
   const entry = WASMTIME_SKIP_EXPECTATIONS[0];
+  if (entry === undefined) {
+    assert(WASMTIME_SKIP_EXPECTATIONS.length === 0, "unexpected skip entry");
+    return;
+  }
   const base = {
     type: "module",
     status: "skipped" as const,
@@ -141,5 +145,34 @@ Deno.test("spectest resource probe preserves rep and destructor counters", async
   assert(
     probe.counters.drops === 1 && probe.counters.lastDrop === 7,
     "resource counters lost",
+  );
+});
+
+Deno.test("spectest exposes gc only for the deferred-frame boundary fixture", async () => {
+  const { wasmtimeSpectest } = await import("../src/wasmtime-spectest.ts");
+  const ordinary = wasmtimeSpectest("async/futures.json");
+  assert(
+    !("wasmtime" in ordinary.imports),
+    "wasmtime provider leaked into an unrelated fixture",
+  );
+
+  const probe = wasmtimeSpectest("async/context-in-resource-drop.json");
+  const wasmtime = probe.imports.wasmtime as Record<
+    string,
+    (...args: unknown[]) => unknown
+  >;
+  assert(typeof wasmtime.gc === "function", "gc provider is absent");
+  assert(
+    probe.counters.forcedHostBoundaries === 0,
+    "counter did not start at zero",
+  );
+  wasmtime.gc();
+  assert(
+    probe.counters.forcedHostBoundaries === 1,
+    "gc provider invocation was not observed",
+  );
+  assert(
+    !("set-max-table-capacity" in wasmtime),
+    "native table-capacity control must not be emulated",
   );
 });

@@ -75,8 +75,8 @@ Deno.test({
     // Tightened from the earlier "trap OR capability signal" form, which was
     // only ever a placeholder for this.
     assert(
-      message!.includes("deadlock"),
-      `expected a deadlock trap, got: ${message}`,
+      message!.includes("cannot block a synchronous task before returning"),
+      `expected a synchronous-block trap, got: ${message}`,
     );
   },
 });

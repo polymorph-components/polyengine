@@ -349,6 +349,7 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
       "guest trapped: unreachable",
       "guest trapped: unreachable executed",
       "guest trapped: Unreachable code should not be executed",
+      "guest trapped: Unreachable code should not be executed (evaluating 'fn()')",
       "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')",
     ],
   ],
@@ -363,6 +364,7 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
     "unreachable",
     [
       "guest trapped: Unreachable code should not be executed",
+      "guest trapped: Unreachable code should not be executed (evaluating 'fn()')",
       "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')",
     ],
   ],
@@ -376,6 +378,7 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
       "guest trapped: unreachable",
       "guest trapped: unreachable executed",
       "guest trapped: Unreachable code should not be executed",
+      "guest trapped: Unreachable code should not be executed (evaluating 'fn()')",
       "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')",
     ],
   ],
@@ -415,6 +418,20 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
   [
     "cannot write after being notified that the readable end dropped",
     ["cannot write to stream after being notified that the readable end dropped"],
+  ],
+  // Pinned Wasmtime task-return-traps.wast uses these umbrella diagnostics.
+  // The runtime reports the precise reference-state check which fired. Each
+  // pair is exact so unrelated task lifecycle failures remain mismatches.
+  [
+    "async-lifted export failed to produce a result",
+    ["task finished all threads without resolving"],
+  ],
+  [
+    "invalid `task.return` signature and/or options for current task",
+    [
+      "task.return with a result type that is not the task's result type",
+      "task.return with canonical options differing from the task's",
+    ],
   ],
   // The same-instance non-numeric guard is the exact check on both sides:
   // runtime/src/task/streams.ts:587-591,708-711,725-728 and pinned Wasmtime

@@ -7,8 +7,8 @@
 // `Trap` represents a Component Model trap. `AssertionError` represents
 // reference assertions and host-precondition violations, such as an invalid
 // value supplied to scalar lowering, not a guest's canonical trap outcome.
-// Throwing a JS exception does not itself ensure guest uncatchability;
-// see intrinsics/mod.ts `HostTrapState` for that limitation.
+// Guest-facing trampoline failures use task/scheduler.ts's native core trap
+// carrier because throwing this JS value directly is catchable by Wasm EH.
 
 import { Trap } from "@polyengine/protocol";
 

@@ -201,9 +201,18 @@ async function runShell(
 
 const SENTINEL = "@polyengine:";
 
-function parseProtocol(stdout: string): { header: Header; files: ShellFile[] } {
+export function parseProtocol(
+  stdout: string,
+): {
+  header: Header;
+  files: ShellFile[];
+  doneCount: number;
+  malformedCount: number;
+} {
   let header: Header = null;
   const files: ShellFile[] = [];
+  let doneCount = 0;
+  let malformedCount = 0;
   for (const line of stdout.split("\n")) {
     if (!line.startsWith(SENTINEL)) continue; // shells print their own diagnostics too
     // deno-lint-ignore no-explicit-any
@@ -211,7 +220,8 @@ function parseProtocol(stdout: string): { header: Header; files: ShellFile[] } {
     try {
       obj = JSON.parse(line.slice(SENTINEL.length));
     } catch {
-      continue; // a truncated/interleaved line; not this driver's problem to fix
+      malformedCount++;
+      continue;
     }
     // entry.ts's `emit(kind, payload)` merges `{kind, ...payload}` onto one
     // line — the header event's fields (engine/capabilities/etc) are
@@ -219,8 +229,52 @@ function parseProtocol(stdout: string): { header: Header; files: ShellFile[] } {
     // `header` key (only the `file` event nests its payload, under `file`).
     if (obj.kind === "header") header = obj;
     else if (obj.kind === "file" && obj.file) files.push(obj.file);
+    else if (obj.kind === "done") {
+      if (Object.keys(obj).length === 1) doneCount++;
+      else malformedCount++;
+    }
   }
-  return { header, files };
+  return { header, files, doneCount, malformedCount };
+}
+
+export function protocolCompletionError(
+  parsed: ReturnType<typeof parseProtocol>,
+  expectedFiles: readonly string[],
+  shellExitCode: number,
+): string | null {
+  if (shellExitCode !== 0) return `shell exited with code ${shellExitCode}`;
+  if (parsed.malformedCount !== 0) {
+    return `shell emitted ${parsed.malformedCount} malformed protocol record(s)`;
+  }
+  if (parsed.doneCount !== 1) {
+    return `shell emitted ${parsed.doneCount} done records (expected exactly 1)`;
+  }
+  if (!parsed.header) return "shell completed without a header record";
+  if (parsed.header.fileCount !== expectedFiles.length) {
+    return `shell header declared ${parsed.header.fileCount} files; manifest has ${expectedFiles.length}`;
+  }
+
+  const actualPaths = parsed.files.map((file) => file.path);
+  const seen = new Set<string>();
+  const duplicates = actualPaths.filter((path) => {
+    if (seen.has(path)) return true;
+    seen.add(path);
+    return false;
+  });
+  if (duplicates.length !== 0) {
+    return `shell reported duplicate file(s): ${
+      [...new Set(duplicates)].join(", ")
+    }`;
+  }
+  const expected = new Set(expectedFiles);
+  const extras = actualPaths.filter((path) => !expected.has(path));
+  const missing = expectedFiles.filter((path) => !seen.has(path));
+  if (extras.length !== 0 || missing.length !== 0) {
+    return `shell file set differed from manifest; missing: ${
+      missing.join(", ") || "(none)"
+    }; extra: ${extras.join(", ") || "(none)"}`;
+  }
+  return null;
 }
 
 async function main() {
@@ -256,7 +310,13 @@ async function main() {
   const { code, stdout, stderr } = await runShell(args.lane, shellBin, libPath);
   const wallMs = Math.round(performance.now() - wall0);
 
-  const { header, files } = parseProtocol(stdout);
+  const parsed = parseProtocol(stdout);
+  const { header, files } = parsed;
+  const manifest: { files: string[] } = JSON.parse(
+    await Deno.readTextFile(
+      join(repoRoot, "harness", "generated", "manifest.json"),
+    ),
+  );
 
   console.log(`\n=== lane: ${args.lane} ===`);
   console.log(`engine     : ${header?.engine ?? "(none — no header line)"}`);
@@ -269,9 +329,21 @@ async function main() {
   console.log(`notes      : ${exp.notes}`);
 
   if (files.length === 0) {
-    console.error(`\nshell stderr (first 4000 chars):\n${stderr.slice(0, 4000)}`);
-    console.error(`\nshell stdout (first 2000 chars):\n${stdout.slice(0, 2000)}`);
+    console.error(
+      `\nshell stderr (first 4000 chars):\n${stderr.slice(0, 4000)}`,
+    );
+    console.error(
+      `\nshell stdout (first 2000 chars):\n${stdout.slice(0, 2000)}`,
+    );
     fail(`no files ran (shell exit ${code})`);
+  }
+
+  const completionError = protocolCompletionError(parsed, manifest.files, code);
+  if (completionError) {
+    console.error(
+      `\nshell stderr (first 4000 chars):\n${stderr.slice(0, 4000)}`,
+    );
+    fail(completionError);
   }
 
   const { summary, unexpectedFailures, staleDeltas } = classify(files, exp);
@@ -317,7 +389,9 @@ async function main() {
     bad = true;
   }
   if (staleDeltas.length > 0) {
-    console.error(`\n${staleDeltas.length} STALE OVERLAY DELTA(S) (predicted, did not occur):`);
+    console.error(
+      `\n${staleDeltas.length} STALE OVERLAY DELTA(S) (predicted, did not occur):`,
+    );
     for (const d of staleDeltas) {
       console.error(`  ${d.file}:${d.line} [${d.kind}] ${d.reason}`);
     }
@@ -338,7 +412,9 @@ async function main() {
   }
   console.error(
     `\n[shell-lane] ${args.lane}: ${
-      exp.required ? "FAILED" : "deviations recorded (findings lane, not gating)"
+      exp.required
+        ? "FAILED"
+        : "deviations recorded (findings lane, not gating)"
     }`,
   );
   // Required lanes (sm-pinned, jsc-pinned) gate the per-push core job — a

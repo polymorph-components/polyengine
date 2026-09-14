@@ -33,6 +33,7 @@ import { assert_, AssertionError, Trap } from "../cabi/trap.ts";
 import {
   type BlockRequest,
   type Cancelled,
+  componentBoundaryTrapCarrier,
   type ComponentInstanceState,
   consumeSchedulerFailure,
   driveSyncLift,
@@ -53,6 +54,7 @@ import {
   Subtask,
   SubtaskState,
   SyncEntryBusy,
+  takeComponentBoundaryTrap,
   Task,
   type TaskOptions,
   Thread,
@@ -261,8 +263,20 @@ export function callCore(fn: CoreFn, args: CoreValue[]): CoreValue[] {
  */
 function mapCoreException(e: unknown): unknown {
   if (e instanceof WebAssembly.RuntimeError) {
+    const carried = takeComponentBoundaryTrap(e);
+    if (carried !== undefined) return mapCoreException(carried.cause);
     try {
       trap(`guest trapped: ${e.message}`);
+    } catch (t) {
+      return t;
+    }
+  }
+  const Exception = (WebAssembly as unknown as {
+    Exception?: abstract new (...args: never[]) => object;
+  }).Exception;
+  if (Exception !== undefined && e instanceof Exception) {
+    try {
+      trap("thrown Wasm exception");
     } catch (t) {
       return t;
     }
@@ -512,6 +526,15 @@ type DrainState = {
   waiters: Set<DrainWaiter>;
   budget: number;
   hopProbe: { hops: Set<unknown>; elapsed: boolean } | null;
+  syncHopProbe: { hops: Set<unknown>; elapsed: boolean } | null;
+  admissions: Set<Admission>;
+};
+
+type Admission = {
+  inst: unknown;
+  run(): unknown;
+  resolve(value: unknown): void;
+  reject(cause: unknown): void;
 };
 
 const drainStates = new WeakMap<Store, DrainState>();
@@ -529,6 +552,8 @@ function stateFor(store: Store): DrainState {
       waiters: new Set(),
       budget: WORK_QUANTUM,
       hopProbe: null,
+      syncHopProbe: null,
+      admissions: new Set(),
     };
     drainStates.set(store, state);
     store.serviceRequested = () => requestStoreService(store);
@@ -575,6 +600,73 @@ function serviceOrdinaryStep(store: Store): boolean {
 function serviceAdmissionTailStep(store: Store): boolean {
   if (!ordinaryServiceAllowed(store)) return false;
   return store.serviceSettledStep();
+}
+
+/** Offer deferred host entries between complete canonical steps. This runs
+ * only under the coordinator's no-live-guest guard, never from mutation sites. */
+function serviceAdmissionStep(store: Store, state: DrainState): boolean {
+  for (const admission of state.admissions) {
+    if (entryHopThreads(store, admission.inst).length > 0) continue;
+    state.admissions.delete(admission);
+    try {
+      admission.resolve(admission.run());
+    } catch (e) {
+      admission.reject(e);
+    }
+    return true;
+  }
+  return false;
+}
+
+type RequiredSyncVerdict = "none" | "progress" | "wait";
+
+/** Apply definitions.py's synchronous `canon_lift` loop to a logical FACT
+ * child that reached a real CM park. This precedes store-global idle/retention
+ * policy: only the callee instance's work can justify the synchronous wait. */
+function serviceRequiredSyncStep(
+  store: Store,
+  state: DrainState,
+): RequiredSyncVerdict {
+  while (store.requiredSyncParks.length > 0) {
+    const point = store.requiredSyncParks[0];
+    if (!point.waiting()) {
+      store.finishSyncProgress(point);
+      continue;
+    }
+    const owner = point.owner;
+    const task = point.logicalOwner.task;
+    const root = task?.failureOwner;
+    if (
+      root?.inst?.activeCalls instanceof Set &&
+      !root.inst.activeCalls.has(root)
+    ) {
+      // The host-visible result was published before this background park.
+      store.finishSyncProgress(point);
+      continue;
+    }
+    const inst = task?.inst;
+    if (store.serviceSettledStepFor(inst)) {
+      state.syncHopProbe = null;
+      return "progress";
+    }
+    const hops = entryHopThreads(store, inst);
+    if (hops.length > 0 || store.pendingResumptions.has(owner)) return "wait";
+    if (store.tickForInstance(inst)) {
+      state.syncHopProbe = null;
+      return "progress";
+    }
+    store.finishSyncProgress(point);
+    point.abandon(
+      componentBoundaryTrapCarrier(
+        new Trap("wasm trap: cannot block a synchronous task before returning"),
+        owner,
+      ),
+    );
+    state.syncHopProbe = null;
+    return "progress";
+  }
+  state.syncHopProbe = null;
+  return "none";
 }
 
 function chargeWorkQuantum(state: DrainState): boolean {
@@ -737,6 +829,51 @@ async function runStoreDrain(store: Store, state: DrainState): Promise<void> {
         } else return;
       }
       try {
+        store.refreshSyncRequirements();
+        if (serviceAdmissionStep(store, state)) continue;
+        const syncVerdict = serviceRequiredSyncStep(store, state);
+        if (syncVerdict === "progress") continue;
+        if (syncVerdict === "wait") {
+          const point = store.requiredSyncParks[0];
+          const hops = point === undefined
+            ? []
+            : entryHopThreads(store, point.logicalOwner.task?.inst);
+          const blockers = point !== undefined &&
+              store.pendingResumptions.has(point.owner)
+            ? [...hops, point.owner]
+            : hops;
+          if (
+            state.syncHopProbe === null ||
+            !sameIdentities(state.syncHopProbe.hops, blockers)
+          ) {
+            const probe = { hops: new Set(blockers), elapsed: false };
+            state.syncHopProbe = probe;
+            setTimeout(() => {
+              if (state.syncHopProbe === probe) {
+                probe.elapsed = true;
+                requestStoreService(store);
+              }
+            }, 0);
+            return;
+          }
+          if (!state.syncHopProbe.elapsed) return;
+          // An engine-only hop gets one platform turn to become a real park or
+          // settlement. It is not itself permission for a sync callee to wait.
+          state.syncHopProbe = null;
+          if (blockers.length > 0 && point !== undefined) {
+            store.finishSyncProgress(point);
+            point.abandon(
+              componentBoundaryTrapCarrier(
+                new Trap(
+                  "wasm trap: cannot block a synchronous task before returning",
+                ),
+                point.owner,
+              ),
+            );
+            continue;
+          }
+          return;
+        }
         const unsettledHops = unsettledEntryHops(store);
         if (unsettledHops.length > 0) {
           // Host retention and real host calls both make this a valid wait.
@@ -772,6 +909,11 @@ async function runStoreDrain(store: Store, state: DrainState): Promise<void> {
         state.hopProbe = null;
         while (!store.hasPendingResumptions()) {
           if (!serviceOrdinaryStep(store)) break;
+          // A settled tail or one scheduler tick is one complete canonical
+          // step. Admission gets a turn before another ordinary tick, so a
+          // perpetual callback YIELD loop cannot starve a pending sync export.
+          store.refreshSyncRequirements();
+          if (serviceAdmissionStep(store, state)) break;
           if (chargeWorkQuantum(state)) {
             await handoffWorkQuantum(store, state);
           }
@@ -887,8 +1029,6 @@ export function createLiftedFunction(input: {
    * Promise.
    */
   suspensionMode?: SuspensionMode;
-  /** Optional; see intrinsics `HostTrapState`. */
-  trapState?: { pending: unknown };
   /**
    * Optional; the executor's sync-call scope stack (intrinsics
    * `SyncCallScope`). Structural, to keep this module free of an import
@@ -909,6 +1049,9 @@ export function createLiftedFunction(input: {
   /** Nested guest destructor only: preserve the caller and use the reference
    * sync lift drive, not the host's store-wide completion policy. */
   guestDtorCaller?: ComponentInstanceState | null;
+  /** Guest destructor exceptions must reach FACT's exception barrier, which
+   * assigns the canonical UncaughtException trap category. */
+  preserveWasmException?: boolean;
   /**
    * Refuse instance entry hops rather than deferring. SYNC_ENTRY uses plain
    * mode inside a JSPI instantiation, so its own mode cannot identify this
@@ -927,7 +1070,6 @@ export function createLiftedFunction(input: {
     opts,
     core,
     stats,
-    trapState,
     syncCallStack,
     allInstances,
   } = input;
@@ -971,9 +1113,6 @@ export function createLiftedFunction(input: {
     hostInput: ComponentValue[] | PreparedTransfer,
   ): unknown => {
     stats.liftedCalls++;
-    // A trap remembered during an earlier call must never be attributed to
-    // this one (see intrinsics `HostTrapState`).
-    if (!guestDtor && trapState !== undefined) trapState.pending = undefined;
     // Depth of the sync-call scope stack on entry; see the `finally` below.
     const syncCallDepth = syncCallStack?.length ?? 0;
 
@@ -1119,6 +1258,7 @@ export function createLiftedFunction(input: {
         mode,
         prepared,
         admissionCheckpoint,
+        preserveWasmException: input.preserveWasmException,
       }),
     );
 
@@ -1377,13 +1517,24 @@ export function createLiftedFunction(input: {
     // Genuine SuspensionPoint parks are excluded, allowing host-import reentry
     // (`runtime/tests/jspi/hop_atomicity_test.ts`). This is not a general entry lock.
     if (mode === "jspi" && entryHopThreads(store, inst).length > 0) {
-      return awaitHopQuiescence(store, inst).then(
-        () => invokeNow(hostArgs),
-        (e) => {
+      let resolve!: (value: unknown) => void;
+      let reject!: (cause: unknown) => void;
+      const promise = new Promise<unknown>((res, rej) => {
+        resolve = res;
+        reject = rej;
+      });
+      const admission: Admission = {
+        inst,
+        run: () => invokeNow(hostArgs),
+        resolve,
+        reject: (e) => {
           prepared?.cleanup(e);
-          throw e;
+          reject(e);
         },
-      );
+      };
+      stateFor(store).admissions.add(admission);
+      requestStoreService(store);
+      return promise;
     }
     return invokeNow(hostArgs);
   };
@@ -1414,23 +1565,6 @@ function entryHopThreads(
     if (!suspended.has(t)) out.push(tt);
   }
   return out;
-}
-
-/**
- * Await entry hops and service their tails before rechecking. Hops settle on
- * the engine's schedule; genuinely blocked activations are excluded. Multiple
- * gated callers recheck independently, with no FIFO admission guarantee.
- */
-async function awaitHopQuiescence(store: Store, inst: unknown): Promise<void> {
-  requestStoreService(store);
-  await DRAIN_TICK;
-  for (;;) {
-    const hops = entryHopThreads(store, inst);
-    if (hops.length === 0) return;
-    const revision = store.serviceProgressRevision();
-    await store.waitForServiceProgress(revision);
-    await DRAIN_TICK;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1486,7 +1620,6 @@ export function createDtorEntry(input: {
   instance: ComponentInstanceState;
   suspensionMode?: SuspensionMode;
   stats?: ExecutionStats;
-  trapState?: { pending: unknown };
   syncCallStack?: LenderScope[];
   allInstances?: () => Iterable<{ mayLeave: boolean }>;
   /** Present only for guest drops; null is a guest call without a real caller. */
@@ -1513,15 +1646,27 @@ export function createDtorEntry(input: {
     core,
     stats: input.stats ?? newStats(),
     suspensionMode: mode,
-    trapState: input.trapState,
     syncCallStack: input.syncCallStack,
     allInstances: input.allInstances,
     // The host does not wait for a destructor: `drop(): void` is
     // non-blocking, and an unfinished dtor's tail is driven by the store.
     allowAsyncCompletion: !guest,
     guestDtorCaller: input.guestCaller,
+    preserveWasmException: guest,
   });
-  return (rep: number) => lifted(rep);
+  return (rep: number) => {
+    try {
+      return lifted(rep);
+    } catch (e) {
+      const Exception = (WebAssembly as unknown as {
+        Exception?: abstract new (...args: never[]) => object;
+      }).Exception;
+      if (guest && Exception !== undefined && e instanceof Exception) {
+        trap("wasm trap: uncaught exception propagated out of component");
+      }
+      throw e;
+    }
+  };
 }
 
 /**
@@ -1567,9 +1712,25 @@ export function* awaitCore(
   args: CoreValue[],
   // deno-lint-ignore no-explicit-any
   thread: any,
+  mapWasmException = true,
 ): Generator<BlockRequest, CoreValue[], unknown> {
   // The bridge explicitly maintains ambient claims after this bracket unwinds.
-  const raw = withActivation(thread, () => callCore(fn, args));
+  let raw: CoreValue[];
+  try {
+    raw = withActivation(thread, () => fn(...args)) as CoreValue[];
+    if (raw === undefined) raw = [];
+    else if (!Array.isArray(raw)) raw = [raw as unknown as CoreValue];
+  } catch (e) {
+    const Exception = (WebAssembly as unknown as {
+      Exception?: abstract new (...args: never[]) => object;
+    }).Exception;
+    if (
+      !mapWasmException && Exception !== undefined && e instanceof Exception
+    ) {
+      throw e;
+    }
+    throw mapCoreException(e);
+  }
   // `callCore` normalizes a bare value to a one-element array; a promising
   // entry yields `[Promise]`.
   if (raw.length === 1 && isPromiseLike(raw[0])) {
@@ -1580,6 +1741,13 @@ export function* awaitCore(
       awaitValue: Promise.resolve(raw[0] as unknown as Promise<unknown>).then(
         undefined,
         (e) => {
+          const Exception = (WebAssembly as unknown as {
+            Exception?: abstract new (...args: never[]) => object;
+          }).Exception;
+          if (
+            !mapWasmException && Exception !== undefined &&
+            e instanceof Exception
+          ) throw e;
           throw mapCoreException(e);
         },
       ),
@@ -1629,6 +1797,7 @@ function* liftBody(input: {
   mode: SuspensionMode;
   prepared: PreparedTransfer | null;
   admissionCheckpoint: () => void;
+  preserveWasmException?: boolean;
 }): Generator<BlockRequest, void, Cancelled> {
   const { name, ft, opts, core, stats, task } = input;
   const thread = input.thread();
@@ -1651,7 +1820,7 @@ function* liftBody(input: {
 
   if (!opts.async) {
     const flatResults = normalizeCoreValues(
-      yield* awaitCore(core, flatArgs, thread),
+      yield* awaitCore(core, flatArgs, thread, !input.preserveWasmException),
       opts.coreType.results,
       `${name} results`,
     );
@@ -1685,7 +1854,7 @@ function* liftBody(input: {
           `without a callback)`,
       );
     }
-    yield* awaitCore(core, flatArgs, thread);
+    yield* awaitCore(core, flatArgs, thread, !input.preserveWasmException);
     task.exitImplicitThread(thread);
     return;
   }
@@ -1697,7 +1866,7 @@ function* liftBody(input: {
     input.mode,
   );
   const [packed] = normalizeCoreValues(
-    yield* awaitCore(core, flatArgs, thread),
+    yield* awaitCore(core, flatArgs, thread, !input.preserveWasmException),
     opts.coreType.results,
     `${name} results`,
   ) as [number];
@@ -1960,6 +2129,7 @@ export function createLoweredImport(input: {
           task: currentTask(),
           readyFunc: () => outcome !== undefined,
           cancellable: false,
+          blockReason: "host-import",
           produce: () => {
             // Poisoning records a marker; it need not abandon this suspension.
             // A FACT callee may differ from the still-healthy owning task.

@@ -80,28 +80,29 @@ import {
   type TranscodeMemory,
   type TranscodeOp,
 } from "./transcode.ts";
+import {
+  createThreadIndex,
+  createThreadNewIndirect,
+  createThreadResumeLater,
+  createThreadSuspend,
+  createThreadSuspendThenPromote,
+  createThreadSuspendThenResume,
+  createThreadYieldThenPromote,
+  createThreadYieldThenResume,
+  type ThreadTrampolineContext,
+} from "./thread_builtins.ts";
+import {
+  raiseComponentBoundaryTrap,
+  rethrowComponentBoundaryTrap,
+  takeComponentBoundaryTrap,
+} from "../task/mod.ts";
 
 export * from "./transcode.ts";
 export * from "./context.ts";
 export * from "./async_builtins.ts";
 export * from "./fact_calls.ts";
 export * from "./stream_builtins.ts";
-
-/**
- * Where a host trap thrown *inside* a FACT adapter is remembered.
- *
- * FACT's `enter_exception_barrier` (`fact/trampoline.rs`) converts escaping
- * exceptions to `UncaughtException`. Host traps are JS exceptions too, so we
- * remember and restore them to preserve their cause across nested barriers.
- * A guest exception with no pending host trap keeps the generic message.
- *
- * Limitation: this preserves diagnostics, not uncatchability. A guest's own
- * `try_table catch_all` can catch a host trap and continue, contrary to the
- * Component Model's trap semantics. No out-of-band mechanism prevents that.
- */
-export interface HostTrapState {
-  pending: unknown;
-}
+export * from "./thread_builtins.ts";
 
 /**
  * Trap-code → message, from wasmtime-environ `trap_encoding.rs`
@@ -125,9 +126,6 @@ const FACT_TRAP_MESSAGES: Record<number, string> = {
   46: "reference count overflow",
   49: "uncaught exception propagated out of component",
 };
-
-/** Ordinal of `Trap::UncaughtException` in wasmtime's trap encoding. */
-const TRAP_UNCAUGHT_EXCEPTION = 49;
 
 export { UnsupportedFeatureError } from "./errors.ts";
 
@@ -215,7 +213,13 @@ export interface FactStartScope {
 
 /** Executor services a trampoline body needs (provided by executor.ts). */
 export interface TrampolineContext {
+  /** Per-instantiation trap owner for core start functions without a Task. */
+  trapScope: object;
   componentInstance(index: number): ComponentInstanceState;
+  /** Extracted RuntimeTableIndex used by `thread.new-indirect`. */
+  runtimeTable(index: number): WebAssembly.Table;
+  /** Wrap a table function as an independent JSPI-capable wasm entry. */
+  enterThreadFunction(fn: CoreFn): CoreFn;
   resourceToken(index: number): ResourceTableInfo;
   /**
    * The component instance that *owns* resource table `index`
@@ -244,8 +248,6 @@ export interface TrampolineContext {
   factStartScopes: FactStartScope[];
   /** See `FactCallContext.calleeCanBlock` (intrinsics/fact_calls.ts). */
   calleeCanBlock?(fn: unknown): boolean;
-  /** See `HostTrapState`. */
-  trapState: HostTrapState;
   /**
    * Resolved canonical options by index, and the element types of an interned
    * results tuple — needed by the async built-ins (task.return,
@@ -309,18 +311,17 @@ export function createTrampoline(
   ctx: TrampolineContext,
 ): CoreFn {
   const fn = createTrampolineBody(decl, ctx);
-  // Preserve host-trap diagnostics across the FACT exception barrier
-  // (see `HostTrapState`). This wraps the `trap` trampoline too, which is
-  // what keeps a specific trap specific across *nested* adapters: the inner
-  // barrier's `trap` trampoline restores and rethrows the real trap, this
-  // wrapper re-records it, and the outer barrier restores it again instead
-  // of reporting the generic `UncaughtException`.
+  // JS exceptions are catchable by a guest `try_table catch_all`. Replace
+  // them with a native core trap while retaining the cause on this activation.
   return (...args: unknown[]) => {
     try {
       return fn(...args);
     } catch (e) {
-      ctx.trapState.pending = e;
-      throw e;
+      // FACT may catch a carrier from an inner adapter and call its own trap
+      // trampoline. Transfer that exact semantic cause to the new carrier.
+      const carried = takeComponentBoundaryTrap(e);
+      if (carried !== undefined) rethrowComponentBoundaryTrap(carried);
+      raiseComponentBoundaryTrap(e, ctx.trapScope);
     }
   };
 }
@@ -388,16 +389,6 @@ function createTrampolineBody(
       // named `runtime.trap<N>`; contracts/plan-format.md "trap" trampoline).
       const code = (decl as Extract<WireTrampoline, { kind: "trap" }>).code;
       return () => {
-        if (code === TRAP_UNCAUGHT_EXCEPTION) {
-          const pending = ctx.trapState.pending;
-          if (pending !== undefined) {
-            // Deliberately *not* cleared: an enclosing adapter's barrier will
-            // catch this rethrow and needs to restore the same trap. The slot
-            // is reset per lifted-export call (exec/boundary.ts), which is
-            // what bounds its lifetime.
-            throw pending;
-          }
-        }
         const message = FACT_TRAP_MESSAGES[code];
         trap(
           message === undefined
@@ -639,6 +630,40 @@ function createTrampolineBody(
         decl as unknown as { cancellable?: boolean },
         ctx.suspensionMode,
         declaredInstance(decl, ctx),
+      );
+    case "thread-index":
+      return createThreadIndex(decl as never, ctx as ThreadTrampolineContext);
+    case "thread-new-indirect":
+      return createThreadNewIndirect(
+        decl as Extract<WireTrampoline, { kind: "thread-new-indirect" }>,
+        ctx as ThreadTrampolineContext,
+      );
+    case "thread-resume-later":
+      return createThreadResumeLater(
+        decl as never,
+        ctx as ThreadTrampolineContext,
+      );
+    case "thread-suspend":
+      return createThreadSuspend(decl as never, ctx as ThreadTrampolineContext);
+    case "thread-suspend-then-resume":
+      return createThreadSuspendThenResume(
+        decl as never,
+        ctx as ThreadTrampolineContext,
+      );
+    case "thread-yield-then-resume":
+      return createThreadYieldThenResume(
+        decl as never,
+        ctx as ThreadTrampolineContext,
+      );
+    case "thread-suspend-then-promote":
+      return createThreadSuspendThenPromote(
+        decl as never,
+        ctx as ThreadTrampolineContext,
+      );
+    case "thread-yield-then-promote":
+      return createThreadYieldThenPromote(
+        decl as never,
+        ctx as ThreadTrampolineContext,
       );
 
     // --- FACT cross-component calls (see ./fact_calls.ts) -----------------

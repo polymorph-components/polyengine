@@ -1,0 +1,13 @@
+(module
+  (type $final (sub final (func (param i32))))
+  (type $nonfinal (sub (func (param i32))))
+  (type $derived (sub $nonfinal (func (param i32))))
+  (table (export "table") 3 funcref)
+  (global $runs (export "runs") (mut i32) (i32.const 0))
+  (func $final-fn (type $final) (param i32)
+    (global.set $runs (i32.add (global.get $runs) (i32.const 1))))
+  (func $nonfinal-fn (type $nonfinal) (param i32)
+    (global.set $runs (i32.add (global.get $runs) (i32.const 1))))
+  (func $derived-fn (type $derived) (param i32)
+    (global.set $runs (i32.add (global.get $runs) (i32.const 1))))
+  (elem (i32.const 0) $final-fn $nonfinal-fn $derived-fn))

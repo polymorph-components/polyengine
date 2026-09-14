@@ -31,6 +31,7 @@ import type { CoreValue, ValType } from "../cabi/types.ts";
 import { valTypesEqual } from "../cabi/types.ts";
 import {
   currentTask,
+  currentTaskThreadForInstance,
   currentThread,
   EventCode,
   type EventTuple,
@@ -85,7 +86,9 @@ export function createTaskReturn(
       declaredInst !== undefined && !declaredInst.mayLeave,
       "task.return: cannot leave component instance (may_leave violation)",
     );
-    const task = currentTask() as Task;
+    const task = declaredInst === undefined
+      ? currentTask() as Task
+      : currentTaskThreadForInstance<Thread>(declaredInst).task;
     trapIf(
       !task.inst.mayLeave,
       "task.return: cannot leave component instance (may_leave violation)",
@@ -453,11 +456,16 @@ export function createSubtaskCancel(
           | null;
         const store = inst.store as unknown as {
           waiting: { task?: unknown }[];
+          awaiting: Set<{ task?: unknown; activePark?: unknown }>;
         };
         const determinate = (): boolean =>
           callee === null ||
           callee.threads.every((th) => th.done()) ||
           store.waiting.some((w) => w.task === st.calleeTask);
+        const calleeContinuationPending = (): boolean =>
+          [...store.awaiting].some((t) =>
+            t.task === st.calleeTask && t.activePark === null
+          );
         // The SYNC form additionally blocks until the callee actually
         // resolves (definitions.py `canon_subtask_cancel`:
         // `thread.wait_until(subtask.resolved)`), then reports the resolved
@@ -482,6 +490,13 @@ export function createSubtaskCancel(
             task: currentTask(),
             readyFunc: ready,
             cancellable: false,
+            // First finish the exact cancelled callee's pending JSPI
+            // continuation. Only after that canonical return/park boundary can
+            // the synchronous form's unresolved wait become CM blocking.
+            blockReason: "mandatory-continuation",
+            syncBlockWhen: () =>
+              !async_ && determinate() && !calleeContinuationPending() &&
+              !st.resolved(),
             produce: () => {
               st.hasSyncWaiter = false;
               return st.resolved() ? finish() : BLOCKED;

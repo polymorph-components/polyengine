@@ -264,21 +264,28 @@ Deno.test("trapMatches: an unrelated engine trap message does not falsely match 
 });
 
 Deno.test("trapMatches: Bun's exact core `unreachable` diagnostic matches every corpus expectation", () => {
-  const actual =
-    "guest trapped: Unreachable code should not be executed (evaluating 'fn(...args)')";
-  for (
-    const expected of [
-      "wasm trap: wasm `unreachable` instruction executed",
-      "unreachable",
-      "wasm `unreachable` instruction executed",
-    ]
-  ) {
-    assertEq(trapMatches(expected, actual), true, expected);
-    assertEq(
-      trapMatches(expected, `${actual} additional suffix`),
-      false,
-      `${expected} rejects an unverified suffix`,
-    );
+  for (const call of ["fn()", "fn(...args)"]) {
+    const actual =
+      `guest trapped: Unreachable code should not be executed (evaluating '${call}')`;
+    for (
+      const expected of [
+        "wasm trap: wasm `unreachable` instruction executed",
+        "unreachable",
+        "wasm `unreachable` instruction executed",
+      ]
+    ) {
+      assertEq(trapMatches(expected, actual), true, `${expected}: ${call}`);
+      assertEq(
+        trapMatches(expected, `${actual} additional suffix`),
+        false,
+        `${expected}: ${call} rejects an unverified suffix`,
+      );
+      assertEq(
+        trapMatches(expected, `prefix ${actual}`),
+        false,
+        `${expected}: ${call} rejects an unverified prefix`,
+      );
+    }
   }
 });
 
@@ -347,6 +354,18 @@ Deno.test("trapMatches: verified diagnostic equivalents match only their named o
       "cannot write to stream after being notified that the readable end dropped",
     ],
     [
+      "async-lifted export failed to produce a result",
+      "task finished all threads without resolving",
+    ],
+    [
+      "invalid `task.return` signature and/or options for current task",
+      "task.return with a result type that is not the task's result type",
+    ],
+    [
+      "invalid `task.return` signature and/or options for current task",
+      "task.return with canonical options differing from the task's",
+    ],
+    [
       "cannot read from and write to intra-component future/stream with non-numeric payload",
       "cannot read from and write to intra-component future",
     ],
@@ -371,6 +390,14 @@ Deno.test("trapMatches: narrow diagnostic rows reject adjacent but different tra
     [
       "cannot write after being notified that the readable end dropped",
       "cannot write to future after previous write succeeded or readable end dropped",
+    ],
+    [
+      "async-lifted export failed to produce a result",
+      "task finished without resolving (deadlock)",
+    ],
+    [
+      "invalid `task.return` signature and/or options for current task",
+      "task.return on a resolved task",
     ],
     [
       "cannot read from and write to intra-component future/stream with non-numeric payload",
@@ -398,20 +425,36 @@ Deno.test("trapMatches: an equivalent poison cause does not match a later entry 
 });
 
 Deno.test("trapMatches: exact equivalents reject expected and actual affixes", () => {
-  const expected = "backpressure counter overflow";
-  const actual = "backpressure counter underflow";
   for (
-    const [changedExpected, changedActual] of [
-      [`prefix ${expected}`, actual],
-      [`${expected} suffix`, actual],
-      [expected, `prefix ${actual}`],
-      [expected, `${actual} suffix`],
+    const [expected, actual] of [
+      ["backpressure counter overflow", "backpressure counter underflow"],
+      [
+        "async-lifted export failed to produce a result",
+        "task finished all threads without resolving",
+      ],
+      [
+        "invalid `task.return` signature and/or options for current task",
+        "task.return with a result type that is not the task's result type",
+      ],
+      [
+        "invalid `task.return` signature and/or options for current task",
+        "task.return with canonical options differing from the task's",
+      ],
     ]
   ) {
-    assertEq(
-      trapMatches(changedExpected, changedActual),
-      false,
-      `${changedExpected} / ${changedActual}`,
-    );
+    for (
+      const [changedExpected, changedActual] of [
+        [`prefix ${expected}`, actual],
+        [`${expected} suffix`, actual],
+        [expected, `prefix ${actual}`],
+        [expected, `${actual} suffix`],
+      ]
+    ) {
+      assertEq(
+        trapMatches(changedExpected, changedActual),
+        false,
+        `${changedExpected} / ${changedActual}`,
+      );
+    }
   }
 });

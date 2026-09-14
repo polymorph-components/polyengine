@@ -25,8 +25,7 @@ import type { ShellLaneExpectation } from "./types.ts";
 export const nodePinned: ShellLaneExpectation = {
   lane: "node-pinned",
   required: true,
-  notes:
-    "Node.js pinned (v26.7.0, nodejs.org tarball, sha256-verified, both " +
+  notes: "Node.js pinned (v26.7.0, nodejs.org tarball, sha256-verified, both " +
     "arches). Exact Deno-lane parity with no flags (JSPI default-on in " +
     ">= 26): zero deltas, all capabilities true. Required gate. Node 24 LTS " +
     "is deliberately not laned — flag-gated JSPI with 2 real deviations " +
@@ -34,11 +33,11 @@ export const nodePinned: ShellLaneExpectation = {
   deltas: [],
   totals: {
     commands: 1511,
-    executed: 1411,
-    passed: 1286,
+    executed: 1506,
+    passed: 1468,
     failed: 0,
-    xfail: 125,
-    pendingRuntime: 95,
+    xfail: 38,
+    pendingRuntime: 0,
     pendingCapability: 0,
     unsupportedDirective: 5,
   },

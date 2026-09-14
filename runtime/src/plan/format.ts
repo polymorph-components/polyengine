@@ -155,6 +155,13 @@ export type WireTrampoline =
     instance: number;
   }
   | {
+    kind: "thread-new-indirect";
+    index: number;
+    instance: number;
+    startFuncType: number;
+    startFuncTable: number;
+  }
+  | {
     kind:
       | "thread-suspend"
       | "thread-yield"

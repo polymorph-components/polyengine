@@ -103,14 +103,11 @@ for (const capability of [false, true]) {
     const failure = capability
       ? new NeedsJspi("dtor probe")
       : new Trap("dtor trap");
-    const trapState = { pending: failure as unknown };
     const entry = createDtorEntry({
       instance: impl,
       guestCaller: caller,
-      trapState,
       allInstances: () => [caller, impl],
       dtor: () => {
-        assertEq(trapState.pending === failure, true);
         assertEq(currentTask().inst === impl, true);
         throw failure;
       },
@@ -132,7 +129,6 @@ for (const capability of [false, true]) {
         assertEq(caught === failure, true);
         assertEq(currentThread() === outer, true);
         assertEq(caller.mayLeave, false);
-        assertEq(trapState.pending === failure, true);
         caller.mayLeave = true;
       },
     });

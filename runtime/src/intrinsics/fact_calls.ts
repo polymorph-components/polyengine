@@ -58,6 +58,7 @@ import {
   type Cancelled,
   type ComponentInstanceState,
   currentTask,
+  dbgId,
   entryRefusal,
   maybeCurrentTask,
   NeedsJspi,
@@ -749,7 +750,9 @@ export function createAsyncStartCall(
       onProgress = () => subtask.setSubtaskPendingEvent(subtaski);
       const packed = packSubtaskResult(subtask.state, subtaski);
       traceCopy(
-        `async-start-call -> state=${subtask.state} i=${subtaski} ` +
+        `async-start-call task=${
+          dbgId(task)
+        } -> state=${subtask.state} i=${subtaski} ` +
           `packed=0x${(packed as number).toString(16)}`,
       );
       return packed;
@@ -779,13 +782,24 @@ export function createAsyncStartCall(
         !subtask.resolved() &&
         !thread.done() &&
         thread.waiting();
+      const engineOnlyExclusiveHop = (): boolean => {
+        const holder = prepared.calleeInst.exclusiveThread;
+        return holder !== null && holder.task !== task &&
+          holder.awaiting !== null && holder.activePark === null;
+      };
+      const entryGateIsGenuine = (): boolean =>
+        prepared.calleeInst.backpressure > 0 ||
+        (prepared.calleeInst.exclusiveThread !== null &&
+          prepared.calleeInst.exclusiveThread.activePark !== null &&
+          prepared.calleeInst.exclusiveThread.activePark.boundaryReturned ===
+            true);
       const determinate = (): boolean =>
         gatedAtEntry()
           // canon_lower reports STARTING as soon as the new callee blocks on
           // admission. Running an unrelated exclusive holder here can make
           // the new call complete before its caller observes it, contrary to
           // definitions.py:2257-2282 and task-builtins.wast:530-532.
-          ? true
+          ? !engineOnlyExclusiveHop() && entryGateIsGenuine()
           : subtask.resolved() ||
             thread.done() ||
             store.waiting.some((w) => w.task === task);
@@ -799,7 +813,14 @@ export function createAsyncStartCall(
           task: currentTask(),
           readyFunc: determinate,
           cancellable: false,
+          // Determining async-start status first finishes the named callee's
+          // mandatory entry continuation. It is not itself a synchronous
+          // Component Model wait by the caller.
+          blockReason: "mandatory-continuation",
           produce: () => {
+            // Re-check at delivery: an engine continuation can replace the
+            // exclusive holder between readiness and this produce callback.
+            assert_(!gatedAtEntry() || entryGateIsGenuine());
             const r = report();
             produced = true;
             return r;

@@ -18,13 +18,6 @@ const deferred: [name: string, reason: string][] = [
     "no wire form for instance nesting — v0.3 contract friction, not a " +
     "scheduler gap",
   ],
-  [
-    "threads: test_threads, test_sync_threads (thread.* built-ins)",
-    "🧵 shared-everything threads (thread.new-indirect, " +
-    "thread.{suspend,resume-later,switch-to,...}) are deferred with memory64 " +
-    "per https://github.com/polymorph-components/polyengine/issues/12; context.get/set — the part of this group that async " +
-    "guests actually use — IS implemented (intrinsics/context.ts)",
-  ],
 ];
 
 for (const [name, reason] of deferred) {

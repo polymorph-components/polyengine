@@ -11,11 +11,16 @@
 
 import type { FuncType, ValType } from "../cabi/types.ts";
 import { Trap } from "../cabi/trap.ts";
-import { ComponentInstanceState, Store } from "../task/mod.ts";
+import {
+  ComponentInstanceState,
+  Store,
+  takeComponentBoundaryTrap,
+} from "../task/mod.ts";
 import {
   anySuspendingImport,
   assertModeConsistent,
   chooseMode,
+  enterWasm,
   isAbortable,
   isDeferCancel,
   isSuspending,
@@ -52,7 +57,6 @@ import {
   createTrampoline,
   createUnsafeIntrinsic,
   type FactStartScope,
-  type HostTrapState,
   type PreparedCall,
   type SyncCallScope,
   TranscodeMemory,
@@ -361,8 +365,8 @@ class Executor {
   /** LoweredIndex-es whose host functions carry the `suspending()` brand —
    * populated by `buildLoweredImport`, read by `importValue`. */
   private readonly suspendableLowerings = new Set<number>();
-  /** Host trap held across a FACT exception barrier (see `HostTrapState`). */
-  readonly trapState: HostTrapState = { pending: undefined };
+  /** Cause attribution only for core start functions, which have no Task. */
+  private readonly trapScope = {};
   /** Export path -> why it has no runtime surface (see `buildExport`). */
   readonly omittedExports = new Map<string, string>();
 
@@ -653,8 +657,12 @@ class Executor {
           this.#declaringInstance = null;
           let instance: WebAssembly.Instance;
           try {
+            // Start functions have no Task. Trampolines use this executor's
+            // trapScope only for cause attribution; currentTask() remains absent.
             instance = await WebAssembly.instantiate(module, importObject);
           } catch (e) {
+            const boundaryCause = takeComponentBoundaryTrap(e);
+            if (boundaryCause !== undefined) throw boundaryCause.cause;
             // A SuspendError out of instantiation is a START FUNCTION trying
             // to suspend: instantiation is never a `promising` activation, so
             // ANY suspension-capable call from a start function trips jspi
@@ -775,7 +783,6 @@ class Executor {
                   instance: inst,
                   suspensionMode: mode,
                   stats: this.stats,
-                  trapState: this.trapState,
                   syncCallStack: this.syncCallStack,
                   allInstances: () => this.componentInstances.values(),
                 });
@@ -854,7 +861,6 @@ class Executor {
           core,
           stats: this.stats,
           suspensionMode: this.noteEntry(),
-          trapState: this.trapState,
           syncCallStack: this.syncCallStack,
           allInstances: () => this.componentInstances.values(),
           // Async-typed exports only; see `InstantiateInput.trapOnIdle`.
@@ -874,7 +880,6 @@ class Executor {
             core,
             stats: this.stats,
             suspensionMode: "plain",
-            trapState: this.trapState,
             syncCallStack: this.syncCallStack,
             allInstances: () => this.componentInstances.values(),
             // A synchronous caller cannot await entry-hop quiescence;
@@ -1118,6 +1123,14 @@ class Executor {
     }
     const fn = createTrampoline(decl, {
       componentInstance: (i) => this.componentInstance(i),
+      runtimeTable: (i) => {
+        const table = this.tables[i];
+        if (table === undefined) {
+          throw new PlanError(`runtime table ${i} accessed before extraction`);
+        }
+        return table;
+      },
+      enterThreadFunction: (fn) => enterWasm(fn as never, this.suspensionMode),
       resourceToken: (i) => {
         const token = this.loaded.resourceTokens[i];
         if (token === undefined) {
@@ -1218,7 +1231,7 @@ class Executor {
       calleeCanBlock: (fn: unknown) => this.suspendableFuncs.has(fn as object),
       syncCallStack: this.syncCallStack,
       factStartScopes: this.factStartScopes,
-      trapState: this.trapState,
+      trapScope: this.trapScope,
       loweredImport: (d) => this.buildLoweredImport(d),
       stats: this.stats,
     });

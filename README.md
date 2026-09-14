@@ -22,7 +22,8 @@ the applicable gate.
   sync and async, including composed components and overlapping exports.
 - Runtime coverage includes canonical ABI values, resources, async host
   imports, streams/futures, and background progress between export calls.
-- Known gaps include deferred thread features, upstream-unimplemented
+- Known gaps include the non-final/derived `thread.new-indirect` signature
+  restriction, upstream-unimplemented
   features, and sync scheduling gaps. See
   [architecture §11](docs/architecture.md#11-conformance-and-testing) and the
   [issue tracker](https://github.com/polymorph-components/polyengine/issues).

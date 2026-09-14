@@ -36,18 +36,17 @@ import type { ShellLaneExpectation } from "./types.ts";
 export const smNightly: ShellLaneExpectation = {
   lane: "sm-nightly",
   required: false,
-  notes:
-    "SpiderMonkey nightly (linux-aarch64 jsshell). Full Deno parity: " +
+  notes: "SpiderMonkey nightly (linux-aarch64 jsshell). Full Deno parity: " +
     "zero deltas, all compile-probes true (multi-memory/wasm-GC/EH/memory64/" +
     "tail-calls/relaxed-simd), JSPI round trip verified end to end.",
   deltas: [],
   totals: {
     commands: 1511,
-    executed: 1411,
-    passed: 1286,
+    executed: 1506,
+    passed: 1468,
     failed: 0,
-    xfail: 125,
-    pendingRuntime: 95,
+    xfail: 38,
+    pendingRuntime: 0,
     pendingCapability: 0,
     unsupportedDirective: 5,
   },
