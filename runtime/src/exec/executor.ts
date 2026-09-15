@@ -121,6 +121,10 @@ export function hostResourceType(
   return new HostResourceType(options ?? {});
 }
 
+/** Internal executor verdict for a host resource import of the wrong kind. */
+export class HostResourceImportTypeError extends PlanError {
+}
+
 export interface InstantiateInput {
   plan: WirePlan;
   /** The original component binary (embedded modules are sliced from it). */
@@ -500,7 +504,7 @@ class Executor {
       const label = importLabel(imp.name, imp.path);
       const value = this.lookupHostImport(imp.name, imp.path, label);
       if (!(value instanceof HostResourceType)) {
-        throw new PlanError(
+        throw new HostResourceImportTypeError(
           `host import '${label}' must be a HostResourceType (the component ` +
             `imports a resource type); got ${describe(value)}`,
         );

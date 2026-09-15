@@ -171,7 +171,10 @@ export function loadVariant(
 ): ComponentValue {
   const mem = requireMemory(cx.opts);
   const caseIndex = loadIntU(mem, ptr, discSize);
-  trapIf(caseIndex >= cases.length, "invalid variant discriminant");
+  trapIf(
+    caseIndex >= cases.length,
+    `discriminant ${caseIndex} out of range [0..${cases.length})`,
+  );
   const c = cases[caseIndex];
   if (c.type === null) return { kind: c.label, value: null };
   return { kind: c.label, value: load(cx, ptr + payloadOffset, c.type) };

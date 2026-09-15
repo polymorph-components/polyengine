@@ -13,6 +13,7 @@ import { Translator } from "@polyengine/runtime/shim";
 import {
   type ComponentHandle,
   type HostImports,
+  HostResourceImportTypeError,
   instantiateComponent,
 } from "../../runtime/src/exec/mod.ts";
 import {
@@ -61,6 +62,30 @@ function maybeCapability(e: unknown, what: string): void {
   if (CAPABILITY_MARKERS.some((m) => message.includes(m))) {
     throw new PendingRuntimeError(`pending-capability: ${what}: ${message}`);
   }
+}
+
+/** Internal instantiation-verdict mapper, exported only for harness tests. */
+export function rethrowInstantiationError(
+  e: unknown,
+  expect: InstantiateExpectation,
+): never {
+  if (e instanceof Trap) {
+    if (expect === "trap") throw new TrapError(e.message);
+    asCapabilityOrRethrow(e, "instantiate");
+  }
+  if (e instanceof WebAssembly.RuntimeError && expect === "trap") {
+    throw new TrapError(e.message);
+  }
+  if (
+    expect === "link-error" &&
+    (e instanceof HostResourceImportTypeError ||
+      e instanceof WebAssembly.LinkError)
+  ) {
+    throw new LinkError(e instanceof Error ? e.message : String(e));
+  }
+  if (e instanceof PlanError) asCapabilityOrRethrow(e, "instantiate");
+  maybeCapability(e, "instantiate");
+  throw e;
 }
 
 interface ComponentInstanceRef extends InstanceRef {
@@ -181,16 +206,7 @@ export class RuntimeExecutor implements CommandExecutor {
         trapOnIdle: true,
       });
     } catch (e) {
-      if (e instanceof Trap) {
-        if (expect === "trap") throw new TrapError(e.message);
-        asCapabilityOrRethrow(e, "instantiate");
-      }
-      if (e instanceof PlanError) asCapabilityOrRethrow(e, "instantiate");
-      // Capability-gated trampolines (UnsupportedFeatureError et al.) match
-      // via CAPABILITY_MARKERS regardless of error class:
-      maybeCapability(e, "instantiate");
-      if (expect === "link-error") throw new LinkError(String(e));
-      throw e;
+      rethrowInstantiationError(e, expect);
     }
     if (expect !== "success") {
       throw new Error(

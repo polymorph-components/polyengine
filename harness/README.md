@@ -135,6 +135,11 @@ That row-specific diagnostic divergence is spec-compatible, but it is not a
 global message equivalence because the runtime text also covers a distinct
 successful-prior-write condition.
 
+Variant lifting reports the rejected discriminant and case-count range exactly.
+Link-error assertions accept native link failures and host-resource import type
+mismatches; native start traps, translation failures, and generic plan errors
+remain distinct.
+
 At the current pin, the remaining async subset is 13 classified failures and
 zero skips: those eleven diagnostic rows, the unavailable native
 `set-max-table-capacity` provider row, and its one no-current-instance cascade.

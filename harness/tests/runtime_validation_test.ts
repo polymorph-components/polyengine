@@ -1,8 +1,13 @@
 import { PlanError, TranslateError } from "@polyengine/runtime/plan";
+import { HostResourceImportTypeError } from "../../runtime/src/exec/mod.ts";
 import { Translator } from "@polyengine/runtime/shim";
+import { LinkError, TrapError } from "../src/executor.ts";
 import type { Artifact } from "../src/executor.ts";
 import { runWastJson } from "../src/runner.ts";
-import { RuntimeExecutor } from "../src/runtime-executor.ts";
+import {
+  rethrowInstantiationError,
+  RuntimeExecutor,
+} from "../src/runtime-executor.ts";
 
 const shim = await Deno.readFile(
   new URL(
@@ -148,5 +153,48 @@ Deno.test("runtime validation: pipeline failures propagate unchanged and fail ne
     }
   } finally {
     Translator.prototype.translate = original;
+  }
+});
+
+Deno.test("runtime instantiation verdicts preserve failure phase", async () => {
+  const nativeTrap = new WebAssembly.RuntimeError("unreachable");
+  const mappedTrap = await thrown(() =>
+    rethrowInstantiationError(nativeTrap, "trap")
+  );
+  if (
+    !(mappedTrap instanceof TrapError) || mappedTrap.message !== "unreachable"
+  ) {
+    throw new Error(`native trap was not preserved: ${mappedTrap}`);
+  }
+  if (
+    await thrown(() => rethrowInstantiationError(nativeTrap, "link-error")) !==
+      nativeTrap
+  ) {
+    throw new Error("native trap satisfied a link-error expectation");
+  }
+
+  const resourceMismatch = new HostResourceImportTypeError("wrong resource");
+  const mappedLink = await thrown(() =>
+    rethrowInstantiationError(resourceMismatch, "link-error")
+  );
+  if (
+    !(mappedLink instanceof LinkError) ||
+    mappedLink.message !== "wrong resource"
+  ) {
+    throw new Error(`resource mismatch was not a link error: ${mappedLink}`);
+  }
+
+  for (
+    const error of [
+      new PlanError("generic plan failure"),
+      new Error("generic executor failure"),
+    ]
+  ) {
+    if (
+      await thrown(() => rethrowInstantiationError(error, "link-error")) !==
+        error
+    ) {
+      throw new Error(`${error} satisfied a link-error expectation`);
+    }
   }
 });

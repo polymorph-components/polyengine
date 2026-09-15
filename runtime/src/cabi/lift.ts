@@ -210,7 +210,10 @@ export function liftFlatVariant(
   const flatTypes = flattenVariant(cases, cx.opts);
   assert_(flatTypes.shift() === "i32");
   const caseIndex = vi.next("i32") as number;
-  trapIf(caseIndex >= cases.length, "invalid variant discriminant");
+  trapIf(
+    caseIndex >= cases.length,
+    `discriminant ${caseIndex} out of range [0..${cases.length})`,
+  );
   const coerceIter: ValueIter = {
     next(want: CoreType): CoreValue {
       const have = flatTypes.shift()!;

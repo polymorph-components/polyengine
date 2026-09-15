@@ -8,7 +8,7 @@
 import type { WastJson } from "../src/schema.ts";
 import { CoreOnlyExecutor } from "../src/executor.ts";
 import type { CommandExecutor } from "../src/executor.ts";
-import { TrapError } from "../src/executor.ts";
+import { LinkError, TrapError } from "../src/executor.ts";
 import { runWastJson, trapMatches } from "../src/runner.ts";
 
 // (module) - the empty core module, hand-encoded.
@@ -204,6 +204,34 @@ Deno.test("assert_uninstantiable rejects an unrelated trap cause", async () => {
   assertEq(result.results[0].status, "failed", "status");
 });
 
+Deno.test("assert_unlinkable requires a matching link diagnostic", async () => {
+  for (
+    const [message, status] of [
+      ["expected resource found func", "passed"],
+      ["different cause", "failed"],
+      [
+        "prefix host import 'host/return-three' must be a HostResourceType (the component imports a resource type); got a function",
+        "failed",
+      ],
+    ] as const
+  ) {
+    const executor = new CoreOnlyExecutor() as CommandExecutor;
+    executor.instantiate = () => Promise.reject(new LinkError(message));
+    const result = await runWastJson(
+      doc([{
+        type: "assert_unlinkable",
+        line: 1,
+        filename: "comp.0.wasm",
+        module_type: "binary",
+        text: "expected resource found func",
+      }]),
+      load,
+      executor,
+    );
+    assertEq(result.results[0].status, status, message);
+  }
+});
+
 // Exact diagnostic equivalents: the core `unreachable` trap row. The runtime
 // (runtime/src/exec/boundary.ts mapCoreException) passes each JS engine's raw
 // trap text through untouched; this table is where the suite's
@@ -373,10 +401,42 @@ Deno.test("trapMatches: verified diagnostic equivalents match only their named o
       "wasm `unreachable` instruction executed",
       "guest trapped: unreachable",
     ],
+    [
+      "cannot remove owned resource while borrowed",
+      "handle still lent out",
+    ],
+    ["string pointer not aligned to 2", "misaligned string pointer"],
+    [
+      "was not found",
+      "host import 'host/missing' must be a HostResourceType (the component imports a resource type); got undefined",
+    ],
+    [
+      "expected resource found func",
+      "host import 'host/return-three' must be a HostResourceType (the component imports a resource type); got a function",
+    ],
   ];
   for (const [expected, actual] of equivalents) {
     assertEq(trapMatches(expected, actual), true, `${expected} / ${actual}`);
   }
+});
+
+Deno.test("generic variant diagnostic is not globally equivalent", () => {
+  assertEq(
+    trapMatches(
+      "discriminant 2 out of range [0..2)",
+      "invalid variant discriminant",
+    ),
+    false,
+    "global matcher",
+  );
+  assertEq(
+    trapMatches(
+      "discriminant 2 out of range [0..2)",
+      "discriminant 3 out of range [0..3)",
+    ),
+    false,
+    "different discriminant and case count",
+  );
 });
 
 Deno.test("trapMatches: narrow diagnostic rows reject adjacent but different traps", () => {
@@ -406,6 +466,11 @@ Deno.test("trapMatches: narrow diagnostic rows reject adjacent but different tra
     [
       "uncaught exception propagated out of component",
       "guest trapped: unreachable",
+    ],
+    ["string pointer not aligned to 2", "misaligned list pointer"],
+    [
+      "was not found",
+      "prefix host import 'host/missing' must be a HostResourceType (the component imports a resource type); got undefined",
     ],
   ];
   for (const [expected, actual] of nonEquivalents) {
@@ -439,6 +504,11 @@ Deno.test("trapMatches: exact equivalents reject expected and actual affixes", (
       [
         "invalid `task.return` signature and/or options for current task",
         "task.return with canonical options differing from the task's",
+      ],
+      ["string pointer not aligned to 2", "misaligned string pointer"],
+      [
+        "expected resource found func",
+        "host import 'host/return-three' must be a HostResourceType (the component imports a resource type); got a function",
       ],
     ]
   ) {

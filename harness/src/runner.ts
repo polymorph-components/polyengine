@@ -246,7 +246,14 @@ class FileRunner {
         try {
           await this.executor.instantiate(artifact, "link-error");
         } catch (e) {
-          if (e instanceof LinkError) return undefined;
+          if (e instanceof LinkError) {
+            if (!trapMatches(command.text, e.message)) {
+              throw new Error(
+                `expected link error "${command.text}", got "${e.message}"`,
+              );
+            }
+            return undefined;
+          }
           throw e;
         }
         throw new Error(
@@ -331,6 +338,26 @@ const TRAP_MESSAGE_EQUIVALENTS: Array<
   // Pinned Wasmtime resources.wast:459-481 passes literal slot 2 to the
   // outer component's empty table; Table.get rejects it as out of range.
   ["unknown handle index 2", ["table index out of range"]],
+  // Pinned Wasmtime resources.wast:927 and definitions.py lift_own
+  // (third_party/component-model/design/mvp/canonical-abi/definitions.py:1482).
+  ["cannot remove owned resource while borrowed", ["handle still lent out"]],
+  // Pinned Wasmtime strings.wast:21,23 and definitions.py
+  // load_string_from_range (definitions.py:1395).
+  ["string pointer not aligned to 2", ["misaligned string pointer"]],
+  // Pinned Wasmtime resources.wast:167,174. The executor emits these only
+  // from its dedicated host-resource import type verdict.
+  [
+    "was not found",
+    [
+      "host import 'host/missing' must be a HostResourceType (the component imports a resource type); got undefined",
+    ],
+  ],
+  [
+    "expected resource found func",
+    [
+      "host import 'host/return-three' must be a HostResourceType (the component imports a resource type); got a function",
+    ],
+  ],
   // Official resources/handle-table.wast:322,324 and the corresponding
   // resource-type checks in runtime/src/cabi/handles.ts:239-263.
   [

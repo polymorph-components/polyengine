@@ -322,6 +322,32 @@ nondeterminism as a bug.
 
 ## Open items
 
+- **Declared-import checking** ([#372](https://github.com/polymorph-components/polyengine/issues/372)):
+  `imports` contains runtime-used leaves from environ's `component.imports`,
+  not the complete `component.import_types` surface. Unused imports and
+  equality-bound resource aliases can disappear, so the current executor cannot
+  check their presence, kind, or supplied resource identity. This is a linking
+  gap, not evidence that those declarations impose no constraints.
+
+  The next design must retain the declared import tree and its type constraints
+  while keeping runtime import indices stable for initializer references.
+  Resource aliases must refer to the existing resource identity, not allocate a
+  second token. Validate supplied aliases against that identity before running
+  initializers. Under the Wasmtime-compatible host policy, an omitted
+  equality-bound alias or recursively empty instance can be synthesized; a
+  supplied value must still match. See the pinned Explainer's type bounds and
+  resource substitution rules, and Wasmtime `component/matching.rs` for this
+  host policy.
+
+  Core-module matching also needs typed import/export metadata: the JS module
+  reflection API exposes names and kinds, not signatures or limits. Do not
+  claim to check module subtyping from that reflection alone. Named-instance
+  wiring in the WAST harness must preserve exported resource identities and
+  module metadata; missing providers must not satisfy a type-mismatch assertion.
+  Cover matching, mismatching, unused, and omitted imports, and verify rejection
+  before start-function side effects. This is a follow-up design constraint,
+  not an optional field or a change to formatVersion 5; the schema and its
+  version transition must be reviewed together with the implementation.
 - `values` section (the component-level value-definition feature): out of scope
   (wasmtime parity, docs/architecture.md §7).
 - Imported-module instantiation (`InstantiateModule::Import`) and re-export
