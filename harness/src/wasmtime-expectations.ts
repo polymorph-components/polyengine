@@ -97,33 +97,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
             status: "failed",
           }],
         },
-        {
-          file: "resources.json",
-          rows: [{
-            lines: [927],
-            cause:
-              'Error: expected trap "cannot remove owned resource while borrowed", got "handle still lent out"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "strings.json",
-          rows: [{
-            lines: [21, 23],
-            cause:
-              'Error: expected trap "string pointer not aligned to 2", got "misaligned string pointer"',
-            status: "failed",
-          }],
-        },
-        {
-          file: "types.json",
-          rows: [{
-            lines: [378],
-            cause:
-              'Error: expected trap "discriminant 2 out of range [0..2)", got "invalid variant discriminant"',
-            status: "failed",
-          }],
-        },
       ],
     },
     {
@@ -213,14 +186,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
           }],
         },
         {
-          file: "instance.json",
-          rows: [{
-            lines: [79],
-            cause: "RuntimeError: unreachable",
-            status: "failed",
-          }],
-        },
-        {
           file: "linking.json",
           rows: [{
             lines: [2, 11, 14, 17],
@@ -271,16 +236,6 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
         {
           file: "resources.json",
           rows: [{
-            lines: [167],
-            cause:
-              "PlanError: host import 'host/missing' must be a HostResourceType (the component imports a resource type); got undefined",
-            status: "failed",
-          }, {
-            lines: [174],
-            cause:
-              "PlanError: host import 'host/return-three' must be a HostResourceType (the component imports a resource type); got a function",
-            status: "failed",
-          }, {
             lines: [201],
             cause:
               "Error: expected instantiation link-error, but component instantiated successfully",
