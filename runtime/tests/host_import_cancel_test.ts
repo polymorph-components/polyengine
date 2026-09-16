@@ -586,9 +586,11 @@ Deno.test("cancellation discard: deferCancel() keeps run-to-completion — BLOCK
   const f = mkFixture(deferCancel(() => d.promise));
   const { subtaski, subtask } = inFlight(f);
 
-  const rc = f.asGuest(() =>
-    createSubtaskCancel({ async: true }, f.inst)(subtaski)
-  );
+  const pending = f.asGuest(() =>
+    createSubtaskCancel({ async: true }, f.inst, "jspi")(subtaski)
+  ) as Promise<number>;
+  f.store.tick();
+  const rc = await pending;
   assertEq(rc, BLOCKED);
   assertEq(subtask.resolved(), false);
   assertEq(subtask.state, SubtaskState.STARTED);
@@ -692,15 +694,14 @@ Deno.test("abortable(): a discard aborts the signal — one microtask LATER, nev
   const { subtaski } = inFlight(f);
   const signal = r.seen.last as AbortSignal;
 
-  const rc = f.asGuest(() =>
-    createSubtaskCancel({ async: true }, f.inst)(subtaski)
-  );
+  const pending = f.asGuest(() =>
+    createSubtaskCancel({ async: true }, f.inst, "jspi")(subtaski)
+  ) as Promise<number>;
+  f.store.tick();
+  const rc = await pending;
   assertEq(rc, SubtaskState.CANCELLED_BEFORE_RETURNED);
-  // SYNCHRONOUSLY after the built-in returned: still unaborted. This is the
-  // assertion that pins the deferral rather than merely the abort.
-  assertEq(signal.aborted, false);
-
-  await Promise.resolve();
+  // The mandatory async-cancel yield gives the queued abort microtask a turn
+  // before the built-in's Promise settles.
   assertEq(signal.aborted, true);
 });
 
@@ -740,9 +741,11 @@ Deno.test("abortable(): deferCancel + abortable — cancellation never discards,
   const signal = r.seen.last as AbortSignal;
   assertEq(r.seen.count, FT.params.length + 1);
 
-  const rc = f.asGuest(() =>
-    createSubtaskCancel({ async: true }, f.inst)(subtaski)
-  );
+  const pending = f.asGuest(() =>
+    createSubtaskCancel({ async: true }, f.inst, "jspi")(subtaski)
+  ) as Promise<number>;
+  f.store.tick();
+  const rc = await pending;
   assertEq(rc, BLOCKED);
   for (let i = 0; i < 5; i++) await Promise.resolve();
   assertEq(signal.aborted, false);

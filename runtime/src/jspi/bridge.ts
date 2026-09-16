@@ -55,7 +55,6 @@ import {
   withActivation,
 } from "../task/mod.ts";
 import type {
-  Cancelled,
   CurrentThreadLike,
   RequiredSyncPark,
   SchedulableThread,
@@ -461,6 +460,8 @@ export class SuspensionPoint<T = unknown>
   readonly #syncBlockWhen?: () => boolean;
   readonly #explicitSuspend: boolean;
   #explicitReady = false;
+  /** Instance whose ready threads the enclosing synchronous operation drives. */
+  syncInstance: unknown;
 
   constructor(
     store: Store,
@@ -468,16 +469,8 @@ export class SuspensionPoint<T = unknown>
     readonly task: any,
     /** Resumable once this holds; `null` = only an explicit resume. */
     readonly readyFunc: (() => boolean) | null,
-    /**
-     * definitions.py `Thread.cancellable` — set for the duration of this
-     * park, cleared when the point resumes (parity with task/thread.ts's
-     * `Thread.cancellable`, which the reference evaluates as a live
-     * predicate: a point that is no longer parked is never a
-     * `request_cancellation` candidate).
-     */
-    public cancellable: boolean,
     /** Produces the value to hand back to wasm at resume time. */
-    private readonly produce: (cancelled: Cancelled) => T,
+    private readonly produce: () => T,
     // deno-lint-ignore no-explicit-any
     owner?: any,
     logicalOwner?: CurrentThreadLike | null,
@@ -508,6 +501,7 @@ export class SuspensionPoint<T = unknown>
       | "mandatory-continuation" = "component-model",
     explicitSuspend = false,
     syncBlockWhen?: () => boolean,
+    syncInstance?: unknown,
   ) {
     this.#store = store;
     this.owner = owner ?? maybeCurrentThread() ?? task?.implicitThread ?? null;
@@ -515,6 +509,7 @@ export class SuspensionPoint<T = unknown>
     this.blockReason = blockReason;
     this.#syncBlockWhen = syncBlockWhen;
     this.#explicitSuspend = explicitSuspend;
+    this.syncInstance = syncInstance;
     if (this.logicalOwner !== null && "activePark" in this.logicalOwner) {
       (this.logicalOwner as Thread).activePark = this;
     }
@@ -541,17 +536,7 @@ export class SuspensionPoint<T = unknown>
     if (this.#done) return false;
     if (this.#explicitReady) return true;
     if (this.readyFunc !== null && this.readyFunc()) return true;
-    // definitions.py `ready_or_cancelled` (`Thread.wait_until` line 369),
-    // ported to task/thread.ts:waitUntil: a cancel that arrived while this
-    // task was not cancellable (parked as `pending-cancel`) makes the block
-    // point ready on its own, otherwise the wakeup is lost until some
-    // unrelated event happens to satisfy `readyFunc` — possibly never.
-    // Only the implicit callback thread is gated by callback exclusivity.
-    // Explicit sibling threads remain cancellation candidates independently.
-    const lockAvailable = this.logicalOwner === this.task?.implicitThread
-      ? this.task.implicitThreadCancellable() === true
-      : true;
-    return this.cancellable && this.#taskHasPendingCancel() && lockAvailable;
+    return false;
   }
 
   explicitlySuspended(): boolean {
@@ -568,7 +553,22 @@ export class SuspensionPoint<T = unknown>
     const semanticBlock = this.blockReason === "component-model" ||
       (this.blockReason === "mandatory-continuation" &&
         this.#syncBlockWhen?.() === true);
-    if (semanticBlock && logicalTask?.ft?.async === false && rootLive) {
+    let syncOwner = this.logicalOwner ?? undefined;
+    while (syncOwner !== undefined && syncOwner.task?.ft?.async !== false) {
+      syncOwner =
+        (syncOwner as CurrentThreadLike & { parent?: CurrentThreadLike })
+          .parent;
+    }
+    if (
+      semanticBlock && syncOwner !== undefined && rootLive
+    ) {
+      // CONTRACT: the sync lift services candidates in its callee instance
+      // (definitions.py:2102-2106). Operations such as synchronous
+      // subtask.cancel may instead name a child instance whose pending
+      // continuation must run first (definitions.py:2366-2375).
+      if (this.syncInstance === undefined) {
+        this.syncInstance = syncOwner.task?.inst;
+      }
       this.#store.requireSyncProgress(this as unknown as RequiredSyncPark);
     }
   }
@@ -582,25 +582,9 @@ export class SuspensionPoint<T = unknown>
     this.#store.requestService();
   }
 
-  /**
-   * `task` is untyped here and some parks carry a stub (no `Task` at all —
-   * instantiation-time built-ins, and the tests that stand in for them), so
-   * both cancel hooks are feature-detected. No task, no pending cancel.
-   */
-  #taskHasPendingCancel(): boolean {
-    return typeof this.task?.hasPendingCancel === "function" &&
-      this.task.hasPendingCancel() === true;
-  }
-
   /** Settle the import's Promise; the engine resumes the wasm activation. */
-  resume(cancelled: Cancelled = false): void {
+  resume(): void {
     assert_(!this.#done, "resume of an already-resumed suspension point");
-    // Mirrors task/thread.ts:187-190 (definitions.py:367 `Thread.resume`):
-    // a cancelled resume is only legal at a cancellable block point (#93).
-    assert_(
-      this.cancellable || !cancelled,
-      "cancelled resume of a non-cancellable suspension point",
-    );
     if (SP_TRACE) {
       console.error(
         `[sp] resume ${dbgId(this)} owner=${dbgId(this.owner)}\n${
@@ -609,20 +593,9 @@ export class SuspensionPoint<T = unknown>
       );
     }
     this.#done = true;
-    // AFTER the block (definitions.py `Thread.wait_until` line 372, ported to
-    // task/thread.ts:waitUntil): a plain wakeup taken through the
-    // pending-cancel disjunct in `ready()` becomes a cancelled resume, and
-    // that delivery wins over any event that became pending meanwhile.
-    if (
-      typeof this.task?.deliverPendingCancel === "function" &&
-      this.task.deliverPendingCancel(this.cancellable) === true
-    ) {
-      cancelled = true;
-    }
-    this.cancellable = false;
     this.#store.stopWaiting(this);
     try {
-      this.#resumeInner(cancelled);
+      this.#resumeInner();
     } finally {
       // Terminal state reached, by whichever of the two paths below. See
       // `onSettled`: this is the backstop, not the primary cleanup site, so
@@ -632,10 +605,10 @@ export class SuspensionPoint<T = unknown>
     }
   }
 
-  #resumeInner(cancelled: Cancelled): void {
+  #resumeInner(): void {
     let value: T;
     try {
-      value = this.produce(cancelled);
+      value = this.produce();
     } catch (e) {
       // A trap computed at resume time (e.g. the event turned out to be a
       // trapping one) must reach the guest as a rejection of the import's
@@ -748,8 +721,7 @@ export function blockCurrentActivation<T>(input: {
   // deno-lint-ignore no-explicit-any
   task: any;
   readyFunc: (() => boolean) | null;
-  cancellable: boolean;
-  produce: (cancelled: Cancelled) => T;
+  produce: () => T;
   /**
    * Optional `finally`-style hook — see `SuspensionPoint.onSettled`. Use it
    * for state that must be discharged however the park ends, including the
@@ -764,6 +736,8 @@ export function blockCurrentActivation<T>(input: {
   /** A mandatory continuation can become a genuine CM wait after its named
    * dependency reaches a canonical return/park boundary. */
   syncBlockWhen?: () => boolean;
+  /** Override the instance driven while this synchronous operation is parked. */
+  syncInstance?: unknown;
   /** This park is the resumable state of a `thread.suspend*` operation. */
   explicitSuspend?: boolean;
 }): Promise<T> {
@@ -799,7 +773,6 @@ export function blockCurrentActivation<T>(input: {
     input.store,
     input.task,
     input.readyFunc,
-    input.cancellable,
     input.produce,
     owner,
     logicalOwner,
@@ -807,6 +780,7 @@ export function blockCurrentActivation<T>(input: {
     input.blockReason,
     input.explicitSuspend,
     input.syncBlockWhen,
+    input.syncInstance,
   );
   Promise.resolve().then(() => {
     point.boundaryReturned = true;

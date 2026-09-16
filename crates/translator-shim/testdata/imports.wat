@@ -31,7 +31,7 @@
   (canon lower (func $log) (core func $log'))
   (canon lower (func $add) (core func $add'))
   (canon lower (func $greet)
-    (memory $mem "mem") (realloc (func $mem "realloc"))
+    (memory (core memory $mem "mem")) (realloc (core func $mem "realloc"))
     (core func $greet'))
 
   (core module $M

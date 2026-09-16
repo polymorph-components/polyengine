@@ -13,8 +13,6 @@
 
 import {
   ComponentInstanceState,
-  instancePoisonCause,
-  isInstancePoisoned,
   popCurrentThread,
   pushCurrentThread,
   releaseActivationAmbient,
@@ -26,11 +24,7 @@ import {
   withActivation,
 } from "../src/task/mod.ts";
 import { createWaitableSetWait } from "../src/intrinsics/async_builtins.ts";
-import {
-  blockCurrentActivation,
-  type SuspensionPoint,
-} from "../src/jspi/mod.ts";
-import { Trap } from "../src/cabi/mod.ts";
+import type { SuspensionPoint } from "../src/jspi/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
 import type { ResolvedOptions } from "../src/exec/boundary.ts";
 
@@ -170,7 +164,7 @@ Deno.test("resume success arm: delivery from the pending-entry holder consumes i
     // is now running under its wasm-entry bracket, where it synchronously
     // delivers a cancellation whose `produce` SUCCEEDS (TASK_CANCELLED).
     store.addPendingResumption(caller.thread);
-    withActivation(caller.thread, () => parked.point.resume(true));
+    withActivation(caller.thread, () => parked.point.resume());
     assert(
       !store.pendingResumptions.has(caller.thread),
       "the caller's entry was consumed: its window closed when it ran",
@@ -199,7 +193,7 @@ Deno.test("resume trap arm: delivery from the pending-entry holder consumes it t
       // fix this arm recorded the resumed ambient WITHOUT consuming the
       // caller's, so the (then single-slot) gate asserted and preempted
       // `#fail(e)`.
-      withActivation(caller.thread, () => parked.point.resume(false));
+      withActivation(caller.thread, () => parked.point.resume());
     } catch (e) {
       threw = e;
     }
@@ -241,7 +235,7 @@ Deno.test("resume from an EMPTY bracket self-consumes via the claims-top fallbac
     // First resumption: B's cancellation delivered from outside any activation
     // (a driver) — records B, both the activation-ambient claim and the
     // store's pending entry.
-    parkedB.point.resume(true);
+    parkedB.point.resume();
     assert(store.pendingResumptions.has(b.thread), "B's entry is pending");
     // Second resumption in the same turn, again from an empty bracket:
     // `activationOf()` is the entryStack top ?? the activation-claims top, and
@@ -251,7 +245,7 @@ Deno.test("resume from an EMPTY bracket self-consumes via the claims-top fallbac
     // hazard.)
     let threw: unknown = null;
     try {
-      parkedA.point.resume(true);
+      parkedA.point.resume();
     } catch (e) {
       threw = e;
     }
@@ -283,7 +277,7 @@ Deno.test("resume from a DIFFERENT running activation while a resumption is pend
     // against Z's store's set and correctly consumes nothing.
     let threw: unknown = null;
     try {
-      withActivation(x.thread, () => parkedZ.point.resume(true));
+      withActivation(x.thread, () => parkedZ.point.resume());
     } catch (e) {
       threw = e;
     }
@@ -316,7 +310,7 @@ Deno.test("resume from a DIFFERENT running activation while a resumption is pend
     store.addPendingResumption(y.thread);
     let threw: unknown = null;
     try {
-      withActivation(x.thread, () => parkedZ.point.resume(true));
+      withActivation(x.thread, () => parkedZ.point.resume());
     } catch (e) {
       threw = e;
     }
@@ -332,72 +326,5 @@ Deno.test("resume from a DIFFERENT running activation while a resumption is pend
     );
   } finally {
     cleanupAmbient(x, y, z);
-  }
-});
-
-Deno.test("guest-shaped: a trapping cancellation delivery while the canceller's claim is live (#158 mechanism A)", async () => {
-  // The f7abf96 class ("request_cancellation: a trap during delivery poisons
-  // the callee", task_test.ts) on the SuspensionPoint arm: the callee is
-  // parked in a cancellable built-in whose `produce` traps when handed
-  // `cancelled`, and the canceller delivers it while still holding its own
-  // engine-resume claim.
-  // Intra-store, as a real cancellation delivery is.
-  const store = new Store();
-  const callee = mkWorld({ store });
-  const canceller = mkWorld({ store });
-  try {
-    const parked = callee.run(() =>
-      blockCurrentActivation<number>({
-        store: callee.store,
-        task: callee.task,
-        readyFunc: null,
-        cancellable: true,
-        produce: (cancelled) => {
-          if (cancelled) throw new Trap("boom during cancel delivery");
-          return 0;
-        },
-      })
-    );
-    const outcome = rejection(parked);
-    const point = callee.point();
-    assert(point !== undefined, "the suspension point is waiting");
-
-    store.addPendingResumption(canceller.thread);
-    let threw: unknown = null;
-    try {
-      withActivation(
-        canceller.thread,
-        () => callee.task.requestCancellation(null),
-      );
-    } catch (e) {
-      threw = e;
-    }
-    assert(
-      !String(threw).includes("two activations claim the resumed ambient"),
-      `the #158 assertion must not preempt the trap: ${String(threw)}`,
-    );
-    assert(
-      callee.task.state === "cancel-delivered",
-      `parity: the state is set first, got ${callee.task.state}`,
-    );
-    // `SuspensionPoint.resume` never rethrows a `produce` error: the trap
-    // reaches the guest as a rejection of the import's Promise (the engine
-    // turns it back into a wasm trap), so `requestCancellation` sees no throw
-    // on this arm and the instance-poisoning branch of its catch does not run.
-    // See the report on #158: whether the SP arm should also poison is a
-    // separate question from the mechanism-A claim asymmetry fixed here.
-    const r = await outcome;
-    assert(r.ok === false, "the parked promise rejected");
-    assert(
-      String(r.e).includes("boom during cancel delivery"),
-      `the guest receives its own trap: ${String(r.e)}`,
-    );
-    assert(
-      isInstancePoisoned(callee.inst) === false &&
-        instancePoisonCause(callee.inst) === undefined,
-      "pinning current behavior: the SP arm does not poison the callee",
-    );
-  } finally {
-    cleanupAmbient(callee, canceller);
   }
 });

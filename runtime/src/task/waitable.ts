@@ -3,7 +3,7 @@
 
 import { assert_, trapIf } from "../cabi/trap.ts";
 import { chooseCandidate } from "./scheduler.ts";
-import type { BlockRequest, Cancelled } from "./scheduler.ts";
+import type { BlockRequest } from "./scheduler.ts";
 import type { Thread } from "./thread.ts";
 
 /** definitions.py `EventCode`. */
@@ -49,13 +49,13 @@ export class Waitable {
    */
   *waitForPendingEvent(
     thread: Thread,
-  ): Generator<BlockRequest, void, Cancelled> {
+  ): Generator<BlockRequest, void, unknown> {
     assert_(
       !this.inWaitableSet() && !this.hasSyncWaiter,
       "waitForPendingEvent on a joined or already-awaited waitable",
     );
     this.hasSyncWaiter = true;
-    yield* thread.waitUntil(() => this.hasPendingEvent(), false);
+    yield* thread.waitUntil(() => this.hasPendingEvent());
     this.hasSyncWaiter = false;
   }
 
@@ -80,11 +80,11 @@ export class Waitable {
 
   /** definitions.py `Waitable.drop`. */
   drop(): void {
-    assert_(
-      !this.hasPendingEvent(),
-      "dropping a waitable with a pending event",
-    );
     assert_(!this.hasSyncWaiter, "dropping a waitable with a sync waiter");
+    // definitions.py:744-746: dropping a waitable discards, rather than
+    // consumes, any pending notification. This matters for an idle stream end
+    // whose peer-drop event has not yet been observed.
+    this.pendingEvent = null;
     this.join(null);
   }
 }
@@ -130,15 +130,34 @@ export class WaitableSet {
   *waitForEventAnd(
     thread: Thread,
     readyFunc: () => boolean,
-    cancellable: boolean,
-  ): Generator<BlockRequest, EventTuple, Cancelled> {
+  ): Generator<BlockRequest, EventTuple, unknown> {
     this.numWaiting += 1;
     try {
-      const cancelled = yield* thread.waitUntil(
-        () => readyFunc() && this.hasPendingEvent(),
-        cancellable,
+      yield* thread.waitUntil(() => readyFunc() && this.hasPendingEvent());
+      return this.getPendingEvent();
+    } finally {
+      this.numWaiting -= 1;
+    }
+  }
+
+  /** Callback-ABI wait. Cancellation readiness and priority belong to
+   * `canon_lift`'s callback loop, not generic Thread waiting
+   * (definitions.py:2073-2094). */
+  *waitForCallbackEvent(
+    thread: Thread,
+    task: {
+      hasPendingCancel(): boolean;
+      deliverPendingCancel(): boolean;
+    },
+    lockAvailable: () => boolean,
+  ): Generator<BlockRequest, EventTuple, unknown> {
+    this.numWaiting += 1;
+    try {
+      yield* thread.waitUntil(() =>
+        lockAvailable() &&
+        (task.hasPendingCancel() || this.hasPendingEvent())
       );
-      return cancelled
+      return task.deliverPendingCancel()
         ? [EventCode.TASK_CANCELLED, 0, 0]
         : this.getPendingEvent();
     } finally {
@@ -149,9 +168,8 @@ export class WaitableSet {
   /** definitions.py `WaitableSet.wait_for_event`. */
   *waitForEvent(
     thread: Thread,
-    cancellable: boolean,
-  ): Generator<BlockRequest, EventTuple, Cancelled> {
-    return yield* this.waitForEventAnd(thread, () => true, cancellable);
+  ): Generator<BlockRequest, EventTuple, unknown> {
+    return yield* this.waitForEventAnd(thread, () => true);
   }
 
   /**
@@ -159,10 +177,7 @@ export class WaitableSet {
    * plain function rather than a generator.
    */
   // deno-lint-ignore no-explicit-any
-  poll(task: any, cancellable: boolean): EventTuple {
-    if (task.deliverPendingCancel(cancellable)) {
-      return [EventCode.TASK_CANCELLED, 0, 0];
-    }
+  poll(_task?: any): EventTuple {
     if (!this.hasPendingEvent()) return [EventCode.NONE, 0, 0];
     return this.getPendingEvent();
   }

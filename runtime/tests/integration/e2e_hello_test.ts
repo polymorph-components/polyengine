@@ -14,9 +14,63 @@ import { Translator } from "../../src/shim/mod.ts";
 import { instantiateComponent } from "../../src/exec/mod.ts";
 import { SUPPORTED_FORMAT_VERSION } from "../../src/plan/mod.ts";
 import { isInstancePoisoned } from "../../src/task/scheduler.ts";
+import type { WireEnvelope } from "../../src/plan/format.ts";
 
 function assert(cond: boolean, msg: string): asserts cond {
   if (!cond) throw new Error(`assertion failed: ${msg}`);
+}
+
+/** Minimal core-wasm type/import reader for the old FACT ABI assertion. */
+function enterSyncCallParamCount(bytes: Uint8Array): number {
+  let p = 8;
+  const u32 = () => {
+    let n = 0, shift = 0, b: number;
+    do {
+      b = bytes[p++];
+      n |= (b & 0x7f) << shift;
+      shift += 7;
+    } while (b & 0x80);
+    return n >>> 0;
+  };
+  const text = () => {
+    const n = u32();
+    const s = new TextDecoder().decode(bytes.subarray(p, p + n));
+    p += n;
+    return s;
+  };
+  const types: number[] = [];
+  let enterType = -1;
+  while (p < bytes.length) {
+    const id = bytes[p++], size = u32(), end = p + size;
+    if (id === 1) {
+      for (let n = u32(); n > 0; n--) {
+        assert(bytes[p++] === 0x60, "old adapter function type");
+        const params = u32();
+        types.push(params);
+        p += params;
+        const results = u32();
+        p += results;
+      }
+    } else if (id === 2) {
+      for (let n = u32(); n > 0; n--) {
+        const module = text(), name = text(), kind = bytes[p++];
+        if (kind === 0) {
+          const type = u32();
+          if (module === "async" && name === "enter-sync-call") {
+            enterType = type;
+          }
+        } else if (kind === 2) {
+          const flags = u32();
+          u32();
+          if (flags & 1) u32();
+        } else if (kind === 3) p += 2;
+        else throw new Error(`unsupported old adapter import kind ${kind}`);
+      }
+    }
+    p = end;
+  }
+  assert(enterType >= 0, "old FACT adapter imports enter-sync-call");
+  return types[enterType];
 }
 
 const root = new URL("../../../", import.meta.url);
@@ -43,7 +97,7 @@ Deno.test("hello: full pipeline shim -> plan -> executor -> greet()", async () =
   const { plan, adapters } = translator.translate(helloWasm);
 
   assertEq(plan.formatVersion, SUPPORTED_FORMAT_VERSION);
-  assertEq(plan.producer.wasmtimeEnviron, "49.0.0-dev+4675ee1");
+  assertEq(plan.producer.wasmtimeEnviron, "50.0.0-dev+cc546ee");
   assertEq(adapters.size, 0); // no cross-component links in hello
 
   const component = await instantiateComponent({
@@ -107,6 +161,55 @@ Deno.test("hello: executor validates formatVersion and hash", async () => {
     failed = String(e);
   }
   assert(failed.includes("formatVersion"), `got: ${failed}`);
+
+  // A coherent linked format-5 artifact set produced by the previous pinned
+  // translator is rejected before adapter compilation or instantiation.
+  const oldEnvelope = JSON.parse(
+    await Deno.readTextFile(
+      new URL("../fixtures/old-v5-linked.envelope.json", import.meta.url),
+    ),
+  ) as WireEnvelope;
+  const oldComponent = await Deno.readFile(
+    new URL("../fixtures/old-v5-linked.component.wasm", import.meta.url),
+  );
+  assert(oldEnvelope.plan !== undefined, "old envelope must contain a plan");
+  const oldAdapters = new Map(
+    (oldEnvelope.adapters ?? []).map((adapter) => [
+      adapter.file,
+      Uint8Array.from(atob(adapter.wasm), (byte) => byte.charCodeAt(0)),
+    ]),
+  );
+  const oldAdapter4 = oldAdapters.get("adapters/4.wasm");
+  assert(oldAdapter4 !== undefined, "old envelope embeds adapter 4");
+  const adapterModule = await WebAssembly.compile(oldAdapter4);
+  const enter = WebAssembly.Module.imports(adapterModule).find((i) =>
+    i.module === "async" && i.name === "enter-sync-call"
+  );
+  assert(
+    enter?.kind === "function",
+    "old FACT adapter imports enter-sync-call",
+  );
+  assertEq(enterSyncCallParamCount(oldAdapter4), 3);
+  const oldModules = oldEnvelope.plan.modules.filter((m) =>
+    m.kind === "adapter"
+  );
+  assertEq(oldModules.length, 2);
+  for (const module of oldModules) {
+    const adapter = oldAdapters.get(module.file);
+    assert(adapter !== undefined, `old envelope embeds ${module.file}`);
+    assertEq(module.len, adapter.length);
+  }
+  failed = "";
+  try {
+    await instantiateComponent({
+      plan: oldEnvelope.plan,
+      componentBytes: oldComponent,
+      adapters: oldAdapters,
+    });
+  } catch (e) {
+    failed = String(e);
+  }
+  assert(failed.includes("unsupported plan formatVersion 5"), `got: ${failed}`);
 
   // Component-bytes mismatch (hash check) fails fast.
   const tampered = helloWasm.slice();

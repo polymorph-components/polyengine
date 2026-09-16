@@ -7,7 +7,6 @@ import type { CoreValue } from "../cabi/types.ts";
 import { awaitCore, type CoreFn } from "../exec/boundary.ts";
 import { blockCurrentActivation, type SuspensionMode } from "../jspi/mod.ts";
 import {
-  type Cancelled,
   currentThreadExactlyForInstance,
   needsJspi,
   Thread,
@@ -21,7 +20,7 @@ export interface ThreadTrampolineContext {
   enterThreadFunction(fn: CoreFn): CoreFn;
 }
 
-type ThreadDecl = { instance: number; cancellable?: boolean };
+type ThreadDecl = { instance: number };
 
 // Generated from the checked WAT below. `ref.test` checks a nominal final
 // reference without executing the target. It covers the canonical final types
@@ -237,7 +236,6 @@ function createThreadPark(
   targetKind: TargetKind,
 ): CoreFn {
   const inst = declaredInst(decl, ctx);
-  const cancellable = decl.cancellable === true;
   return (index?: number) => {
     requireMayLeave(inst, `thread.${park}`);
     const caller = currentThreadExactlyForInstance<Thread>(inst);
@@ -249,8 +247,6 @@ function createThreadPark(
         trapIf(!target.explicitlySuspended(), "cannot resume thread");
       }
     }
-    // definitions.py validates target/self/state before cancellation delivery.
-    if (caller.task.deliverPendingCancel(cancellable)) return 1;
     if (ctx.suspensionMode !== "jspi") {
       needsJspi(
         `thread.${park}${targetKind === "none" ? "" : `-then-${targetKind}`}`,
@@ -264,9 +260,8 @@ function createThreadPark(
       store: inst.store,
       task: caller.task,
       readyFunc: park === "yield" ? () => true : null,
-      cancellable,
       explicitSuspend: park === "suspend",
-      produce: (cancelled: Cancelled) => cancelled ? 1 : 0,
+      produce: () => 0,
     });
     if (resumeTarget) {
       // The caller's canonical state is now published. Transfer directly to

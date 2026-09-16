@@ -32,7 +32,6 @@ import {
 import { assert_, AssertionError, Trap } from "../cabi/trap.ts";
 import {
   type BlockRequest,
-  type Cancelled,
   componentBoundaryTrapCarrier,
   type ComponentInstanceState,
   consumeSchedulerFailure,
@@ -195,9 +194,7 @@ export interface ResolvedOptions {
   postReturn: (() => CoreFn | undefined) | null;
   callback: (() => CoreFn | undefined) | null;
   async: boolean;
-  /** Cancellability for option-indexed built-ins, including
-   * `canon_waitable_set_wait` / `canon_waitable_set_poll`. Other built-ins
-   * such as thread.yield carry their flags on the trampoline declaration. */
+  /** Legacy format-6 wire slot, validated false by the loader. */
   cancellable: boolean;
   coreType: CoreFuncType;
   instance: ComponentInstanceState;
@@ -475,14 +472,9 @@ function driveLoop(
       // direct driveSyncLift loop. Share the coordinator's quantum and cross a
       // platform-task boundary before continuing so guest YIELD cannot starve
       // timers (scheduler-cycle2.md:9-11).
-      void handoffWorkQuantum(store, drainState);
-      return driveAsync(
-        store,
-        done,
-        what,
-        idle,
-        onBackgroundFailure,
-        false,
+      const handoff = handoffWorkQuantum(store, drainState);
+      return handoff.then(() =>
+        drive(store, done, what, idle, onBackgroundFailure)
       );
     }
   }
@@ -644,10 +636,16 @@ function serviceRequiredSyncStep(
       store.finishSyncProgress(point);
       continue;
     }
-    const inst = task?.inst;
+    const inst = point.syncInstance as typeof task.inst;
     if (store.serviceSettledStepFor(inst)) {
       state.syncHopProbe = null;
       return "progress";
+    }
+    if (point.task?.hasPendingCancel?.() === true && point.ready()) {
+      if (store.tickForInstance(inst)) {
+        state.syncHopProbe = null;
+        return "progress";
+      }
     }
     const hops = entryHopThreads(store, inst);
     if (hops.length > 0 || store.pendingResumptions.has(owner)) return "wait";
@@ -656,12 +654,11 @@ function serviceRequiredSyncStep(
       return "progress";
     }
     store.finishSyncProgress(point);
-    point.abandon(
-      componentBoundaryTrapCarrier(
-        new Trap("wasm trap: cannot block a synchronous task before returning"),
-        owner,
-      ),
+    const failure = componentBoundaryTrapCarrier(
+      new Trap("wasm trap: cannot block a synchronous task before returning"),
+      owner,
     );
+    point.abandon(failure);
     state.syncHopProbe = null;
     return "progress";
   }
@@ -835,9 +832,10 @@ async function runStoreDrain(store: Store, state: DrainState): Promise<void> {
         if (syncVerdict === "progress") continue;
         if (syncVerdict === "wait") {
           const point = store.requiredSyncParks[0];
-          const hops = point === undefined
-            ? []
-            : entryHopThreads(store, point.logicalOwner.task?.inst);
+          const hops = point === undefined ? [] : entryHopThreads(
+            store,
+            point.syncInstance as typeof point.logicalOwner.task.inst,
+          );
           const blockers = point !== undefined &&
               store.pendingResumptions.has(point.owner)
             ? [...hops, point.owner]
@@ -913,6 +911,7 @@ async function runStoreDrain(store: Store, state: DrainState): Promise<void> {
           // step. Admission gets a turn before another ordinary tick, so a
           // perpetual callback YIELD loop cannot starve a pending sync export.
           store.refreshSyncRequirements();
+          if (store.requiredSyncParks.length > 0) break;
           if (serviceAdmissionStep(store, state)) break;
           if (chargeWorkQuantum(state)) {
             await handoffWorkQuantum(store, state);
@@ -1335,7 +1334,7 @@ export function createLiftedFunction(input: {
       terminalFailed = true;
       terminalCause = e;
       if (
-        task.state === "initial" && thread.waiting() && thread.cancellable
+        task.state === "initial" && thread.waiting()
       ) {
         thread.abandonWaiting();
       }
@@ -1552,8 +1551,11 @@ function entryHopThreads(
   if (store.awaiting.size === 0) return [];
   const suspended = new Set<unknown>();
   for (const w of store.waiting) {
-    const owner = (w as { owner?: unknown }).owner;
-    if (owner !== undefined && owner !== null) suspended.add(owner);
+    const point = w as { owner?: unknown; boundaryReturned?: boolean };
+    if (
+      point.owner !== undefined && point.owner !== null &&
+      point.boundaryReturned === true
+    ) suspended.add(point.owner);
   }
   const out: { awaiting: Promise<unknown> | null }[] = [];
   for (const t of store.awaiting) {
@@ -1736,7 +1738,6 @@ export function* awaitCore(
   if (raw.length === 1 && isPromiseLike(raw[0])) {
     const settled = yield {
       readyFunc: null,
-      cancellable: false,
       // Map post-resumption RuntimeError just like a synchronous core throw.
       awaitValue: Promise.resolve(raw[0] as unknown as Promise<unknown>).then(
         undefined,
@@ -1798,7 +1799,7 @@ function* liftBody(input: {
   prepared: PreparedTransfer | null;
   admissionCheckpoint: () => void;
   preserveWasmException?: boolean;
-}): Generator<BlockRequest, void, Cancelled> {
+}): Generator<BlockRequest, void, unknown> {
   const { name, ft, opts, core, stats, task } = input;
   const thread = input.thread();
   const inst = opts.instance;
@@ -2128,7 +2129,6 @@ export function createLoweredImport(input: {
           store,
           task: currentTask(),
           readyFunc: () => outcome !== undefined,
-          cancellable: false,
           blockReason: "host-import",
           produce: () => {
             // Poisoning records a marker; it need not abandon this suspension.
@@ -2272,7 +2272,7 @@ export function* runCallbackLoop(input: {
   callback: CoreFn;
   packed: number;
   stats: ExecutionStats;
-}): Generator<BlockRequest, void, Cancelled> {
+}): Generator<BlockRequest, void, unknown> {
   const { name, task, thread, inst, callback, stats } = input;
   let [code, si] = unpackCallbackResult(input.packed);
 
@@ -2284,17 +2284,28 @@ export function* runCallbackLoop(input: {
         inst.exclusiveThread === task.implicitThread,
       "callback loop without holding the exclusive thread",
     );
+    if (task.deliverPendingCancel()) {
+      stats.callbackInvocations++;
+      const [next] = normalizeCoreValues(
+        yield* awaitCore(
+          callback,
+          [EventCode.TASK_CANCELLED, 0, 0],
+          thread,
+        ),
+        ["i32"],
+        `${name} callback result`,
+      ) as [number];
+      [code, si] = unpackCallbackResult(next);
+      continue;
+    }
     // Admit other needs-exclusive tasks between invocations. Event delivery
     // and cancellation wait for the slot to be free before reclaiming it.
     inst.exclusiveThread = null;
     let event: EventTuple;
     switch (code) {
       case CallbackCode.YIELD: {
-        const cancelled = yield* thread.waitUntil(
-          () => inst.exclusiveThread === null,
-          true,
-        );
-        event = cancelled
+        yield* thread.waitUntil(() => inst.exclusiveThread === null);
+        event = task.deliverPendingCancel()
           ? [EventCode.TASK_CANCELLED, 0, 0]
           : [EventCode.NONE, 0, 0];
         break;
@@ -2305,10 +2316,10 @@ export function* runCallbackLoop(input: {
           !(wset instanceof WaitableSet),
           `callback returned WAIT with index ${si}, which is not a waitable set`,
         );
-        event = yield* (wset as WaitableSet).waitForEventAnd(
+        event = yield* (wset as WaitableSet).waitForCallbackEvent(
           thread,
+          task,
           () => inst.exclusiveThread === null,
-          true,
         );
         break;
       }

@@ -52,7 +52,6 @@
 import { assertEq } from "./support/asserts.ts";
 import {
   type BlockRequest,
-  type Cancelled,
   ComponentInstanceState,
   SubtaskState,
   Task,
@@ -77,9 +76,9 @@ const CALLBACK_OPTS: TaskOptions = {
 
 function spawn(
   task: Task,
-  body: (t: Thread) => Generator<BlockRequest, void, Cancelled>,
+  body: (t: Thread) => Generator<BlockRequest, void, unknown>,
 ): Thread {
-  function* threadBody(): Generator<BlockRequest, void, Cancelled> {
+  function* threadBody(): Generator<BlockRequest, void, unknown> {
     yield* body(thread);
   }
   const thread: Thread = new Thread(task, threadBody());
@@ -117,7 +116,7 @@ Deno.test(
       // `inst.exclusive_thread`. Same as wasmtime suspending its guest fiber
       // with the `enter_instance` bracket still open (concurrent.rs
       // `wait_for_event` :2199-2213).
-      yield* thread.waitUntil(() => readReady, false);
+      yield* thread.waitUntil(() => readReady);
       pumpSawWhileParked = pokeEntered;
       pump.exitImplicitThread(thread);
     });
@@ -218,7 +217,7 @@ Deno.test(
       holder.start();
       // Parked, but READY: from any other task's point of view this is
       // drainable work.
-      yield* thread.waitUntil(() => go, false);
+      yield* thread.waitUntil(() => go);
       holder.return_([]);
       holder.exitImplicitThread(thread);
     });

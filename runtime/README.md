@@ -44,7 +44,7 @@ package entry points.
 The digest entry point is unstable support for generated code, not a
 hand-written host API; regenerate bindings when updating the runtime.
 
-The loader accepts only `formatVersion: 5`. Translate with a matching toolchain
+The loader accepts only `formatVersion: 6`. Translate with a matching toolchain
 rather than reusing an older plan. See the
 [plan contract](../contracts/plan-format.md) for the wire format and executor
 obligations, and [architecture](../docs/architecture.md) for engine support,

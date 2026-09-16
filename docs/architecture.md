@@ -37,26 +37,22 @@ scheduling, deterministic NaNs, and JS-native host value shapes. It also
 has named divergences (§6). The conformance harness accommodates
 engine-specific trap wording; diagnostic text is not the public API.
 
-**One bounded exception (operator decision):** when `definitions.py` conflicts with the spec
-repository's own WAST corpus and wasmtime implements the corpus side, the
-corpus semantics may be adopted as a working assumption. This requires
-verification against wasmtime source or a trace, a named finding in
-[upstream-component-model-repo-findings.md](../upstream-component-model-repo-findings.md),
-and reversal if upstream adjudicates otherwise. Currently this applies
-only to CM-3. A schedule-dependent assertion cannot invoke the exception:
-if two conforming schedulers can answer differently, the assertion pins a
-policy rather than semantics. Wasmtime behavior alone is insufficient.
+**Pinned stream/future semantics.** The spec is pinned at merged
+[PR #719](https://github.com/WebAssembly/component-model/pull/719),
+`a53b241d4d50487d256900fcad77cd6cda51808f`, including #720's idle-drop rule
+and #721's partial/zero-length tests. Drop notifies an idle peer as well as
+one with a pending copy. The endpoint owns that notification across transfers;
+consuming it reports the current owner's handle index and retires the end.
+Stream events observe peer drop at consumption, preserving accumulated progress.
+Future payload completion stays `COMPLETED`; an undelivered cancellation becomes
+`DROPPED` if its peer is gone. Already-delivered events are not rewritten.
 
-**Pending upstream stream/future assumption.** Until
-[component-model PR #719](https://github.com/WebAssembly/component-model/pull/719)
-is adjudicated, this checkout adopts only its drop-delivery rule at head
-`35e9769957627c2bee5cd445b998b08b3c652c86`; the submodule remains pinned at
-`7c676115e93cd7d54c1732d95c54c6a3de7c5ae0`. A stream event tests for peer
-drop when the event is consumed, upgrades the result to `DROPPED`, preserves
-the accumulated element count, and retires the end. A future `COMPLETED` stays
-`COMPLETED` because its payload transferred; a pending future `CANCELLED`
-upgrades to `DROPPED` with zero progress if the peer is gone. Already-delivered
-events are not rewritten. The PR's broader paired-end refactor is not adopted.
+The merged reference also specifies cancellation of an unobserved stream copy
+as `CANCELLED|count`, resolving the historical CM-3 exception. There is no
+current corpus/reference exception. Findings remain recorded in
+[upstream-component-model-repo-findings.md](../upstream-component-model-repo-findings.md).
+Schedule-dependent assertions cannot override the reference's candidate rules;
+Wasmtime behavior alone is insufficient.
 
 ## 2. Non-goals
 
@@ -319,15 +315,15 @@ the signal is aborted in a microtask, never inside the guest activation.
 These are embedding policies permitted by the reference's host-callee
 cancellation hook.
 
+**Guest cancellation delivery.** A request records pending task state; ordinary
+thread parks and waitable builtins do not consume it. Startup admission checks
+it after wakeup. Callback WAIT/YIELD delivers it before releasing exclusivity
+or resolving the requested waitable-set handle. An unresolved async
+`subtask.cancel` yields once, then checks resolution again; the synchronous
+form retains its wait claim and lenders until resolution.
+
 Named differences from the reference or other hosts:
 
-- **Async `subtask.cancel` under JSPI is not atomic**
-  ([#92](https://github.com/polymorph-components/polyengine/issues/92)).
-  The runtime may park for a determinate cancellation result across the
-  engine's mandatory microtask hop. Ready sibling threads can run during
-  that park. See `createSubtaskCancel` in
-  `runtime/src/intrinsics/async_builtins.ts` and
-  `runtime/tests/cancel_bracket_race_test.ts`.
 - **Per-instance poisoning**
   ([#173](https://github.com/polymorph-components/polyengine/issues/173)).
   A trap escaping a guest activation permanently poisons that instance;
@@ -336,15 +332,6 @@ Named differences from the reference or other hosts:
   trap state; wasmtime's store-level trap handling is not this policy.
   The same-instance exemption in `entryRefusal` permits destructor
   self-drops. Reentrance into an otherwise live instance is valid.
-- **Cancelling an unobserved completed stream copy reports
-  `CANCELLED|count`**, preserving the count rather than delivering the
-  pending `COMPLETED|count`
-  ([#296](https://github.com/polymorph-components/polyengine/issues/296)).
-  This is the sole §1 corpus/reference exception,
-  [CM-3](../upstream-component-model-repo-findings.md#cm-3-cancel_copy-returns-a-stale-completed-where-wasmtime-reports-cancelled).
-  See `takeCancelEvent` in `runtime/src/intrinsics/stream_builtins.ts`.
-  This cancellation-time `COMPLETED`→`CANCELLED` remap is distinct from the
-  PR #719 consumption-time peer-drop upgrade above; peer drop takes precedence.
 
 ## 7. Canonical ABI decisions
 
@@ -584,19 +571,19 @@ browsers, engine shells, and server runtimes. Engine trap-message
 normalization belongs to `TRAP_MESSAGE_EQUIVALENTS` in
 `harness/src/runner.ts`, not the runtime.
 
-Expected failures are classified, not counted as conformance. Known
-classes include the explicit-thread type-interface restriction
-([#12](https://github.com/polymorph-components/polyengine/issues/12)), sync scheduling gaps
-([#249](https://github.com/polymorph-components/polyengine/issues/249)),
-and upstream-unimplemented features
-([#248](https://github.com/polymorph-components/polyengine/issues/248)).
+Expected failures are classified, not counted as conformance. Remaining
+base classes and their tracking issues are listed in
+[harness/src/xfail.ts](../harness/src/xfail.ts); broader capability restrictions
+such as the explicit-thread type interface
+([#12](https://github.com/polymorph-components/polyengine/issues/12)) need not
+be exercised by an expected-failure row.
 Per-lane overlays distinguish engine limitations from runtime failures.
 The current base classification is in [harness/src/xfail.ts](../harness/src/xfail.ts).
 Unexpected failures and stale expected failures fail their gate.
 
-The current Deno and Chromium official-corpus baseline executes 1,506 of
-1,511 commands: 1,468 pass, 38 are exact xfails, and five text directives are
-unsupported. There are no runtime/capability skips. The corpus exercises the
+Current verified corpus counts are recorded in the
+[harness README](../harness/README.md#supplementary-wasmtime-coverage).
+There are no runtime/capability skips. The corpus exercises the
 implemented explicit-thread family using canonical-final start signatures; it
 does not exercise the valid non-final/derived signature restriction described
 in the intrinsic contract, so these counts are not a full-thread-conformance

@@ -17,6 +17,7 @@ import {
 import type { ComponentValue, FuncType, ValType } from "../src/cabi/types.ts";
 import {
   lowerFlatValues,
+  PreparedCustody,
   PreparedValues,
   prepareRawValues,
 } from "../src/cabi/values.ts";
@@ -41,6 +42,8 @@ import {
   Task,
   Thread,
   unpackSubtaskResult,
+  WaitableSet,
+  WritableStreamEnd,
 } from "../src/task/mod.ts";
 import {
   GuestResource,
@@ -148,6 +151,61 @@ const turn = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 function liveEntries(table: Table<unknown>): unknown[] {
   return table.array.filter((entry) => entry !== null);
 }
+
+Deno.test("prepared custody ignores same-slot reuse after transfer away and back", () => {
+  const inst = new ComponentInstanceState(0, new Store());
+  const custody = new PreparedCustody();
+  const original = {};
+  let cleaned = 0;
+  custody.acquire(() => cleaned++);
+  const index = inst.handles.add(original);
+  custody.inserted(inst.handles, index, original);
+  assertEq(inst.handles.remove(index), original);
+  const replacement = {};
+  assertEq(inst.handles.add(replacement), index);
+  custody.cleanup();
+  assertEq(inst.handles.get(index), replacement);
+  assertEq(cleaned, 0);
+});
+
+Deno.test("prepared custody survives leave-return transfer without dropping receiver", () => {
+  const store = new Store();
+  const source = new ComponentInstanceState(0, store);
+  const destination = new ComponentInstanceState(1, store);
+  const custody = new PreparedCustody();
+  const end = new SharedStreamImpl(null).claimReadableEnd(null);
+  let cleaned = 0;
+  custody.acquire(() => cleaned++);
+  const sourceIndex = source.handles.add(end);
+  custody.inserted(source.handles, sourceIndex, end);
+  source.handles.remove(sourceIndex);
+  const destinationIndex = destination.handles.add(end);
+  destination.handles.remove(destinationIndex);
+  const returnedIndex = source.handles.add(end);
+  assertEq(returnedIndex, sourceIndex);
+  custody.cleanup();
+  assert(
+    source.handles.get(returnedIndex) === end,
+    "returned endpoint survives",
+  );
+  assertEq(cleaned, 0);
+});
+
+Deno.test("failed custody teardown notifies a healthy idle stream peer", () => {
+  const inst = new ComponentInstanceState(0, new Store());
+  const shared = new SharedStreamImpl(null);
+  const readable = shared.claimReadableEnd(null);
+  const writable = new WritableStreamEnd(shared);
+  const wi = inst.handles.add(writable);
+  writable.index = wi;
+  const set = new WaitableSet();
+  writable.join(set);
+  const custody = new PreparedCustody();
+  custody.acquire(() => shared.drop(readable));
+  custody.cleanup();
+  assertEq(shared.dropped, true);
+  assertEq(set.getPendingEvent(), [3, wi, 1]);
+});
 
 function memoryHarness(reallocEffect?: () => void) {
   const memory = new WebAssembly.Memory({ initial: 1 });

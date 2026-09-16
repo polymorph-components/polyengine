@@ -17,7 +17,7 @@ import { storeListIntoValidRange } from "../cabi/store.ts";
 import { alignment, alignTo, elemSize } from "../cabi/layout.ts";
 import { despecialize, valTypeEqual } from "../cabi/types.ts";
 import type { ComponentValue, ValType } from "../cabi/types.ts";
-import { Waitable } from "./waitable.ts";
+import { EventCode, Waitable } from "./waitable.ts";
 import { isInstancePoisoned, setOnInstancePoisoned } from "./scheduler.ts";
 
 /** Cross-boundary structural equality, comparing resource origins, not local tables.
@@ -339,10 +339,12 @@ export interface SharedBase {
   readonly t: ValType | null;
   dropped: boolean;
   cancel(): void;
-  drop(): void;
+  drop(dropping?: CopyEnd): void;
 }
 
 export class SharedStreamImpl implements SharedBase {
+  readableEnd: ReadableStreamEnd | null = null;
+  writableEnd: WritableStreamEnd | null = null;
   /**
    * Optional hook fired when this shared object is lowered into a component
    * instance (`lower_stream`/`lower_future`). Host-owned ends use it to learn
@@ -406,6 +408,14 @@ export class SharedStreamImpl implements SharedBase {
 
   constructor(readonly t: ValType | null) {}
 
+  claimReadableEnd(elem: ValType | null): ReadableStreamEnd {
+    const end = this.readableEnd ?? new ReadableStreamEnd(this, elem);
+    assert_(end.index === null, "stream readable end already has an owner");
+    end.elem = elem;
+    if (this.dropped) end.notifyIdleDrop();
+    return end;
+  }
+
   resetPending(): void {
     this.setPending(null, null, null, null);
   }
@@ -433,11 +443,21 @@ export class SharedStreamImpl implements SharedBase {
     this.resetAndNotifyPending(CopyResult.CANCELLED);
   }
 
-  drop(): void {
+  drop(dropping?: CopyEnd): void {
     if (!this.dropped) {
       this.dropped = true;
-      if (this.pendingBuffer) this.resetAndNotifyPending(CopyResult.DROPPED);
-      this.notifyDropped();
+      try {
+        if (this.pendingBuffer) this.resetAndNotifyPending(CopyResult.DROPPED);
+      } finally {
+        if (dropping?.side === "readable") this.writableEnd?.notifyIdleDrop();
+        else if (dropping?.side === "writable") {
+          this.readableEnd?.notifyIdleDrop();
+        } else {
+          this.readableEnd?.notifyIdleDrop();
+          this.writableEnd?.notifyIdleDrop();
+        }
+        this.notifyDropped();
+      }
     }
   }
 
@@ -454,7 +474,7 @@ export class SharedStreamImpl implements SharedBase {
       this.setPending(inst, dstBuffer, onCopy, onCopyDone);
     } else {
       this.#assertSameElemType(dstBuffer);
-      this.#trapOnSameInstance(inst);
+      this.#trapOnSameInstance(inst, dstBuffer);
       if (this.pendingBuffer.remain() > 0) {
         if (dstBuffer.remain() > 0) {
           const n = Math.min(dstBuffer.remain(), this.pendingBuffer.remain());
@@ -503,7 +523,7 @@ export class SharedStreamImpl implements SharedBase {
       this.setPending(inst, srcBuffer, onCopy, onCopyDone);
     } else {
       this.#assertSameElemType(srcBuffer);
-      this.#trapOnSameInstance(inst);
+      this.#trapOnSameInstance(inst, srcBuffer);
       if (this.pendingBuffer.remain() > 0) {
         if (srcBuffer.remain() > 0) {
           const n = Math.min(srcBuffer.remain(), this.pendingBuffer.remain());
@@ -584,9 +604,10 @@ export class SharedStreamImpl implements SharedBase {
    * non-number element type would need the source and destination lifts to
    * interleave, which the reference has not specified yet.
    */
-  #trapOnSameInstance(inst: unknown): void {
+  #trapOnSameInstance(inst: unknown, arriving: GuestBuffer): void {
     trapIf(
-      inst === this.pendingInst && !noneOrNumberType(this.t),
+      inst === this.pendingInst && this.pendingBuffer!.remain() > 0 &&
+        arriving.remain() > 0 && !noneOrNumberType(this.t),
       "cannot read from and write to intra-component stream",
     );
   }
@@ -594,6 +615,8 @@ export class SharedStreamImpl implements SharedBase {
 
 /** definitions.py `SharedFutureImpl`. Exactly one element. */
 export class SharedFutureImpl implements SharedBase {
+  readableEnd: ReadableFutureEnd | null = null;
+  writableEnd: WritableFutureEnd | null = null;
   /**
    * Optional hook fired when this shared object is lowered into a component
    * instance (`lower_stream`/`lower_future`). Host-owned ends use it to learn
@@ -663,6 +686,14 @@ export class SharedFutureImpl implements SharedBase {
 
   constructor(readonly t: ValType | null) {}
 
+  claimReadableEnd(elem: ValType | null): ReadableFutureEnd {
+    const end = this.readableEnd ?? new ReadableFutureEnd(this, elem);
+    assert_(end.index === null, "future readable end already has an owner");
+    end.elem = elem;
+    if (this.dropped) end.notifyIdleDrop();
+    return end;
+  }
+
   resetPending(): void {
     this.setPending(null, null, null);
   }
@@ -688,11 +719,21 @@ export class SharedFutureImpl implements SharedBase {
     this.resetAndNotifyPending(CopyResult.CANCELLED);
   }
 
-  drop(): void {
+  drop(dropping?: CopyEnd): void {
     if (!this.dropped) {
       this.dropped = true;
-      if (this.pendingBuffer) this.resetAndNotifyPending(CopyResult.DROPPED);
-      this.notifyDropped();
+      try {
+        if (this.pendingBuffer) this.resetAndNotifyPending(CopyResult.DROPPED);
+      } finally {
+        if (dropping?.side === "readable") this.writableEnd?.notifyIdleDrop();
+        else if (dropping?.side === "writable") {
+          this.readableEnd?.notifyIdleDrop();
+        } else {
+          this.readableEnd?.notifyIdleDrop();
+          this.writableEnd?.notifyIdleDrop();
+        }
+        this.notifyDropped();
+      }
     }
   }
 
@@ -744,11 +785,13 @@ export class SharedFutureImpl implements SharedBase {
  */
 export abstract class CopyEnd extends Waitable {
   state: CopyState = CopyState.IDLE;
+  /** Current owner-table index; updated across readable-end transfer. */
+  index: number | null = null;
 
   constructor(
     readonly shared: SharedBase,
     // Standalone ends inherit their shared descriptor; guest sites stamp locals.
-    readonly elem: ValType | null = shared.t,
+    public elem: ValType | null = shared.t,
   ) {
     super();
   }
@@ -760,10 +803,23 @@ export abstract class CopyEnd extends Waitable {
    * as required by the conformance corpus.
    */
   abstract readonly side: "readable" | "writable";
+  abstract readonly eventCode: EventCode;
 
   copying(): boolean {
     return this.state === CopyState.COPYING ||
       this.state === CopyState.CANCELLING_COPY;
+  }
+
+  abstract notifyIdleDrop(): void;
+
+  protected armIdleDrop(abandonReason: Error | null = null): void {
+    if (this.state === CopyState.DONE || this.hasPendingEvent()) return;
+    this.setPendingEvent(() => {
+      if (abandonReason !== null) throw futureAbandonTrap(abandonReason);
+      this.state = CopyState.DONE;
+      assert_(this.index !== null, "idle async event without owner index");
+      return [this.eventCode, this.index, CopyResult.DROPPED];
+    });
   }
 
   override drop(): void {
@@ -773,7 +829,7 @@ export abstract class CopyEnd extends Waitable {
         ? `cannot remove busy ${this.kind}`
         : `cannot drop busy ${this.kind}`,
     );
-    this.shared.drop();
+    this.shared.drop(this);
     super.drop();
   }
 }
@@ -781,7 +837,15 @@ export abstract class CopyEnd extends Waitable {
 export class ReadableStreamEnd extends CopyEnd {
   override readonly kind = "stream";
   override readonly side = "readable";
+  override readonly eventCode = EventCode.STREAM_READ;
   declare readonly shared: SharedStreamImpl;
+  constructor(shared: SharedStreamImpl, elem: ValType | null = shared.t) {
+    super(shared, elem);
+    shared.readableEnd = this;
+  }
+  notifyIdleDrop(): void {
+    this.armIdleDrop();
+  }
   copy(
     inst: unknown,
     dst: GuestBuffer,
@@ -795,7 +859,15 @@ export class ReadableStreamEnd extends CopyEnd {
 export class WritableStreamEnd extends CopyEnd {
   override readonly kind = "stream";
   override readonly side = "writable";
+  override readonly eventCode = EventCode.STREAM_WRITE;
   declare readonly shared: SharedStreamImpl;
+  constructor(shared: SharedStreamImpl, elem: ValType | null = shared.t) {
+    super(shared, elem);
+    shared.writableEnd = this;
+  }
+  notifyIdleDrop(): void {
+    this.armIdleDrop();
+  }
   copy(
     inst: unknown,
     src: GuestBuffer,
@@ -809,7 +881,15 @@ export class WritableStreamEnd extends CopyEnd {
 export class ReadableFutureEnd extends CopyEnd {
   override readonly kind = "future";
   override readonly side = "readable";
+  override readonly eventCode = EventCode.FUTURE_READ;
   declare readonly shared: SharedFutureImpl;
+  constructor(shared: SharedFutureImpl, elem: ValType | null = shared.t) {
+    super(shared, elem);
+    shared.readableEnd = this;
+  }
+  notifyIdleDrop(): void {
+    this.armIdleDrop(this.shared.abandonReason);
+  }
   copy(inst: unknown, dst: GuestBuffer, onCopyDone: OnCopyDone): void {
     this.shared.read(inst, dst, onCopyDone);
   }
@@ -818,7 +898,15 @@ export class ReadableFutureEnd extends CopyEnd {
 export class WritableFutureEnd extends CopyEnd {
   override readonly kind = "future";
   override readonly side = "writable";
+  override readonly eventCode = EventCode.FUTURE_WRITE;
   declare readonly shared: SharedFutureImpl;
+  constructor(shared: SharedFutureImpl, elem: ValType | null = shared.t) {
+    super(shared, elem);
+    shared.writableEnd = this;
+  }
+  notifyIdleDrop(): void {
+    this.armIdleDrop();
+  }
   copy(inst: unknown, src: GuestBuffer, onCopyDone: OnCopyDone): void {
     this.shared.write(inst, src, onCopyDone);
   }
@@ -922,21 +1010,17 @@ interface PoisonedInstanceLike {
  */
 export function dropSharedForTeardown(
   shared: SharedStreamImpl | SharedFutureImpl,
+  dropping?: CopyEnd,
 ): void {
   if (shared.dropped) return;
-  shared.dropped = true;
-  try {
-    if (shared.pendingBuffer) {
-      const pi = shared.pendingInst;
-      const parkedInDeadGuest = typeof pi === "object" && pi !== null &&
-        (isInstancePoisoned(pi) || retiredInstances.has(pi));
-      if (parkedInDeadGuest) shared.resetPending();
-      else shared.resetAndNotifyPending(CopyResult.DROPPED);
-    }
-  } finally {
-    // Release producer/host retention even if the peer's notification throws.
-    shared.notifyDropped();
-  }
+  const pi = shared.pendingInst;
+  const parkedInDeadGuest = shared.pendingBuffer !== null &&
+    typeof pi === "object" && pi !== null &&
+    (isInstancePoisoned(pi) || retiredInstances.has(pi));
+  if (parkedInDeadGuest) shared.resetPending();
+  // Use the ordinary endpoint transition so healthy idle peers receive their
+  // endpoint-owned notification and drop observers fire consistently.
+  shared.drop(dropping);
 }
 
 /**
@@ -1000,7 +1084,10 @@ function retireAsyncEnds(
   let failed = false;
   for (const e of ends) {
     try {
-      dropSharedForTeardown(e.shared as SharedStreamImpl | SharedFutureImpl);
+      dropSharedForTeardown(
+        e.shared as SharedStreamImpl | SharedFutureImpl,
+        e,
+      );
     } catch (err) {
       if (!failed) {
         failed = true;

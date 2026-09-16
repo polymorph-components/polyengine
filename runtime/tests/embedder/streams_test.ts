@@ -274,6 +274,51 @@ Deno.test({
   },
 });
 
+Deno.test("streams: writer close before lowering is delivered after bind", async () => {
+  const { stream, writer } = Stream.create<number>();
+  await writer.close();
+  const codec = {
+    element: { kind: "u32" } as const,
+    where: "close-before-lower",
+    toHost: (v: unknown) => v as number,
+    fromHost: (v: number) => v,
+  };
+  const value = stream.takeValue(codec);
+  const lifted = Stream.fromLifted<number>(value, codec);
+  assertEq(await lifted.read(1), []);
+});
+
+for (const operation of ["write", "writeAll", "writeDirect"] as const) {
+  Deno.test(`streams: close retracts queued ${operation} before bind`, async () => {
+    const { stream, writer } = Stream.create<number>();
+    let callbacks = 0;
+    const pending = operation === "write"
+      ? writer.write([7])
+      : operation === "writeAll"
+      ? writer.writeAll([7])
+      : writer.writeDirect(() => {
+        callbacks++;
+        return "done";
+      });
+    await writer.close();
+    assertEq(await pending, 0);
+    const codec = {
+      element: operation === "writeDirect"
+        ? { kind: "u8" } as const
+        : { kind: "u32" } as const,
+      where: `close-before-${operation}`,
+      toHost: (v: unknown) => v as number,
+      fromHost: (v: number) => v,
+    };
+    const value = stream.takeValue(codec);
+    const lifted = Stream.fromLifted<number>(value, codec);
+    const closed = await lifted.read(1);
+    assertEq(closed.length, 0);
+    assertEq(callbacks, 0);
+    assertEq(await writer.write([8]), 0, "closed writer stays non-busy");
+  });
+}
+
 Deno.test({
   name: "streams: lift-side cross-store mismatch is a host TypeError",
   ignore: false,

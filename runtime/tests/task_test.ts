@@ -10,7 +10,6 @@ import { assertEq } from "./support/asserts.ts";
 import { Trap } from "../src/cabi/mod.ts";
 import {
   type BlockRequest,
-  type Cancelled,
   chooseCandidate,
   ComponentInstanceState,
   driveSyncLift,
@@ -19,7 +18,6 @@ import {
   isInstancePoisoned,
   notifyInstancePoisoned,
   packSubtaskResult,
-  PendingCapability,
   schedulerPolicy,
   schedulerSeedForTesting,
   Store,
@@ -83,11 +81,11 @@ const STACKFUL_OPTS: TaskOptions = {
  */
 function spawn(
   task: Task,
-  body: (t: Thread) => Generator<BlockRequest, void, Cancelled>,
+  body: (t: Thread) => Generator<BlockRequest, void, unknown>,
 ): Thread {
   // Forward reference: the generator body only runs once `thread` below
   // is assigned (spawn returns before the body executes).
-  function* threadBody(): Generator<BlockRequest, void, Cancelled> {
+  function* threadBody(): Generator<BlockRequest, void, unknown> {
     yield* body(thread);
   }
   const thread: Thread = new Thread(task, threadBody());
@@ -138,8 +136,7 @@ Deno.test("thread: wait_until blocks and the store resumes when ready", () => {
     yield* task.enterImplicitThread(thread);
     task.start();
     order.push("before");
-    const cancelled = yield* thread.waitUntil(() => flag, false);
-    assertEq(cancelled, false);
+    yield* thread.waitUntil(() => flag);
     order.push("after");
     task.return_([]);
     task.exitImplicitThread(thread);
@@ -183,7 +180,7 @@ Deno.test("canon_lift sync loop: traps when no thread can make progress", () => 
     yield* task.enterImplicitThread(thread);
     task.start();
     // Blocks forever: nothing will ever make this ready.
-    yield* thread.waitUntil(() => false, false);
+    yield* thread.waitUntil(() => false);
     task.return_([]);
     task.exitImplicitThread(thread);
   });
@@ -230,7 +227,7 @@ Deno.test("cm705: tick resumes a ready sibling thread during a live host entry",
   const bThread = spawn(bTask, function* (thread) {
     yield* bTask.enterImplicitThread(thread);
     bTask.start();
-    yield* thread.waitUntil(() => flag, false);
+    yield* thread.waitUntil(() => flag);
     order.push("b ran");
     bTask.return_([]);
     bTask.exitImplicitThread(thread);
@@ -278,7 +275,7 @@ Deno.test("cm705: serviceSettled dispatches a sibling tail immediately", async (
   const bThread = spawn(bTask, function* (thread) {
     yield* bTask.enterImplicitThread(thread);
     bTask.start();
-    const v = yield { readyFunc: null, cancellable: false, awaitValue: p };
+    const v = yield { readyFunc: null, awaitValue: p };
     void v;
     order.push("b tail ran");
     bTask.return_([]);
@@ -315,7 +312,7 @@ Deno.test("cm705: the phantom-state gate holds for a serviceable tail", async ()
   const bThread = spawn(bTask, function* (thread) {
     yield* bTask.enterImplicitThread(thread);
     bTask.start();
-    yield { readyFunc: null, cancellable: false, awaitValue: p };
+    yield { readyFunc: null, awaitValue: p };
     bTask.return_([]);
     bTask.exitImplicitThread(thread);
   });
@@ -328,7 +325,7 @@ Deno.test("cm705: the phantom-state gate holds for a serviceable tail", async ()
   const aThread = spawn(aTask, function* (thread) {
     yield* aTask.enterImplicitThread(thread);
     aTask.start();
-    yield* thread.waitUntil(() => flag, false);
+    yield* thread.waitUntil(() => flag);
     order.push("a ran");
     aTask.return_([]);
     aTask.exitImplicitThread(thread);
@@ -365,7 +362,7 @@ Deno.test("cm705: a poisoned instance's tail retires without running", async () 
   const bThread = spawn(bTask, function* (thread) {
     yield* bTask.enterImplicitThread(thread);
     bTask.start();
-    yield { readyFunc: null, cancellable: false, awaitValue: p };
+    yield { readyFunc: null, awaitValue: p };
     order.push("b tail ran");
     bTask.return_([]);
     bTask.exitImplicitThread(thread);
@@ -397,7 +394,7 @@ Deno.test("cm705: stale settled entries are removed", async () => {
   const bThread = spawn(bTask, function* (thread) {
     yield* bTask.enterImplicitThread(thread);
     bTask.start();
-    yield { readyFunc: null, cancellable: false, awaitValue: p };
+    yield { readyFunc: null, awaitValue: p };
     bTask.return_([]);
     bTask.exitImplicitThread(thread);
   });
@@ -558,7 +555,7 @@ Deno.test("exclusive thread: a second callback task waits for the first", () => 
       yield* task.enterImplicitThread(thread);
       order.push(`${name}:in`);
       task.start();
-      if (!release.now) yield* thread.waitUntil(() => release.now, false);
+      if (!release.now) yield* thread.waitUntil(() => release.now);
       task.return_([]);
       task.exitImplicitThread(thread);
       order.push(`${name}:out`);
@@ -619,7 +616,7 @@ Deno.test("waitable set: poll returns NONE rather than blocking", () => {
   const inst = new ComponentInstanceState(0);
   const task = mkTask(inst, ASYNC_FT, CALLBACK_OPTS);
   const wset = new WaitableSet();
-  const [code] = wset.poll(task, false);
+  const [code] = wset.poll(task);
   assertEq(code, EventCode.NONE);
 });
 
@@ -689,34 +686,7 @@ Deno.test("subtask: the async-lower return value packs state and index", () => {
 // Cancellation
 // ---------------------------------------------------------------------------
 
-Deno.test("cancellation: a request at a cancellable block point is delivered", () => {
-  const store = new Store();
-  const inst = new ComponentInstanceState(0, store);
-  let sawCancel = false;
-  let resolvedWith: unknown = "unset";
-  const task = mkTask(inst, ASYNC_FT, STACKFUL_OPTS, (r) => {
-    resolvedWith = r;
-  });
-  const thread = spawn(task, function* (thread) {
-    yield* task.enterImplicitThread(thread);
-    task.start();
-    const cancelled = yield* thread.waitUntil(() => false, true);
-    if (cancelled) {
-      sawCancel = true;
-      task.cancel();
-    }
-    task.exitImplicitThread(thread);
-  });
-  thread.resume();
-  assertEq(task.state, "started");
-  task.requestCancellation(null);
-  assertEq(sawCancel, true);
-  // definitions.py `Task.cancel`: `on_resolve(None)`.
-  assertEq(resolvedWith, null);
-  assertEq(task.state, "resolved");
-});
-
-Deno.test("cancellation: with no cancellable thread it becomes pending", () => {
+Deno.test("cancellation: stackful waits do not consume pending cancellation", () => {
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
   const gate = { open: false };
@@ -724,12 +694,8 @@ Deno.test("cancellation: with no cancellable thread it becomes pending", () => {
   const thread = spawn(task, function* (thread) {
     yield* task.enterImplicitThread(thread);
     task.start();
-    // Non-cancellable block point.
-    yield* thread.waitUntil(() => gate.open, false);
-    // ... and then a cancellable one, which picks up the pending request.
-    const cancelled = yield* thread.waitUntil(() => false, true);
-    assertEq(cancelled, true);
-    task.cancel();
+    yield* thread.waitUntil(() => gate.open);
+    task.return_([]);
     task.exitImplicitThread(thread);
   });
   thread.resume();
@@ -758,7 +724,7 @@ Deno.test("tick: a trap under tick records the poison marker", async () => {
   const parkedThread = spawn(parkedTask, function* (thread) {
     yield* parkedTask.enterImplicitThread(thread);
     parkedTask.start();
-    yield { readyFunc: null, cancellable: false, awaitValue: p };
+    yield { readyFunc: null, awaitValue: p };
     order.push("parked tail ran");
     parkedTask.return_([]);
     parkedTask.exitImplicitThread(thread);
@@ -772,7 +738,7 @@ Deno.test("tick: a trap under tick records the poison marker", async () => {
   const trapThread = spawn(trapTask, function* (thread) {
     yield* trapTask.enterImplicitThread(thread);
     trapTask.start();
-    yield* thread.waitUntil(() => flag, false);
+    yield* thread.waitUntil(() => flag);
     throw new Trap("boom under tick");
   });
   trapThread.resume();
@@ -800,54 +766,6 @@ Deno.test("tick: a trap under tick records the poison marker", async () => {
   assertEq(store.serviceSettled(), true, "poisoned tails dispatch");
   assertEq(store.settled.length, 0, "the queue drains");
   assertEq(order.length, 0, "retired quietly: the body never ran");
-});
-
-Deno.test("request_cancellation: a trap during delivery poisons the callee", () => {
-  // definitions.py `Task.request_cancellation` (@ 2f13265) wraps the delivery
-  // `resume(Cancelled.TRUE)` in no handler at all. polyengine records the
-  // trap as per-instance poisoning instead of ending the world
-  // (polyengine#164/#212).
-  const store = new Store();
-  const callerInst = new ComponentInstanceState(0, store);
-  const b = new ComponentInstanceState(1, store);
-  const task = mkTask(b, ASYNC_FT, STACKFUL_OPTS);
-  const thread = spawn(task, function* (thread) {
-    yield* task.enterImplicitThread(thread);
-    task.start();
-    const cancelled = yield* thread.waitUntil(() => false, true);
-    if (cancelled) throw new Trap("boom during cancel delivery");
-  });
-  thread.resume();
-  assertEq(task.state, "started");
-
-  assertThrows(
-    () => task.requestCancellation(callerInst),
-    "boom during cancel delivery",
-  );
-  assertEq(isInstancePoisoned(b), true, "the callee is a corpse");
-  assertEq(task.state, "cancel-delivered", "parity: the state is set first");
-});
-
-Deno.test("request_cancellation: a capability signal does not poison", () => {
-  // Capability signals mark the RUNTIME incomplete, not the component
-  // faulted: nothing is poisoned, exactly as in `Store.tick`.
-  const store = new Store();
-  const callerInst = new ComponentInstanceState(0, store);
-  const b = new ComponentInstanceState(1, store);
-  const task = mkTask(b, ASYNC_FT, STACKFUL_OPTS);
-  const thread = spawn(task, function* (thread) {
-    yield* task.enterImplicitThread(thread);
-    task.start();
-    const cancelled = yield* thread.waitUntil(() => false, true);
-    if (cancelled) throw new PendingCapability("x");
-  });
-  thread.resume();
-
-  assertThrows(
-    () => task.requestCancellation(callerInst),
-    "pending-capability: x",
-  );
-  assertEq(isInstancePoisoned(b), false, "nothing is poisoned");
 });
 
 // ---------------------------------------------------------------------------
@@ -899,7 +817,7 @@ Deno.test("re-key: tick does not resume a marked instance", () => {
   const thread = spawn(task, function* (thread) {
     yield* task.enterImplicitThread(thread);
     task.start();
-    yield* thread.waitUntil(() => flag, false);
+    yield* thread.waitUntil(() => flag);
     order.push("ran");
     task.return_([]);
     task.exitImplicitThread(thread);
@@ -917,16 +835,11 @@ Deno.test("re-key: requestCancellation leaves a marked callee's request pending"
   const store = new Store();
   const callerInst = new ComponentInstanceState(0, store);
   const b = new ComponentInstanceState(1, store);
-  let sawCancel = false;
   const task = mkTask(b, ASYNC_FT, STACKFUL_OPTS);
   const thread = spawn(task, function* (thread) {
     yield* task.enterImplicitThread(thread);
     task.start();
-    const cancelled = yield* thread.waitUntil(() => false, true);
-    if (cancelled) {
-      sawCancel = true;
-      task.cancel();
-    }
+    yield* thread.waitUntil(() => false);
     task.exitImplicitThread(thread);
   });
   thread.resume();
@@ -935,7 +848,6 @@ Deno.test("re-key: requestCancellation leaves a marked callee's request pending"
   notifyInstancePoisoned(b, new Trap("boom"));
 
   task.requestCancellation(callerInst);
-  assertEq(sawCancel, false, "delivery is refused by the marker");
   assertEq(task.state, "pending-cancel");
 });
 
@@ -1033,7 +945,7 @@ Deno.test("scheduler: a seeded schedule still resolves the same task set", () =>
         const thread = spawn(task, function* (thread) {
           yield* task.enterImplicitThread(thread);
           task.start();
-          yield* thread.yield_(false);
+          yield* thread.yield_();
           task.return_([]);
           task.exitImplicitThread(thread);
           done.push(name);

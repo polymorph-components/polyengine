@@ -7,18 +7,11 @@ import type { ComponentInstanceLike } from "../cabi/context.ts";
 import type { ComponentValue, FuncType } from "../cabi/types.ts";
 import { assert_, trapIf } from "../cabi/trap.ts";
 import {
-  type Cancelled,
-  CANCELLED_TRUE,
-  chooseCandidate,
   claimActivationAmbient,
   type CurrentThreadLike,
   dbgId,
-  isInstancePoisoned,
   isSynchronousAmbient,
   maybeCurrentThread,
-  NeedsJspi,
-  notifyInstancePoisoned,
-  PendingCapability,
   physicalOwnerOf,
   popLogicalActivation,
   pushLogicalActivation,
@@ -200,7 +193,7 @@ export class Task {
    */
   *enterImplicitThread(
     thread: Thread,
-  ): Generator<import("./scheduler.ts").BlockRequest, boolean, Cancelled> {
+  ): Generator<import("./scheduler.ts").BlockRequest, boolean, unknown> {
     assert_(this.state === "initial", "enter_implicit_thread after start");
     this.implicitThread = thread;
     if (this.ft.async === true) {
@@ -212,13 +205,12 @@ export class Task {
       // too, even if backpressure has since cleared.
       if (hasBackpressure() || this.inst.numWaitingToEnter > 0) {
         this.inst.numWaitingToEnter += 1;
-        let cancelled: Cancelled;
         try {
-          cancelled = yield* thread.waitUntil(() => !hasBackpressure(), true);
+          yield* thread.waitUntil(() => !hasBackpressure());
         } finally {
           this.inst.numWaitingToEnter -= 1;
         }
-        if (cancelled) {
+        if (this.deliverPendingCancel()) {
           this.cancel();
           return false;
         }
@@ -296,9 +288,8 @@ export class Task {
   }
 
   /**
-   * definitions.py `Task.request_cancellation`. Delivered to a
-   * cancellable thread if one exists; otherwise recorded as pending, to be
-   * picked up at the next cancellable block point (`deliverPendingCancel`).
+   * definitions.py `Task.request_cancellation`. Cancellation is recorded as
+   * pending; startup admission and the callback loop consume it explicitly.
    *
    * `caller` is retained for the call-site shape (fact_calls.ts's
    * `subtask.onCancel`) and for diagnostics; no condition here consults it
@@ -307,80 +298,17 @@ export class Task {
   requestCancellation(caller: ComponentInstanceState | null): void {
     void caller;
     if (this.state === "initial") {
-      this.state = "cancel-delivered";
-      this.implicitThread!.resume(CANCELLED_TRUE);
+      // definitions.py:462-470 records cancellation before resuming startup;
+      // builtin/thread cancellability no longer participates in selection.
+      this.state = "pending-cancel";
+      this.implicitThread!.resumeStartupCancellation();
       return;
     }
     assert_(
       this.state === "started",
       `request_cancellation in state ${this.state}`,
     );
-    // Include JSPI SuspensionPoints: their owning generator waits on a
-    // non-cancellable awaitValue, while the actual cancellable park is in
-    // store.waiting. Resume delivers the flag to that point's produce callback.
-    type Cancellable = {
-      cancellable: boolean;
-      resume(cancelled?: boolean): void;
-    };
-    let candidates: Cancellable[] = this.threads.filter((t) => t.cancellable);
-    const excludeImplicit = !this.implicitThreadCancellable();
-    if (excludeImplicit) {
-      candidates = candidates.filter((t) => t !== this.implicitThread);
-    }
-    // Explicit-thread SuspensionPoints are independent of the callback lock;
-    // only the implicit thread's point is excluded while another thread holds it.
-    const store = this.inst.store as unknown as {
-      waiting: ({
-        task?: unknown;
-        logicalOwner?: unknown;
-        owner?: unknown;
-      } & Cancellable)[];
-    };
-    for (const w of store.waiting) {
-      // A SuspensionPoint names its canonical recipient as logicalOwner; older
-      // low-level points may only expose physical owner. Plain Thread entries
-      // are their own recipient. Normalize before applying the callback lock so
-      // the implicit thread cannot be filtered above and re-added here merely
-      // because its direct waiting entry has no logicalOwner field.
-      const recipient = w.logicalOwner ?? w.owner ?? w;
-      if (
-        w.task === this && w.cancellable === true &&
-        (!excludeImplicit || recipient !== this.implicitThread) &&
-        !candidates.includes(w)
-      ) {
-        candidates.push(w);
-      }
-    }
-    // Poisoned instances cannot run a cancellation recipient.
-    if (candidates.length > 0 && !isInstancePoisoned(this.inst)) {
-      this.state = "cancel-delivered";
-      try {
-        chooseCandidate(candidates).resume(CANCELLED_TRUE);
-      } catch (e) {
-        // Escaping delivery failures poison the recipient, except capability signals.
-        if (!(e instanceof NeedsJspi) && !(e instanceof PendingCapability)) {
-          notifyInstancePoisoned(
-            this.inst as unknown as { handles: Iterable<unknown> },
-            e,
-          );
-        }
-        throw e;
-      }
-    } else {
-      this.state = "pending-cancel";
-    }
-  }
-
-  /**
-   * Live exclusivity conjunct for cancellability. `canon_lift`'s callback
-   * waits use lock_available; static park flags alone cannot represent a
-   * sibling taking the slot. Both delivery selection and pending-cancel
-   * readiness consult this predicate.
-   */
-  implicitThreadCancellable(): boolean {
-    return !(this.ft.async === true && this.needsExclusive() &&
-      this.inst.exclusiveThread !== null &&
-      this.inst.exclusiveThread !== this.implicitThread);
+    this.state = "pending-cancel";
   }
 
   /** definitions.py `Task.has_pending_cancel`. */
@@ -389,8 +317,8 @@ export class Task {
   }
 
   /** definitions.py `Task.deliver_pending_cancel`. */
-  deliverPendingCancel(cancellable: boolean): boolean {
-    if (cancellable && this.hasPendingCancel()) {
+  deliverPendingCancel(): boolean {
+    if (this.hasPendingCancel()) {
       this.state = "cancel-delivered";
       return true;
     }
@@ -475,6 +403,7 @@ export class SynchronousActivation {
     this.task.failureOwner = (parent?.task?.failureOwner ?? parent?.task ??
       this.task) as Task;
     this.thread = new Thread(this.task, (function* () {})());
+    this.thread.parent = parent;
     const physical = this.parent === undefined
       ? this.thread
       : physicalOwnerOf(this.parent) as Thread;

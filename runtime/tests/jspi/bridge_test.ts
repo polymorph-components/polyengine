@@ -53,7 +53,6 @@ Deno.test("bridge: a suspension point is just a parked thread to the scheduler",
     store,
     task,
     () => flag,
-    false,
     () => 42,
   );
   // Registered in the store's waiting list exactly like a generator thread.
@@ -67,18 +66,17 @@ Deno.test("bridge: a suspension point is just a parked thread to the scheduler",
   assertEq(store.waiting.length, 0);
 });
 
-Deno.test("bridge: resume delivers the cancelled flag to the value producer", () => {
+Deno.test("bridge: resume delivers the producer value", () => {
   const store = new Store();
   const inst = new ComponentInstanceState(0, store);
   const point = new SuspensionPoint<string>(
     store,
     mkTask(inst),
     () => true,
-    true,
-    (cancelled) => (cancelled ? "cancelled" : "normal"),
+    () => "normal",
   );
-  point.resume(true);
-  return point.promise.then((v) => assertEq(v, "cancelled"));
+  point.resume();
+  return point.promise.then((v) => assertEq(v, "normal"));
 });
 
 Deno.test("bridge: a trap computed at resume time becomes a rejection", async () => {
@@ -92,7 +90,6 @@ Deno.test("bridge: a trap computed at resume time becomes a rejection", async ()
     store,
     mkTask(inst),
     () => true,
-    false,
     () => {
       throw boom;
     },
@@ -118,7 +115,6 @@ Deno.test("bridge: a suspension does not make the instance unusable", async () =
     store,
     mkTask(inst),
     () => flag,
-    false,
     () => 1,
   );
   assertEq(entryRefusal(inst, null, "base"), null, "entry is admitted");
@@ -135,7 +131,6 @@ Deno.test("bridge: abandon rejects without resuming the guest", async () => {
     store,
     mkTask(inst),
     () => false,
-    false,
     () => 0,
   );
   const reason = new Error("torn down");
@@ -409,7 +404,6 @@ Deno.test({
       store,
       task,
       () => true,
-      false,
       () => 1,
     );
     point.resume();

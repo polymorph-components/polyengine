@@ -5,7 +5,7 @@ link here from [architecture §1](docs/architecture.md#1-goals). Entries are
 not authorization to file publicly; no filing is claimed without a link.
 
 Current checks below use the local `third_party/component-model` pin
-`7c676115e93cd7d54c1732d95c54c6a3de7c5ae0`. Historical observations name their
+`a53b241d4d50487d256900fcad77cd6cda51808f`. Historical observations name their
 source snapshot separately. Spec paths are relative to `design/mvp/` unless
 otherwise stated. Prefer function references over line numbers when rechecking.
 
@@ -73,13 +73,14 @@ the grammar and CanonicalABI.md exposed only `backpressure.inc` and
 
 ## CM-3: `cancel_copy` returns a stale COMPLETED where wasmtime reports CANCELLED
 
-**Status:** DRAFT, unfiled. This is the approved corpus exception in
-[architecture §1](docs/architecture.md#1-goals), reversible if upstream
-adjudicates otherwise. The current pin still returns the pending payload
-unchanged in `cancel_copy`.
+**Status:** RESOLVED by merged Component Model #719 at `a53b241`.
+`StreamEnd.notify` now observes `CANCELLING_COPY` when the event is consumed and
+returns `CANCELLED` with retained progress; peer drop takes precedence. The
+runtime behavior is now specified, so the former corpus exception is retired.
+The evidence below records the earlier pin's discrepancy.
 **Found:** 2026-08-08, implementing the stream copy protocol.
 
-This finding remains separate from the provisional drop-delivery rule adopted
+This finding was separate from the provisional drop-delivery rule adopted
 from component-model PR #719 at head
 `35e9769957627c2bee5cd445b998b08b3c652c86`. That rule upgrades an undelivered
 event when its peer is found dropped at consumption; CM-3 instead remaps an
@@ -123,7 +124,7 @@ The official suite asserts wasmtime's answer, not the reference's:
 `test/async/big-interleaving-test.wast` writes 8, reads 4, then cancels the
 write without polling and expects `0x42` (`CANCELLED | 4<<4`). Under the
 reference's rule the answer is `0x40`. This no-poll write cancellation is
-still present at the current pin. The neighboring test first polls the
+present at the original pin. The neighboring test first polls the
 write completion, then starts and cancels another read; it does not exercise
 the disputed pending write event. The evidence is at lines 1520-1531
 (no-poll write cancellation) and 1504-1518 (poll/read cancellation).

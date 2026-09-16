@@ -8,7 +8,7 @@ use wasmtime_environ::wasmparser::{self, BlockType, Operator as Op, Parser, Payl
 
 const MAX: i64 = (1 << 28) - 1;
 const OLD: i64 = (1 << 31) - 1;
-const PIN: &str = "rev = \"4675ee16b703b33948073a5ff6b961367371e7a1\"";
+const PIN: &str = "rev = \"cc546eee265b805dda0f034b2007d110a541093d\"";
 
 pub(super) fn correct(wasm: &[u8]) -> Result<Vec<u8>> {
     ensure!(

@@ -18,7 +18,6 @@
 
 import { blockCurrentActivation } from "../jspi/mod.ts";
 import type { SuspensionMode } from "../jspi/mod.ts";
-import type { Cancelled } from "../task/mod.ts";
 import { assert_, trap, trapIf } from "../cabi/trap.ts";
 import {
   CoreValueIter,
@@ -206,8 +205,8 @@ export function createWaitableSetNew(inst: ComponentInstanceState): CoreFn {
 
 /**
  * definitions.py `canon_waitable_set_wait`. Returns a pending event directly,
- * or suspends the calling wasm frame using JSPI until an event or cancellable
- * task cancellation arrives. Plain mode cannot perform the blocking case.
+ * or suspends the calling wasm frame using JSPI until an event arrives. Plain
+ * mode cannot perform the blocking case.
  */
 export function createWaitableSetWait(
   decl: { options: number },
@@ -216,8 +215,6 @@ export function createWaitableSetWait(
   mode: SuspensionMode = "plain",
 ): CoreFn {
   const opts = ctx.options(decl.options);
-  // `cancellable` is a canonical option, not a trampoline field.
-  const cancellable = opts.cancellable;
   return (si?: number, ptr?: number) => {
     // Guest-supplied index/pointer are u32; core wasm delivers i32 args
     // signed. Normalize at the entry boundary.
@@ -230,9 +227,7 @@ export function createWaitableSetWait(
     const wset = requireWaitableSet(inst, si, "waitable-set.wait");
     const task = currentTask() as Task;
     let event: EventTuple;
-    if (task.deliverPendingCancel(cancellable)) {
-      event = [EventCode.TASK_CANCELLED, 0, 0];
-    } else if (wset.hasPendingEvent()) {
+    if (wset.hasPendingEvent()) {
       // No waiter count is needed for immediate delivery: no other thread can
       // observe the reference's increment/decrement bracket without a yield.
       traceCopy(`waitable-set.wait si=${si} FAST (pending event)`);
@@ -248,11 +243,8 @@ export function createWaitableSetWait(
         store: inst.store,
         task,
         readyFunc: () => wset.hasPendingEvent(),
-        cancellable,
-        produce: (cancelled: Cancelled) => {
-          const ev: EventTuple = cancelled
-            ? [EventCode.TASK_CANCELLED, 0, 0]
-            : wset.getPendingEvent();
+        produce: () => {
+          const ev: EventTuple = wset.getPendingEvent();
           return unpackEvent(opts, inst, ptr, ev);
         },
         onSettled: () => {
@@ -277,8 +269,6 @@ export function createWaitableSetPoll(
   inst: ComponentInstanceState,
 ): CoreFn {
   const opts = ctx.options(decl.options);
-  /** See `createWaitableSetWait`: `cancellable` is an option, not a decl field. */
-  const cancellable = opts.cancellable;
   return (si?: number, ptr?: number) => {
     si = (si ?? 0) >>> 0;
     ptr = (ptr ?? 0) >>> 0;
@@ -287,7 +277,7 @@ export function createWaitableSetPoll(
       "waitable-set.poll: cannot leave component instance",
     );
     const wset = requireWaitableSet(inst, si, "waitable-set.poll");
-    const event = wset.poll(currentTask(), cancellable);
+    const event = wset.poll(currentTask());
     return unpackEvent(opts, inst, ptr, event);
   };
 }
@@ -475,21 +465,22 @@ export function createSubtaskCancel(
 
         if (mode !== "jspi") {
           if (st.resolved()) return finish();
-          if (!async_) {
-            needsJspi(
-              "synchronous subtask.cancel whose callee did not resolve " +
-                "immediately (the calling wasm frame must block)",
-            );
-          }
-          return BLOCKED;
+          if (async_) return BLOCKED;
+          needsJspi(
+            "synchronous subtask.cancel whose callee did not resolve " +
+              "immediately (the calling wasm frame must block)",
+          );
         }
-        if (!ready()) {
+        // definitions.py:2366-2377: both forms relinquish one turn whenever
+        // on_cancel leaves the subtask unresolved. The async form uses yield
+        // even when the host callee is already determinate, then rechecks and
+        // returns BLOCKED only after resumption.
+        if (!ready() || (async_ && !st.resolved())) {
           parked = true;
           return blockCurrentActivation({
             store: inst.store,
             task: currentTask(),
-            readyFunc: ready,
-            cancellable: false,
+            readyFunc: async_ ? () => true : ready,
             // First finish the exact cancelled callee's pending JSPI
             // continuation. Only after that canonical return/park boundary can
             // the synchronous form's unresolved wait become CM blocking.
@@ -497,6 +488,10 @@ export function createSubtaskCancel(
             syncBlockWhen: () =>
               !async_ && determinate() && !calleeContinuationPending() &&
               !st.resolved(),
+            // The cancellation callback belongs to the cancelled callee. It
+            // must run before the caller's synchronous wait can be judged
+            // unprogressable (definitions.py:2366-2375).
+            syncInstance: st.calleeTask?.inst ?? inst,
             produce: () => {
               st.hasSyncWaiter = false;
               return st.resolved() ? finish() : BLOCKED;
@@ -528,11 +523,10 @@ export function createSubtaskCancel(
  * *built-in* form needs a suspendable stack.
  */
 export function createThreadYield(
-  decl: { cancellable?: boolean },
+  _decl: object,
   mode: SuspensionMode = "plain",
   declaredInst?: ComponentInstanceState,
 ): CoreFn {
-  const cancellable = decl.cancellable === true;
   return () => {
     trapIf(
       declaredInst !== undefined && !declaredInst.mayLeave,
@@ -543,12 +537,9 @@ export function createThreadYield(
       !thread.task.inst.mayLeave,
       "thread.yield: cannot leave component instance",
     );
-    // A pending cancellation is deliverable without suspending at all
-    // (definitions.py `Thread.yield_` -> `wait_until` -> `deliver_pending_cancel`).
-    if (thread.task.deliverPendingCancel(cancellable)) return 1;
     if (mode === "jspi") {
       // definitions.py `Thread.yield_` is
-      // `wait_until(lambda: True, cancellable)`: immediately ready, but it
+      // `wait_until(lambda: True)`: immediately ready, but it
       // goes through the scheduler, so other threads get a turn first. A
       // suspension point with an always-true `readyFunc` is exactly that --
       // `Store.tick` selects it under the configured scheduling policy.
@@ -556,8 +547,7 @@ export function createThreadYield(
         store: thread.task.inst.store,
         task: thread.task,
         readyFunc: () => true,
-        cancellable,
-        produce: (cancelled: Cancelled) => (cancelled ? 1 : 0),
+        produce: () => 0,
       }) as unknown as number;
     }
     needsJspi(

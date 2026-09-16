@@ -40,7 +40,6 @@ Deno.test("#160: a dtor parked on a scheduler-resumable suspension point complet
         store,
         task,
         readyFunc: () => flag,
-        cancellable: false,
         produce: () => {
           finished = true;
           assertEq(rep, 77);

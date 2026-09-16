@@ -13,7 +13,6 @@ import { assertEq } from "./support/asserts.ts";
 import { driveStoreAsync } from "../src/exec/boundary.ts";
 import {
   type BlockRequest,
-  type Cancelled,
   ComponentInstanceState,
   Store,
   Task,
@@ -32,11 +31,11 @@ const SYNC_OPTS: TaskOptions = {
 
 function spawn(
   task: Task,
-  body: (t: Thread) => Generator<BlockRequest, void, Cancelled>,
+  body: (t: Thread) => Generator<BlockRequest, void, unknown>,
 ): Thread {
   // Forward reference: the generator body only runs once `thread` below
   // is assigned (spawn returns before the body executes).
-  function* threadBody(): Generator<BlockRequest, void, Cancelled> {
+  function* threadBody(): Generator<BlockRequest, void, unknown> {
     yield* body(thread);
   }
   const thread: Thread = new Thread(task, threadBody());
@@ -55,7 +54,7 @@ Deno.test("driveAsync: a sibling's tail dispatches immediately (CM#705)", async 
   const bThread = spawn(bTask, function* (thread) {
     yield* bTask.enterImplicitThread(thread);
     bTask.start();
-    yield { readyFunc: null, cancellable: false, awaitValue: parkPromise };
+    yield { readyFunc: null, awaitValue: parkPromise };
     order.push("b tail ran");
     bTask.return_([]);
     bTask.exitImplicitThread(thread);

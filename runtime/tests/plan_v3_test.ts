@@ -83,8 +83,15 @@ function expectPlanError(fn: () => unknown, includes: string): void {
 // Loader
 // ---------------------------------------------------------------------------
 
-Deno.test("the format version is a strict-equality gate (at 5 since plan v5)", () => {
-  assertEq(SUPPORTED_FORMAT_VERSION, 5);
+Deno.test("the format version is a strict-equality gate (at 6)", () => {
+  assertEq(SUPPORTED_FORMAT_VERSION, 6);
+  let oldError = "";
+  try {
+    loadPlan(minimalPlan({ formatVersion: 5 }));
+  } catch (e) {
+    oldError = String(e);
+  }
+  assertEq(oldError.includes("unsupported plan formatVersion 5"), true);
   expectPlanError(
     () => loadPlan(minimalPlan({ formatVersion: 2 })),
     "unsupported plan formatVersion 2",

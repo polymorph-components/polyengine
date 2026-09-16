@@ -8,7 +8,6 @@
 import { assertEq } from "../support/asserts.ts";
 import {
   type BlockRequest,
-  type Cancelled,
   ComponentInstanceState,
   Store,
   Subtask,
@@ -25,7 +24,7 @@ import {
 
 function parkedEntryThread(task: Task): Thread {
   const holder: { thread?: Thread } = {};
-  const body = (function* (): Generator<BlockRequest, void, Cancelled> {
+  const body = (function* (): Generator<BlockRequest, void, unknown> {
     if (!(yield* task.enterImplicitThread(holder.thread!))) return;
     throw new Error("backpressured STARTING task unexpectedly entered");
   })();

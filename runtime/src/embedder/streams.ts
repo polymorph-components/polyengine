@@ -532,10 +532,14 @@ interface WriterOperation {
 export class StreamWriter<T> implements ProtocolStreamWriter<T> {
   #stream: Stream<T>;
   #active: WriterOperation | null = null;
+  #closed = false;
 
   constructor(stream: Stream<T>) {
     this.#stream = stream;
-    stream.onBound(() => this.#launch());
+    stream.onBound(() => {
+      if (this.#closed) hostOf(this.#stream).writable.drop();
+      else this.#launch();
+    });
     // realm boundary realm-local pill (see Stream's constructor above for rationale).
     defineRealmLocal(this);
   }
@@ -555,6 +559,7 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
   }
 
   #start(run: (op: WriterOperation) => Promise<number>): Promise<number> {
+    if (this.#closed) return Promise.resolve(0);
     if (this.#active !== null) {
       throw new TypeError(
         "a write is already in flight on this stream's writable end; " +
@@ -707,6 +712,13 @@ export class StreamWriter<T> implements ProtocolStreamWriter<T> {
 
   /** End-of-stream. */
   async close(): Promise<void> {
+    this.#closed = true;
+    const op = this.#active;
+    if (op !== null && !op.started) {
+      op.cancelled = true;
+      this.#resolve(op, 0);
+    }
+    if (!this.#stream.bound) return;
     await this.#stream.whenBound();
     if (this.#stream.bound) hostOf(this.#stream).writable.drop();
   }

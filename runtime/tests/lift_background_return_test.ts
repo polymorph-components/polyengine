@@ -85,7 +85,7 @@ Deno.test({
         immortal = new Thread(
           task as never,
           (function* () {
-            yield { readyFunc: () => false, cancellable: false };
+            yield { readyFunc: () => false };
           })(),
         );
         task.registerThread(immortal);
@@ -94,7 +94,7 @@ Deno.test({
         const returner = new Thread(
           task as never,
           (function* () {
-            yield { readyFunc: () => wake, cancellable: false };
+            yield { readyFunc: () => wake };
             task.return_([]);
           })(),
         );

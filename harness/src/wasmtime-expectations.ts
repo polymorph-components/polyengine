@@ -51,6 +51,11 @@ export const WASMTIME_FAILURE_CLASSES: Readonly<
     reason: "command has no current instance after its owning setup failure",
     issue: "https://github.com/polymorph-components/polyengine/issues/372",
   },
+  "spec-conflict": {
+    reason:
+      "Wasmtime allows an outer-instance thread to progress a nested synchronous lift; the Component Model reference restricts candidates to the synchronous callee instance",
+    issue: "https://github.com/polymorph-components/polyengine/issues/380",
+  },
 };
 
 export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
@@ -172,6 +177,18 @@ export const WASMTIME_EXPECTATION_GROUPS: readonly WasmtimeExpectationGroup[] =
           }],
         },
       ],
+    },
+    {
+      class: "spec-conflict",
+      files: [{
+        file: "thread-transparency/reentrancy.json",
+        rows: [{
+          lines: [114],
+          cause:
+            'Error: expected trap "wasm `unreachable` instruction executed", got "wasm trap: cannot block a synchronous task before returning"',
+          status: "failed",
+        }],
+      }],
     },
     {
       class: "runtime-semantics",

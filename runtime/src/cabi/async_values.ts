@@ -126,6 +126,7 @@ function liftAsyncValue(
     // Host-wrapper re-arm hook (contracts/embedder-api.md §"Streams and futures"): the readable
     // end just left a guest table, so whoever receives it can act on it again.
     // See `bindOnLower` in exec/host_streams.ts for the retention rule.
+    (end as { index?: number | null }).index = null;
     (end.shared as { onLifted?: ((i: unknown) => void) | null }).onLifted?.(
       inst,
     );
@@ -183,8 +184,11 @@ export function lowerStream(
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);
   cx.checkpoint?.();
-  const end = new ReadableStreamEnd(v, declared);
+  // definitions.py:1411-1425 transfers the endpoint itself. Reuse it so an
+  // idle peer-drop notification survives the interval between lift and lower.
+  const end = v.claimReadableEnd(declared);
   const i = inst!.handles.add(end);
+  end.index = i;
   cx.preparedCustody?.inserted(inst!.handles, i, end);
   cx.checkpoint?.();
   return i;
@@ -221,8 +225,9 @@ export function lowerFuture(
     (inst as unknown as { store?: unknown }).store;
   (v as { onLowered?: ((i: unknown) => void) | null }).onLowered?.(inst);
   cx.checkpoint?.();
-  const end = new ReadableFutureEnd(v, declared);
+  const end = v.claimReadableEnd(declared);
   const i = inst!.handles.add(end);
+  end.index = i;
   cx.preparedCustody?.inserted(inst!.handles, i, end);
   cx.checkpoint?.();
   return i;

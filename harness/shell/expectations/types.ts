@@ -5,7 +5,10 @@
 // track's dispatch); only the `lane` tag differs, since these are engine
 // shells, not browsers.
 
-import type { LaneDelta, LaneTotals } from "../../browser/expectations/types.ts";
+import type {
+  LaneDelta,
+  LaneTotals,
+} from "../../browser/expectations/types.ts";
 export type { LaneDelta, LaneTotals };
 export { deltaKey } from "../../browser/expectations/types.ts";
 

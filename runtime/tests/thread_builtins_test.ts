@@ -217,7 +217,7 @@ Deno.test("SUPPORTED LIMITATION: equivalent non-final thread start types are rej
   }
 });
 
-Deno.test("thread switch validates operands before delivering pending cancellation", () => {
+Deno.test("thread switch validates operands without consuming pending cancellation", () => {
   const module = moduleFromWatBytes(TABLE_FIXTURE);
   const f = fixture(module.exports.t as WebAssembly.Table);
   const create = createThreadNewIndirect(
@@ -226,11 +226,11 @@ Deno.test("thread switch validates operands before delivering pending cancellati
   );
   const switchedCtx = { ...f.ctx, suspensionMode: "jspi" as const };
   const suspendThenResume = createThreadSuspendThenResume(
-    { instance: 0, cancellable: true },
+    { instance: 0 },
     switchedCtx,
   );
   const yieldThenResume = createThreadYieldThenResume(
-    { instance: 0, cancellable: true },
+    { instance: 0 },
     switchedCtx,
   );
 
@@ -255,13 +255,8 @@ Deno.test("thread switch validates operands before delivering pending cancellati
 
     const child = create(0, 7) as number;
     f.task.state = "pending-cancel";
-    assertEq(suspendThenResume(child), 1, "valid target receives cancellation");
-    assertEq(f.task.state, "cancel-delivered");
-    assertEq(
-      f.inst.threads.get(child).explicitlySuspended(),
-      true,
-      "target not switched",
-    );
+    suspendThenResume(child);
+    assertEq(f.task.state, "pending-cancel");
   } finally {
     popCurrentThread(f.parent);
   }

@@ -110,7 +110,6 @@ Deno.test({
             store,
             task: { implicitThread: thread },
             readyFunc: () => true,
-            cancellable: false,
             produce: () => x + 1,
           });
         }

@@ -1,12 +1,6 @@
-// `Thread.waitUntil` drops the reference's cancel-aware ready predicate and
-// its post-block `deliver_pending_cancel` (definitions.py `Thread.wait_until`
-// lines 361-373: `ready_or_cancelled = ready_func() or (cancellable() and
-// task.has_pending_cancel())`, then `if deliver_pending_cancel: return
-// Cancelled.TRUE` AFTER the block). Ours parks on the raw `readyFunc` and
-// returns the raw cancelled flag, so a callback task whose cancel went
-// `pending-cancel` behind a sibling's `exclusiveThread` is (a) never woken at
-// all when the slot frees with no event pending, (b) woken with a spurious
-// NONE in the YIELD arm, (c) handed the queued event before TASK_CANCELLED.
+// Callback cancellation is explicit in `canon_lift`, not a generic property of
+// `Thread.waitUntil` (definitions.py:2073-2094). These generator-level models
+// pin the callback loop's readiness and post-wait delivery ordering.
 //
 // The bodies below mirror exec/boundary.ts `runCallbackLoop`'s WAIT/YIELD arms
 // (:2640-2700) — release the slot across the wait, retake it after — with fake
@@ -15,7 +9,6 @@
 import { assertEq } from "./support/asserts.ts";
 import {
   type BlockRequest,
-  type Cancelled,
   ComponentInstanceState,
   EventCode,
   type EventTuple,
@@ -40,11 +33,11 @@ const CALLBACK_OPTS: TaskOptions = {
 
 function spawn(
   task: Task,
-  body: (t: Thread) => Generator<BlockRequest, void, Cancelled>,
+  body: (t: Thread) => Generator<BlockRequest, void, unknown>,
 ): Thread {
   // Forward reference: the generator body only runs once `thread` below
   // is assigned (spawn returns before the body executes).
-  function* threadBody(): Generator<BlockRequest, void, Cancelled> {
+  function* threadBody(): Generator<BlockRequest, void, unknown> {
     yield* body(thread);
   }
   const thread: Thread = new Thread(task, threadBody());
@@ -74,7 +67,7 @@ function spawnSibling(
   const tb = spawn(b, function* (thread) {
     yield* b.enterImplicitThread(thread);
     b.start();
-    yield* thread.waitUntil(() => gate.open, false);
+    yield* thread.waitUntil(() => gate.open);
     b.return_([]);
     b.exitImplicitThread(thread);
   });
@@ -93,11 +86,13 @@ Deno.test("callback WAIT: cancel pending behind a sibling's exclusive slot is de
     yield* a.enterImplicitThread(thread); // takes inst.exclusiveThread
     a.start();
     inst.exclusiveThread = null; // runCallbackLoop: release across the wait
-    const ev = yield* wset.waitForEventAnd(
-      thread,
-      () => inst.exclusiveThread === null,
-      true,
+    yield* thread.waitUntil(() =>
+      inst.exclusiveThread === null &&
+      (a.hasPendingCancel() || wset.hasPendingEvent())
     );
+    const ev = a.deliverPendingCancel()
+      ? [EventCode.TASK_CANCELLED, 0, 0] as EventTuple
+      : wset.getPendingEvent();
     events.push(ev);
     inst.exclusiveThread = thread; // retake, as the loop does
     if (ev[0] === EventCode.TASK_CANCELLED) a.cancel();
@@ -111,15 +106,14 @@ Deno.test("callback WAIT: cancel pending behind a sibling's exclusive slot is de
   assertEq(inst.exclusiveThread === tb, true, "B holds the exclusive slot");
 
   a.requestCancellation(null);
-  // Agreed by both: A is not cancellable while B holds the lock.
+  // The request remains pending while B holds the lock.
   assertEq(a.state, "pending-cancel");
 
   gate.open = true;
   runToQuiescence(store);
   assertEq(inst.exclusiveThread, null, "B released the slot");
 
-  // Reference: A is ready via `cancellable() and has_pending_cancel()`,
-  // resumes, and the post-block `deliver_pending_cancel` yields TASK_CANCELLED.
+  // Callback readiness includes pending cancellation explicitly.
   assertEq(events, [[EventCode.TASK_CANCELLED, 0, 0]]);
   assertEq(a.state, "resolved");
 });
@@ -134,11 +128,11 @@ Deno.test("callback YIELD: a pending cancel released by the slot must resume as 
     yield* a.enterImplicitThread(thread);
     a.start();
     inst.exclusiveThread = null;
-    const cancelled = yield* thread.waitUntil(
-      () => inst.exclusiveThread === null,
-      true,
+    yield* thread.waitUntil(() =>
+      inst.exclusiveThread === null && a.hasPendingCancel()
     );
-    observed.push(cancelled === true);
+    const cancelled = a.deliverPendingCancel();
+    observed.push(cancelled);
     inst.exclusiveThread = thread;
     if (cancelled) a.cancel();
     else a.return_([]);
@@ -154,9 +148,7 @@ Deno.test("callback YIELD: a pending cancel released by the slot must resume as 
   gate.open = true;
   runToQuiescence(store);
 
-  // Reference: the post-block `deliver_pending_cancel` converts the
-  // Cancelled.FALSE resumption into Cancelled.TRUE, so the callback sees
-  // (TASK_CANCELLED,0,0). Ours resumes with false → a spurious (NONE,0,0).
+  // The callback loop performs delivery after the pure wait.
   assertEq(observed, [true]);
 });
 
@@ -171,11 +163,13 @@ Deno.test("callback WAIT with an event pending: TASK_CANCELLED is delivered firs
     yield* a.enterImplicitThread(thread);
     a.start();
     inst.exclusiveThread = null;
-    const ev = yield* wset.waitForEventAnd(
-      thread,
-      () => inst.exclusiveThread === null,
-      true,
+    yield* thread.waitUntil(() =>
+      inst.exclusiveThread === null &&
+      (a.hasPendingCancel() || wset.hasPendingEvent())
     );
+    const ev = a.deliverPendingCancel()
+      ? [EventCode.TASK_CANCELLED, 0, 0] as EventTuple
+      : wset.getPendingEvent();
     events.push(ev);
     inst.exclusiveThread = thread;
     if (ev[0] === EventCode.TASK_CANCELLED) a.cancel();
@@ -198,9 +192,8 @@ Deno.test("callback WAIT with an event pending: TASK_CANCELLED is delivered firs
   gate.open = true;
   runToQuiescence(store);
 
-  // Reference: `deliver_pending_cancel` runs AFTER the block and BEFORE
-  // `get_pending_event`, so TASK_CANCELLED wins and the SUBTASK event is left
-  // on the waitable. Ours delivers the SUBTASK event first.
+  // `deliver_pending_cancel` runs before `get_pending_event`, so the event is
+  // retained.
   assertEq(events, [[EventCode.TASK_CANCELLED, 0, 0]]);
   assertEq(w.hasPendingEvent(), true, "the SUBTASK event is still pending");
 });

@@ -25,7 +25,7 @@ translator build. The default shim is
 are checked before writing the output.
 
 The `.plan.json` file is an **envelope**, not a bare plan: it includes the plan
-and base64-encoded FACT adapters. Plans currently use `formatVersion: 5`; deploy
+and base64-encoded FACT adapters. Plans currently use `formatVersion: 6`; deploy
 with a matching runtime, which rejects other format versions. See the
 [plan contract](../../contracts/plan-format.md).
 

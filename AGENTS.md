@@ -4,8 +4,8 @@
 
 - Runtime semantics: the pinned Component Model spec and
   `third_party/component-model/design/mvp/canonical-abi/definitions.py`.
-  Wasmtime is corroborating evidence, not the tie-breaker. The single named
-  corpus exception is defined in
+  Wasmtime is corroborating evidence, not the tie-breaker. The authority policy
+  is defined in
   [architecture §1](docs/architecture.md#1-goals).
 - Interfaces: `contracts/`. Semantic contract changes are versioned events owned
   by the orchestrator; implementation tracks report conflicts rather than

@@ -20,10 +20,10 @@
   (core func $thread-new
     (canon thread.new-indirect $start-type (core table $table-export)))
   (canon thread.resume-later (core func $resume-later))
-  (canon thread.suspend cancellable (core func $suspend-cancellable))
+  (canon thread.suspend (core func $suspend-cancellable))
   (canon thread.suspend-then-resume
     (core func $suspend-then-resume))
-  (canon thread.suspend-then-resume cancellable
+  (canon thread.suspend-then-resume
     (core func $suspend-then-resume-cancellable))
   (canon thread.yield-then-resume
     (core func $yield-then-resume))

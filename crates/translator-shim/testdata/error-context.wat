@@ -6,7 +6,7 @@
 (component
   (core module $Mem (memory (export "mem") 1))
   (core instance $mem (instantiate $Mem))
-  (core func $ec-new (canon error-context.new (memory $mem "mem")))
+  (core func $ec-new (canon error-context.new (memory (core memory $mem "mem"))))
   (core func $ec-drop (canon error-context.drop))
   (core module $M
     (import "" "ec-new" (func $ec-new (param i32 i32) (result i32)))

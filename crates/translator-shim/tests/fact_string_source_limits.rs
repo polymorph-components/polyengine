@@ -3,14 +3,20 @@ use wasmtime_environ::wasmparser::{Operator, Parser, Payload};
 
 #[test]
 fn fact_string_encoding_matrix() {
-    let bytes = wat::parse_str(include_str!(
-        "../../../runtime/tests/fixtures/fact-string-source-limits.wat"
-    ))
-    .unwrap();
+    // wasm-tools 0.259 requires nested core export references. Keep consuming
+    // the runtime-owned probe source without editing the other track's file.
+    let source = include_str!("../../../runtime/tests/fixtures/fact-string-source-limits.wat")
+        .replace("(memory $m \"memory\")", "(memory (core memory $m \"memory\"))")
+        .replace(
+            "(memory $mem \"memory\")",
+            "(memory (core memory $mem \"memory\"))",
+        )
+        .replace("(realloc (func $m", "(realloc (core func $m");
+    let bytes = wat::parse_str(source).unwrap();
     let translated = translate(&bytes).unwrap();
     assert_eq!(
         translated.plan.producer.wasmtime_environ,
-        "49.0.0-dev+4675ee1"
+        "50.0.0-dev+cc546ee"
     );
     let mut limits = [0, 0];
     for adapter in &translated.adapters {

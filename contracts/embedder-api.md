@@ -364,10 +364,13 @@ runtime/tests/embedder/platform_class_test.ts):
    `result`-typed import. Bridge: catch and rethrow
    `new ComponentException(payload)`.
 
-### Getters and setters (pre-ruling — not yet implementable)
+### Getters and setters (specified upstream; frontend support pending)
 
 Getter/setter forms from component-model#701 are not implemented in the facade
 ([#254](https://github.com/polymorph-components/polyengine/issues/254)). The
+merged spec includes them, but pinned wasmparser/wit-parser 0.259 do not expose
+getter/setter function kinds. Updating the spec pin therefore does not enable
+accessors in translation or bindgen. The
 intended mapping below is a design decision, not a supported API. Forms include
 `[get]foo`/`[set]foo`, instance members such as `[method][get]r.foo`, and static
 members such as `[static][set]r.foo`.

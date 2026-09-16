@@ -2,7 +2,7 @@
 
 The `wasmtime-environ` component frontend compiled as a native Rust library and
 a wasm32 translator. It validates components, resolves linkage, synthesizes
-FACT fused adapters, and emits **plan format 5**. The
+FACT fused adapters, and emits **plan format 6**. The
 [plan contract](../../contracts/plan-format.md) owns the schema;
 [architecture](../../docs/architecture.md) explains the frontend/runtime split.
 Dependency pins live in the root `Cargo.toml` and `Cargo.lock`.

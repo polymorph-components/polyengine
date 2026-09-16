@@ -111,7 +111,7 @@ Deno.test({
         background = new Thread(
           task as never,
           (function* () {
-            yield { readyFunc: () => false, cancellable: false };
+            yield { readyFunc: () => false };
           })(),
         );
         task.registerThread(background);
