@@ -12,7 +12,6 @@ import {
   BLOCKED,
   createSubtaskCancel,
   createWaitableJoin,
-  createWaitableSetPoll,
   createWaitableSetWait,
 } from "../src/intrinsics/async_builtins.ts";
 import {
@@ -31,6 +30,7 @@ import {
 import {
   ComponentInstanceState,
   CopyResult,
+  currentTask,
   EventCode,
   NeedsJspi,
   popCurrentThread,
@@ -163,23 +163,6 @@ function mkWaitFixture(cancellable: boolean): WaitFixture {
   };
 }
 
-Deno.test("waitable-set.wait: a cancellable wait delivers TASK_CANCELLED", () => {
-  const f = mkWaitFixture(true);
-  const wait = createWaitableSetWait({ options: 0 }, f.ctx, f.inst);
-  // A cancellation that could not be delivered to a cancellable block point
-  // yet (definitions.py `Task.request_cancellation` -> PENDING_CANCEL).
-  f.task.state = "pending-cancel";
-  const code = f.run(() => wait(f.seti, 64)) as number;
-  assertEq(code, EventCode.TASK_CANCELLED);
-  // definitions.py `Task.deliver_pending_cancel`: delivery moves the task on.
-  assertEq(f.task.state, "cancel-delivered");
-  // `unpack_event` (line 2422) stores the two payload words; both are 0 for
-  // TASK_CANCELLED.
-  const dv = new DataView(f.memory.buffer);
-  assertEq(dv.getUint32(64, true), 0);
-  assertEq(dv.getUint32(68, true), 0);
-});
-
 Deno.test("waitable-set.wait: a non-cancellable wait does not deliver it", () => {
   const f = mkWaitFixture(false);
   const wait = createWaitableSetWait({ options: 0 }, f.ctx, f.inst);
@@ -199,21 +182,6 @@ Deno.test("waitable-set.wait: a non-cancellable wait does not deliver it", () =>
   const dv = new DataView(f.memory.buffer);
   assertEq(dv.getUint32(64, true), 7);
   assertEq(dv.getUint32(68, true), 2);
-});
-
-Deno.test("waitable-set.poll: cancellable vs non-cancellable", () => {
-  const yes = mkWaitFixture(true);
-  const pollYes = createWaitableSetPoll({ options: 0 }, yes.ctx, yes.inst);
-  yes.task.state = "pending-cancel";
-  assertEq(yes.run(() => pollYes(yes.seti, 64)), EventCode.TASK_CANCELLED);
-  assertEq(yes.task.state, "cancel-delivered");
-
-  const no = mkWaitFixture(false);
-  const pollNo = createWaitableSetPoll({ options: 0 }, no.ctx, no.inst);
-  no.task.state = "pending-cancel";
-  // definitions.py `WaitableSet.poll`: not cancellable and no event -> NONE.
-  assertEq(no.run(() => pollNo(no.seti, 64)), EventCode.NONE);
-  assertEq(no.task.state, "pending-cancel");
 });
 
 Deno.test("waitable-set.wait: without an event and without a cancel, needs JSPI", () => {
@@ -285,6 +253,45 @@ Deno.test("callback loop: WAIT with an index that is not a waitable set traps", 
     inst,
   });
   assertTraps(() => fn(), "not a waitable set");
+});
+
+Deno.test("callback loop: pending cancellation precedes invalid WAIT and retains exclusivity", () => {
+  const inst = new ComponentInstanceState(0, new Store());
+  const notASet = inst.handles.add({ definitelyNot: "a waitable set" });
+  let event = -1;
+  let held = false;
+  const callback = (...args: number[]) => {
+    event = args[0];
+    const task = currentTask() as Task;
+    held = inst.exclusiveThread === task.implicitThread;
+    task.cancel();
+    return 0;
+  };
+  const ft: FuncType = { params: [], results: [], async: true };
+  const opts: ResolvedOptions = {
+    stringEncoding: "utf8",
+    memory: null,
+    realloc: null,
+    postReturn: null,
+    callback: () => callback as never,
+    async: true,
+    cancellable: false,
+    coreType: { params: [], results: ["i32"] },
+    instance: inst,
+  };
+  const fn = createLiftedFunction({
+    name: "cancel-before-invalid-wait",
+    ft,
+    opts,
+    core: () => {
+      (currentTask() as Task).requestCancellation(null);
+      return 2 | (notASet << 4);
+    },
+    stats: newStats(),
+  });
+  fn();
+  assertEq(event, EventCode.TASK_CANCELLED);
+  assertEq(held, true);
 });
 
 Deno.test("callback loop: EXIT without resolving the task traps", () => {

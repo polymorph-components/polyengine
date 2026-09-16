@@ -46,7 +46,7 @@
         (export "waitable-set.new" (func $waitable-set.new))
         (export "waitable-set.wait" (func $waitable-set.wait))))))
     (func (export "block") async (param "a" u32) (param "b" u32) (result u32)
-      (canon lift (core func $ia "block-impl") async (callback (func $ia "cb")))))
+      (canon lift (core func $ia "block-impl") async (callback (core func $ia "cb")))))
 
   (component $B
     (import "blocker" (instance $blocker

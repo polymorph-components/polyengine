@@ -220,7 +220,7 @@ Deno.test("#102: sync-start-call park success path is unchanged (release before 
     // produced value.
     assertEq(h.handle.numLends, 0);
   });
-  point.resume(false);
+  point.resume();
   assertEq(h.handle.numLends, 0); // released inside `produce`, not by a hook
   await parked;
   assertEq(resolved, true);
@@ -248,13 +248,13 @@ Deno.test("#102: sync-start-call park releases lenders when produce throws", asy
     throw new Error("resume-time trap");
   };
 
-  point.resume(false);
+  point.resume();
   assertEq(h.handle.numLends, 0);
   canonResourceDrop(h.caller, h.rt, h.handleIndex);
   assertEq(await settled, "rejected: resume-time trap");
 });
 
-Deno.test("#102: a cancelled resume cannot reach these non-cancellable parks", async () => {
+Deno.test("#102: abandonment is the non-producing teardown path", async () => {
   const h = mkHarness();
   const parked = h.run("sync", neverResolves);
   assert(parked instanceof Promise, "the caller's activation parked");
@@ -265,21 +265,8 @@ Deno.test("#102: a cancelled resume cannot reach these non-cancellable parks", a
   const point = h.point();
   assert(point !== undefined, "the suspension point is registered as waiting");
 
-  // Settle path 3: rejected by `SuspensionPoint.resume`'s assert (#93), which
-  // fires before the point is marked done — so this is not a settle path at
-  // all, and there is no non-poisoning continuation to release into. Pinned
-  // here so a future `cancellable: true` at this site has to revisit the
-  // enumeration.
-  let threw: unknown = null;
-  try {
-    point.resume(true);
-  } catch (e) {
-    threw = e;
-  }
-  assert(threw !== null, "a cancelled resume of a non-cancellable point traps");
-  assertEq(point.waiting(), true); // still parked: NOT a terminal transition
-
-  // Teardown then still discharges the lenders.
+  // Generic cancellation injection no longer exists. Teardown abandons the
+  // park without running its producer and still discharges lenders.
   point.abandon(new Error("teardown after the illegal resume"));
   assertEq(h.handle.numLends, 0);
   assertEq(await settled, "rejected: teardown after the illegal resume");
@@ -326,7 +313,7 @@ Deno.test("#102: async-start-call determinacy park does NOT unwind a live subtas
   // `deliverResolve` later (definitions.py `Subtask.deliver_resolve`, 904) —
   // so the backstop must stay out of the way. A blanket unwind here would
   // cancel a perfectly good call.
-  point.resume(false);
+  point.resume();
   const packed = await parked;
   assertEq(typeof packed, "number");
   assertEq(h.handle.numLends, 1);

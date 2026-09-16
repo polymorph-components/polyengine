@@ -12,7 +12,7 @@
 //!   `ModuleImport { ty, import }`, `Instance { ty, exports }`, `Type(TypeDef)`.
 //! - `Component::options: PrimaryMap<OptionsIndex, CanonicalOptions>` where
 //!   `CanonicalOptions { instance, string_encoding, callback, post_return,
-//!   async_, cancellable, core_type, data_model }` and memory/realloc live
+//!   async_, core_type, data_model }` and memory/realloc live
 //!   inside `data_model: CanonicalOptionsDataModel::LinearMemory(..)`.
 //! - Types come from `ComponentTypesBuilder::finish(&component)`, which yields
 //!   a `ComponentTypes` indexable by every `Type*Index`, including
@@ -38,7 +38,7 @@ use wasmtime_environ::component::{
 use wasmtime_environ::{EntityIndex, ModuleInternedTypeIndex, PrimaryMap, WasmValType};
 
 /// `formatVersion` this producer emits (contracts/plan-format.md).
-pub const FORMAT_VERSION: u32 = 5;
+pub const FORMAT_VERSION: u32 = 6;
 
 // ---------------------------------------------------------------------------
 // Plan schema (serde structs; field order == emission order == contract order)
@@ -1008,13 +1008,12 @@ impl<'a> PlanBuilder<'a> {
                 index,
                 instance: instance.as_u32(),
             },
-            T::ThreadYield {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadYield {
+            T::ThreadYield { instance } => TrampolineDecl::ThreadYield {
                 index,
                 instance: instance.as_u32(),
-                cancellable: *cancellable,
+                // CONTRACT: format v6 retains this removed upstream slot for
+                // old plans; new translations must emit only false.
+                cancellable: false,
             },
             T::SubtaskDrop { instance } => TrampolineDecl::SubtaskDrop {
                 index,
@@ -1202,45 +1201,30 @@ impl<'a> PlanBuilder<'a> {
                 index,
                 instance: instance.as_u32(),
             },
-            T::ThreadSuspend {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadSuspend {
+            T::ThreadSuspend { instance } => TrampolineDecl::ThreadSuspend {
                 index,
                 instance: instance.as_u32(),
-                cancellable: *cancellable,
+                cancellable: false,
             },
-            T::ThreadSuspendThenResume {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadSuspendThenResume {
+            T::ThreadSuspendThenResume { instance } => TrampolineDecl::ThreadSuspendThenResume {
                 index,
                 instance: instance.as_u32(),
-                cancellable: *cancellable,
+                cancellable: false,
             },
-            T::ThreadYieldThenResume {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadYieldThenResume {
+            T::ThreadYieldThenResume { instance } => TrampolineDecl::ThreadYieldThenResume {
                 index,
                 instance: instance.as_u32(),
-                cancellable: *cancellable,
+                cancellable: false,
             },
-            T::ThreadSuspendThenPromote {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadSuspendThenPromote {
+            T::ThreadSuspendThenPromote { instance } => TrampolineDecl::ThreadSuspendThenPromote {
                 index,
                 instance: instance.as_u32(),
-                cancellable: *cancellable,
+                cancellable: false,
             },
-            T::ThreadYieldThenPromote {
-                instance,
-                cancellable,
-            } => TrampolineDecl::ThreadYieldThenPromote {
+            T::ThreadYieldThenPromote { instance } => TrampolineDecl::ThreadYieldThenPromote {
                 index,
                 instance: instance.as_u32(),
-                cancellable: *cancellable,
+                cancellable: false,
             },
         })
     }
@@ -1553,7 +1537,9 @@ impl<'a> PlanBuilder<'a> {
             post_return: opts.post_return.map(|p| p.as_u32()),
             callback: opts.callback.map(|c| c.as_u32()),
             r#async: opts.async_,
-            cancellable: opts.cancellable,
+            // CONTRACT: format v6 retains this removed upstream slot for old
+            // plans; new translations must emit only false.
+            cancellable: false,
             core_type: self.core_func_type(opts.core_type)?,
         })
     }

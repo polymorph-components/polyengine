@@ -2,7 +2,7 @@
 
 Use the checked-in dependency pins when investigating behavior. Links to
 upstream `main` show current upstream work, not necessarily this checkout's
-semantics. The authority policy, including the sole CM-3 exception, is in
+semantics. The authority policy is in
 [architecture §1](architecture.md#1-goals).
 
 ## Component Model spec (submodule: `third_party/component-model`)
@@ -24,11 +24,10 @@ reference, and WAST corpus used by this checkout. Its principal sources are:
 
 Current upstream sources are at
 [WebAssembly/component-model](https://github.com/WebAssembly/component-model).
-The narrow provisional semantics adopted from
-[PR #719](https://github.com/WebAssembly/component-model/pull/719) are fixed to
-head `35e9769957627c2bee5cd445b998b08b3c652c86` and recorded in
-[architecture §1](architecture.md#1-goals); they do not move the submodule pin
-or adopt that PR's structural refactor.
+The spec pin is merged [PR #719](https://github.com/WebAssembly/component-model/pull/719),
+`a53b241d4d50487d256900fcad77cd6cda51808f`, including idle drop delivery from
+#720 and partial/zero-length tests from #721. It supersedes the earlier
+provisional adoption and resolves CM-3; see [architecture §1](architecture.md#1-goals).
 The [Component Model book](https://component-model.bytecodealliance.org/)
 is introductory documentation, not the semantic tie-breaker.
 Local discrepancies belong in
@@ -51,22 +50,22 @@ Local discrepancies belong in
 - [Stack-switching proposal](https://github.com/WebAssembly/stack-switching):
   related core-wasm work, not polyengine's current scheduling mechanism.
 
-## wasmtime internals (pinned: wasmtime-environ **49.0.0-dev+4675ee1**, a git rev of `main`)
+## wasmtime internals (pinned: wasmtime-environ **50.0.0-dev+cc546ee**, a git rev of `main`)
 
 The revision is declared in [Cargo.toml](../Cargo.toml) and resolved in
 [Cargo.lock](../Cargo.lock). Update source links with the pin.
 
-- [Environ at the pinned revision](https://github.com/bytecodealliance/wasmtime/tree/4675ee16b703b33948073a5ff6b961367371e7a1/crates/environ/src):
+- [Environ at the pinned revision](https://github.com/bytecodealliance/wasmtime/tree/cc546eee265b805dda0f034b2007d110a541093d/crates/environ/src):
   component translation and plan structures under `component/`; fused
   adapter generation in `fact.rs` and `fact/`.
-- [Adapter translation](https://github.com/bytecodealliance/wasmtime/blob/4675ee16b703b33948073a5ff6b961367371e7a1/crates/environ/src/component/translate/adapt.rs):
+- [Adapter translation](https://github.com/bytecodealliance/wasmtime/blob/cc546eee265b805dda0f034b2007d110a541093d/crates/environ/src/component/translate/adapt.rs):
   how component linkage is translated into FACT adapters.
-- [Component-model tests at the same revision](https://github.com/bytecodealliance/wasmtime/tree/4675ee16b703b33948073a5ff6b961367371e7a1/tests/misc_testsuite/component-model):
+- [Component-model tests at the same revision](https://github.com/bytecodealliance/wasmtime/tree/cc546eee265b805dda0f034b2007d110a541093d/tests/misc_testsuite/component-model):
   converted and classified separately by `just test-wasmtime` (see
   [harness/README.md](../harness/README.md#supplementary-wasmtime-coverage));
   supplementary reference material, not merged into the official corpus or
   an independent check of the reused frontend.
-- [Async test-programs guests at the same revision](https://github.com/bytecodealliance/wasmtime/tree/4675ee16b703b33948073a5ff6b961367371e7a1/crates/test-programs/src/bin):
+- [Async test-programs guests at the same revision](https://github.com/bytecodealliance/wasmtime/tree/cc546eee265b805dda0f034b2007d110a541093d/crates/test-programs/src/bin):
   `async_round_trip_stackless` and `async_short_reads`, built by
   `just wasmtime-guests` and driven through the public embedder API by
   `just test-wasmtime-guests`.
@@ -82,9 +81,9 @@ agree with the wasmtime frontend.
 - [wasm-tools](https://github.com/bytecodealliance/wasm-tools): CLI and
   libraries, including `wasmparser`, `wasm-encoder`, `wit-parser`, `wast`,
   and `json-from-wast`.
-- [wasmparser](https://docs.rs/wasmparser/0.258.0/wasmparser/): parsing and validation.
-- [wasm-encoder](https://docs.rs/wasm-encoder/0.258.0/wasm_encoder/): core and component binary generation.
-- [wit-parser](https://docs.rs/wit-parser/0.258.0/wit_parser/): bindgen's WIT input.
+- [wasmparser](https://docs.rs/wasmparser/0.259.0/wasmparser/): parsing and validation.
+- [wasm-encoder](https://docs.rs/wasm-encoder/0.259.0/wasm_encoder/): core and component binary generation.
+- [wit-parser](https://docs.rs/wit-parser/0.259.0/wit_parser/): bindgen's WIT input.
 - [wast](https://docs.rs/wast/): WAST parsing; use the version in the lockfile.
 - [json-from-wast](https://docs.rs/json-from-wast/): testgen's JSON-command and wasm-artifact conversion.
 - [wit-bindgen](https://github.com/bytecodealliance/wit-bindgen) and its

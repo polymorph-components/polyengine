@@ -32,7 +32,6 @@ async function bounded<T>(promise: Promise<T>, label: string): Promise<T> {
     if (timer !== undefined) clearTimeout(timer);
   }
 }
-
 async function fresh(
   onMark?: (value: number, component: Component) => void,
   gates: GateOptions = {},
@@ -56,7 +55,6 @@ async function fresh(
   holder.current = component;
   return component;
 }
-
 async function run(
   name: string,
   expectedValue: number,
@@ -102,51 +100,6 @@ Deno.test("real guest: promote ignores suspended target and runs ready target fi
   await run("promote", 104, [4, 41, 40, 42]);
 });
 
-function requestCurrentTaskCancellation(component: Component): void {
-  const tasks = new Set(
-    component.handle.componentInstances
-      .filter((inst) => inst !== undefined)
-      .flatMap((inst) => [...inst.threads].map((thread) => thread.task)),
-  );
-  assertEquals(tasks.size, 1, "mark must run with exactly one live task");
-  [...tasks][0].requestCancellation(null);
-}
-
-Deno.test("real guest: valid pending cancellation cancels without transfer", async () => {
-  const component = await fresh((value, current) => {
-    if (value === 6) requestCurrentTaskCancellation(current);
-  });
-  assertEquals(
-    await bounded(
-      component.exports.cancelValid() as Promise<number>,
-      "cancel-valid",
-    ),
-    105,
-  );
-  assertEquals(JSON.stringify(component.order), JSON.stringify([6, 61]));
-});
-
-for (const name of ["cancelInvalidIndex", "cancelSelf", "cancelWrongState"]) {
-  Deno.test(`real guest: ${name} validates before pending cancellation`, async () => {
-    let requestedTask: { state: string } | null = null;
-    const component = await fresh((value, current) => {
-      if (value !== 6) return;
-      const tasks = current.handle.componentInstances
-        .filter((inst) => inst !== undefined)
-        .flatMap((inst) => [...inst.threads].map((thread) => thread.task));
-      assert(tasks.length > 0);
-      requestedTask = tasks[0];
-      tasks[0].requestCancellation(null);
-    });
-    const failure = await assertRejects(() =>
-      bounded(component.exports[name]() as Promise<unknown>, name)
-    );
-    assert(isTrap(failure), `expected validation trap, got ${failure}`);
-    assert(requestedTask !== null);
-    assertEquals((requestedTask as { state: string }).state, "pending-cancel");
-  });
-}
-
 Deno.test("real guest: explicit child trap remains the original cause", async () => {
   const component = await fresh();
   const failure = await assertRejects(() =>
@@ -168,95 +121,6 @@ Deno.test("real guest: normal last explicit child reports no async result", asyn
     `expected last-thread no-result trap, got ${failure}`,
   );
 });
-
-for (const timing of ["pending", "immediate"] as const) {
-  Deno.test(`real guest: explicit child receives ${timing} cancellation while sibling owns exclusive slot`, async () => {
-    const childGate = Promise.withResolvers<void>();
-    const childEntered = Promise.withResolvers<void>();
-    const holderGate = Promise.withResolvers<void>();
-    const holderEntered = Promise.withResolvers<void>();
-    const childAtPark = Promise.withResolvers<void>();
-    const component = await fresh(
-      (value) => {
-        if (value === 70) childAtPark.resolve();
-      },
-      {
-        childGate: () => {
-          childEntered.resolve();
-          return childGate.promise;
-        },
-        holderGate: () => {
-          holderEntered.resolve();
-          return holderGate.promise;
-        },
-      },
-    );
-
-    const originResult = component.exports.childCancellable() as Promise<
-      number
-    >;
-    await bounded(childEntered.promise, "child initial noncancellable park");
-    const instance = component.handle.componentInstances.find((inst) =>
-      inst !== undefined && [...inst.threads].length > 0
-    )!;
-    const origin = [...instance.threads][0].task;
-    assertEquals(
-      origin.implicitThread?.index,
-      null,
-      "origin implicit thread exited",
-    );
-
-    const holderResult = component.exports.lockHolder() as Promise<number>;
-    try {
-      await bounded(holderEntered.promise, "exclusive holder park");
-      const exclusive = instance.exclusiveThread;
-      assert(exclusive !== null, "lock-holder must own the exclusive slot");
-      assert(
-        exclusive.task !== origin,
-        "exclusive holder must be a sibling task",
-      );
-
-      if (timing === "pending") origin.requestCancellation(null);
-      childGate.resolve();
-      await bounded(childAtPark.promise, "child cancellable park");
-      if (timing === "immediate") {
-        await bounded(
-          (async () => {
-            while (
-              !(instance.store as unknown as {
-                waiting: { task?: unknown; cancellable: boolean }[];
-              }).waiting.some((waiter) =>
-                waiter.task === origin && waiter.cancellable
-              )
-            ) {
-              await Promise.resolve();
-            }
-          })(),
-          "registered child cancellable park",
-        );
-        origin.requestCancellation(null);
-      }
-
-      assertEquals(
-        await bounded(originResult, `child-cancellable-${timing}`),
-        110,
-      );
-      assertEquals(
-        JSON.stringify(component.order),
-        JSON.stringify([90, 70, 71]),
-      );
-      assertEquals(
-        instance.exclusiveThread,
-        exclusive,
-        "holder keeps the slot",
-      );
-    } finally {
-      childGate.resolve();
-      holderGate.resolve();
-    }
-    assertEquals(await bounded(holderResult, "holder cleanup"), 109);
-  });
-}
 
 Deno.test("real guest: post-result ready child continues and suspended child is retained", async () => {
   const component = await fresh();

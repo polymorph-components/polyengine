@@ -15,11 +15,11 @@ export const chromium: LaneExpectation = {
   deltas: [],
   // Identical to the Deno lane's TOTAL row.
   totals: {
-    commands: 1511,
-    executed: 1506,
-    passed: 1468,
+    commands: 1622,
+    executed: 1617,
+    passed: 1593,
     failed: 0,
-    xfail: 38,
+    xfail: 24,
     pendingRuntime: 0,
     pendingCapability: 0,
     unsupportedDirective: 5,

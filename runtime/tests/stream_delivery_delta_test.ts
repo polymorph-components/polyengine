@@ -22,6 +22,7 @@ import {
   createStreamDropWritable,
   createStreamNew,
   createStreamRead,
+  createStreamTransfer,
   createStreamWrite,
   type StreamTrampolineContext,
 } from "../src/intrinsics/stream_builtins.ts";
@@ -35,6 +36,7 @@ import {
   EventCode,
   popCurrentThread,
   pushCurrentThread,
+  SharedStreamImpl,
   Store,
   Task,
   Thread,
@@ -98,6 +100,8 @@ function fixture(kind: "stream" | "future", elem: { kind: "u8" } | null) {
     futureElem: () => elem,
     resultTypes: () => [],
     suspensionMode: "plain" as const,
+    streamTableInstance: () => inst,
+    futureTableInstance: () => inst,
   } as unknown as StreamTrampolineContext;
   const task = new Task(
     { params: [], results: [], async: true },
@@ -128,6 +132,76 @@ function fixture(kind: "stream" | "future", elem: { kind: "u8" } | null) {
       }
     },
   };
+}
+
+Deno.test("idle drop is one-shot and drop-before-join remains observable", () => {
+  const f = fixture("stream", { kind: "u8" });
+  const writer = f.inst.handles.get(f.wi) as WritableStreamEnd;
+  f.run(() =>
+    createStreamDropReadable({ streamTable: 0 }, f.ctx, f.inst)(f.ri)
+  );
+  assertEq(writer.hasPendingEvent(), true);
+  const set = new WaitableSet();
+  writer.join(set);
+  const [code, index, payload] = set.getPendingEvent();
+  assertEq([code, index, payload], [
+    EventCode.STREAM_WRITE,
+    f.wi,
+    CopyResult.DROPPED,
+  ]);
+  assertEq(writer.hasPendingEvent(), false);
+  assertEq(writer.state, CopyState.DONE);
+});
+
+Deno.test("FACT transfer preserves endpoint identity and reports destination index", () => {
+  const f = fixture("stream", { kind: "u8" });
+  const end = f.inst.handles.get(f.ri);
+  f.run(() =>
+    createStreamDropWritable({ streamTable: 0 }, f.ctx, f.inst)(f.wi)
+  );
+  const dstInst = new ComponentInstanceState(1, f.inst.store);
+  // Give the destination an independent occupied prefix so its assigned index
+  // cannot coincidentally equal the source slot.
+  while (dstInst.handles.add(new WaitableSet()) <= f.ri) {
+    // keep filling
+  }
+  const ctx = {
+    ...(f.ctx as unknown as Record<string, unknown>),
+    streamTableInstance: (index: number) => index === 0 ? f.inst : dstInst,
+    streamElem: () => ({ kind: "u8" }),
+  } as unknown as StreamTrampolineContext;
+  const transfer = createStreamTransfer(ctx as never);
+  const dst = f.run(() => transfer(f.ri, 0, 1)) as number;
+  assert(dst !== f.ri, "test must force a distinct destination index");
+  assert(
+    end === dstInst.handles.get(dst),
+    "FACT transfer must move the same endpoint",
+  );
+  const moved = end as { getPendingEvent(): [EventCode, number, number] };
+  const [, index, payload] = moved.getPendingEvent();
+  assertEq(index, dst);
+  assertEq(payload, CopyResult.DROPPED);
+});
+
+for (const first of ["read", "write"] as const) {
+  for (const [firstLength, secondLength] of [[0, 0], [0, 1], [1, 0]] as const) {
+    Deno.test(`same-instance nonnumeric ${first} ${firstLength}/${secondLength} is permitted`, () => {
+      const shared = new SharedStreamImpl({ kind: "string" });
+      const inst = {};
+      const buffer = (length: number) => ({
+        t: { kind: "string" } as const,
+        remain: () => length,
+        isZeroLength: () => length === 0,
+      });
+      const call = (side: "read" | "write", length: number) => {
+        if (side === "read") {
+          shared.read(inst, buffer(length) as never, () => {}, () => {});
+        } else shared.write(inst, buffer(length) as never, () => {}, () => {});
+      };
+      call(first, firstLength);
+      call(first === "read" ? "write" : "read", secondLength);
+    });
+  }
 }
 
 for (const pending of ["read", "write"] as const) {

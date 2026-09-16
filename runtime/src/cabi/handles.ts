@@ -29,6 +29,7 @@ export class Table<T> {
 
   array: (T | null)[] = [null];
   free: number[] = [];
+  readonly tenure: number[] = [0];
 
   get(i: number): T {
     // Indices are u32; a negative i is out of range, and JS `array[-1]` is
@@ -44,10 +45,12 @@ export class Table<T> {
       i = this.free.pop()!;
       assert_(this.array[i] === null);
       this.array[i] = e;
+      this.tenure[i] = (this.tenure[i] ?? 0) + 1;
     } else {
       i = this.array.length;
       trapIf(i > Table.MAX_LENGTH, "table full");
       this.array.push(e);
+      this.tenure.push(1);
     }
     return i;
   }

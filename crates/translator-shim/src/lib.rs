@@ -38,7 +38,7 @@ use wasmtime_environ::component::{ComponentTypesBuilder, Translator};
 use wasmtime_environ::{ScopeVec, Tunables, wasmparser};
 
 /// Pinned `wasmtime-environ` crate version + short git rev (root Cargo.toml).
-pub const WASMTIME_ENVIRON_VERSION: &str = "49.0.0-dev+4675ee1";
+pub const WASMTIME_ENVIRON_VERSION: &str = "50.0.0-dev+cc546ee";
 
 pub mod error;
 mod fact_string_limits;

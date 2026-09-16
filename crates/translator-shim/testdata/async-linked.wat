@@ -19,7 +19,7 @@
     (core instance $ia (instantiate $MA
       (with "" (instance (export "task.return" (func $task-return))))))
     (func (export "add") async (param "a" u32) (param "b" u32) (result u32)
-      (canon lift (core func $ia "add-impl") async (callback (func $ia "cb")))))
+      (canon lift (core func $ia "add-impl") async (callback (core func $ia "cb")))))
 
   (component $B
     (import "adder" (instance $adder
@@ -32,7 +32,7 @@
     ;; instantiated first to avoid a circular dependency.
     (core module $MEM (memory (export "mem") 1))
     (core instance $imem (instantiate $MEM))
-    (core func $add_async (canon lower (func $adder "add") async (memory $imem "mem")))
+    (core func $add_async (canon lower (func $adder "add") async (memory (core memory $imem "mem"))))
 
     (core module $MB
       (import "adder" "add" (func $add (param i32 i32) (result i32)))

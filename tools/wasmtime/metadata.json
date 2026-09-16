@@ -1,5 +1,5 @@
 {
-  "source_revision": "4675ee16b703b33948073a5ff6b961367371e7a1",
+  "source_revision": "cc546eee265b805dda0f034b2007d110a541093d",
   "files": [
     {
       "path": "adapter.json",
@@ -575,6 +575,21 @@
       "path": "tags.json",
       "directives": {
         "exceptions": true
+      }
+    },
+    {
+      "path": "thread-transparency/blocks.json",
+      "directives": {
+        "component_model_async": true
+      }
+    },
+    {
+      "path": "thread-transparency/reentrancy.json",
+      "directives": {
+        "component_model_async": true,
+        "component_model_async_stackful": true,
+        "component_model_more_async_builtins": true,
+        "component_model_threading": true
       }
     },
     {

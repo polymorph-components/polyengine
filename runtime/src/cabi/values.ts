@@ -31,6 +31,7 @@ interface Acquisition {
   table?: import("./handles.ts").Table<unknown>;
   index?: number;
   entry?: unknown;
+  tenure?: number;
 }
 
 export interface PreparedTransfer {
@@ -79,6 +80,7 @@ export class PreparedCustody {
     a.table = table;
     a.index = index;
     a.entry = entry;
+    a.tenure = table.tenure[index];
   }
 
   delivered(): void {
@@ -101,7 +103,10 @@ export class PreparedCustody {
         if (a.table !== undefined) {
           // The receiver may legitimately have transferred the handle onward
           // during reentry. Remove only the exact entry still under our custody.
-          if (a.table.array[a.index!] !== a.entry) continue;
+          if (
+            a.table.array[a.index!] !== a.entry ||
+            a.table.tenure[a.index!] !== a.tenure
+          ) continue;
           a.table.remove(a.index!);
         }
         a.cleanup();

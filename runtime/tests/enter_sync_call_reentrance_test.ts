@@ -81,7 +81,7 @@ const C = 1;
 
 Deno.test("enter-sync-call: an idle sibling callee is enterable", () => {
   const { enter, exit, inst } = fixture();
-  enter(A, 0, C);
+  enter(0, C);
   assertEq(currentTask().inst === inst(C), true, "callee task is current");
   assertEq(currentThread().storage, [0, 0], "callee slots start fresh");
   exit();
@@ -92,10 +92,10 @@ Deno.test("enter-sync-call: a sibling cycle A -> C -> A no longer traps (CM#705)
   // Host entered A; A is mid-call into C; C calls back into A. That is
   // simply a valid call (CM#705).
   const { enter, exit, inst } = fixture();
-  enter(A, 0, C);
+  enter(0, C);
   const c = currentThread();
   c.storage[0] = 41;
-  enter(C, 0, A);
+  enter(0, A);
   assertEq(currentTask().inst === inst(A), true);
   assertEq(currentThread().storage, [0, 0]);
   exit();
@@ -110,7 +110,7 @@ Deno.test("enter-sync-call: a POISONED callee is refused, naming the trap", () =
   notifyInstancePoisoned(inst(A), new Error("earlier boom"));
   let msg = "";
   try {
-    enter(C, 0, A);
+    enter(0, A);
   } catch (e) {
     msg = String((e as Error).message ?? e);
   }
@@ -124,20 +124,22 @@ Deno.test("enter-sync-call: a POISONED callee is refused, naming the trap", () =
   assertEq(msg.includes("earlier boom"), true, msg);
 });
 
-Deno.test("enter-sync-call: a poisoned instance calling ITSELF passes vacuously", () => {
+Deno.test("enter-sync-call: a poisoned current instance calling itself passes vacuously", () => {
   // `entryRefusal`'s `caller !== callee` guard passes a self-call
   // vacuously, even against a marked instance.
   const { enter, exit, inst } = fixture();
   notifyInstancePoisoned(inst(A), new Error("earlier boom"));
-  enter(A, 0, A);
-  exit();
+  withActivation({ storage: [0, 0], task: { inst: inst(A) } }, () => {
+    enter(0, A);
+    exit();
+  });
 });
 
 Deno.test("enter-sync-call: an acyclic sibling chain A -> B -> C never traps", () => {
   const { enter, exit, inst } = fixture();
   const B = 2;
-  enter(A, 0, B);
-  enter(B, 0, C);
+  enter(0, B);
+  enter(0, C);
   assertEq(currentTask().inst === inst(C), true);
   exit();
   assertEq(currentTask().inst === inst(B), true);
@@ -152,7 +154,7 @@ Deno.test("enter-sync-call: trap unwind retires nested task identity", () => {
   let caught: unknown;
   try {
     withActivation(parent, () => {
-      enter(A, 0, C);
+      enter(0, C);
       assertEq(currentTask().inst === inst(C), true);
       throw boom;
     });
@@ -184,10 +186,9 @@ Deno.test("nested sync suspension keeps physical owner and logical task separate
         store,
         task: logical.task,
         readyFunc: () => true,
-        cancellable: false,
         produce: () => undefined,
       });
-      yield { readyFunc: null, cancellable: false, awaitValue: promise };
+      yield { readyFunc: null, awaitValue: promise };
       logical.finish();
     })(),
   );
@@ -232,10 +233,9 @@ Deno.test("nested sync post-hop trap retires persistent logical descendants", as
         store,
         task: logical.task,
         readyFunc: () => true,
-        cancellable: false,
         produce: () => undefined,
       });
-      yield { readyFunc: null, cancellable: false, awaitValue: promise };
+      yield { readyFunc: null, awaitValue: promise };
       throw boom;
     })(),
   );

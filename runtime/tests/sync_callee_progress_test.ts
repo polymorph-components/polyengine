@@ -64,7 +64,6 @@ async function parkedSyncChild(input: {
       store: inst.store,
       task: child.task,
       readyFunc: () => false,
-      cancellable: false,
       produce: () => 7,
       blockReason: input.blockReason,
     })) as Promise<number>;
@@ -148,12 +147,8 @@ Deno.test("same-instance runnable producer may satisfy a sync callee", async () 
   assertEq(await result, 7);
 });
 
-Deno.test("async-typed callee and host-import latency are allowed to remain pending", async () => {
-  for (
-    const options of [{ asyncTyped: true }, {
-      blockReason: "host-import" as const,
-    }]
-  ) {
+Deno.test("host-import latency is allowed to remain pending", async () => {
+  for (const options of [{ blockReason: "host-import" as const }]) {
     const { result, resume } = await parkedSyncChild(options);
     const verdict = await Promise.race([
       result.then(() => "settled"),
@@ -165,4 +160,106 @@ Deno.test("async-typed callee and host-import latency are allowed to remain pend
     resume();
     await result;
   }
+});
+
+Deno.test("async-typed child under a live async root remains pending", async () => {
+  const { result, resume } = await parkedSyncChild({ asyncTyped: true });
+  const verdict = await Promise.race([
+    result.then(() => "settled", () => "rejected"),
+    new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 10)),
+  ]);
+  assertEq(verdict, "pending");
+  resume();
+  assertEq(await result, 7);
+});
+
+Deno.test("three-level async child drives the discovered sync callee instance", async () => {
+  const store = new ComponentInstanceState(99).store;
+  const a = new ComponentInstanceState(0, store);
+  const b = new ComponentInstanceState(1, store);
+  const c = new ComponentInstanceState(2, store);
+  const rootThread = root(a).thread;
+  const syncB = new SynchronousActivation(b, false, rootThread);
+  const asyncC = new SynchronousActivation(c, true, syncB.thread);
+  popLogicalActivation(asyncC.thread);
+  popLogicalActivation(syncB.thread);
+  const result = withActivation(asyncC.thread, () =>
+    blockCurrentActivation({
+      store,
+      task: asyncC.task,
+      readyFunc: () => false,
+      produce: () => 9,
+    })) as Promise<number>;
+  const point = store.waiting[0];
+  const producerTask = new Task(
+    { params: [], results: [], async: false },
+    SYNC_OPTS,
+    b,
+    () => [],
+    () => {},
+  );
+  const producer = new Thread(
+    producerTask,
+    // deno-lint-ignore require-yield
+    (function* () {
+      point.resume();
+    })(),
+  );
+  producerTask.registerThread(producer);
+  producer.resumeLater();
+  await Promise.resolve();
+  requestStoreService(store);
+  assertEq(await result, 9);
+});
+
+Deno.test("three-level async child cannot be rescued by an outer ready producer", async () => {
+  const store = new ComponentInstanceState(99).store;
+  const a = new ComponentInstanceState(0, store);
+  const b = new ComponentInstanceState(1, store);
+  const c = new ComponentInstanceState(2, store);
+  const rootThread = root(a).thread;
+  const syncB = new SynchronousActivation(b, false, rootThread);
+  const asyncC = new SynchronousActivation(c, true, syncB.thread);
+  popLogicalActivation(asyncC.thread);
+  popLogicalActivation(syncB.thread);
+  let outerRan = false;
+  let rescued = false;
+  const result = withActivation(asyncC.thread, () =>
+    blockCurrentActivation({
+      store,
+      task: asyncC.task,
+      readyFunc: () => false,
+      produce: () => {
+        rescued = true;
+        return 9;
+      },
+    })) as Promise<number>;
+  const producerTask = new Task(
+    { params: [], results: [], async: false },
+    SYNC_OPTS,
+    a,
+    () => [],
+    () => {},
+  );
+  const producer = new Thread(
+    producerTask,
+    // deno-lint-ignore require-yield
+    (function* () {
+      outerRan = true;
+    })(),
+  );
+  producerTask.registerThread(producer);
+  producer.resumeLater();
+  await Promise.resolve();
+  requestStoreService(store);
+  const cause = await semanticRejection(result);
+  assert(
+    cause instanceof Trap &&
+      cause.message.includes(
+        "cannot block a synchronous task before returning",
+      ),
+  );
+  assertEq(rescued, false, "outer work did not rescue the B-owned wait");
+  // Once B has unwound, ordinary service may run A.
+  assertEq(outerRan, true);
 });

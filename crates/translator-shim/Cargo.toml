@@ -20,4 +20,4 @@ base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 [dev-dependencies]
 # For generating test components from WAT in tests (same wasm-tools family
 # version as wasmparser above).
-wat = "1.258"
+wat = "1.259"

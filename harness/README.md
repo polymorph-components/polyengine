@@ -98,7 +98,16 @@ to [#372](https://github.com/polymorph-components/polyengine/issues/372)
 (runtime-semantics, diagnostic-mismatch, imported-module, cascade,
 provider-control, exception-handling — plan v0 / diagnostic gaps against
 Wasmtime's own assertions, not the spec corpus above). The supplementary thread
-fixtures now execute rather than being skipped. This does not imply
+fixtures now execute rather than being skipped.
+
+One thread-transparency row is classified separately as a specification
+conflict under [#380](https://github.com/polymorph-components/polyengine/issues/380).
+Wasmtime permits an outer-instance ready thread to progress a nested synchronous
+lift, while the pinned Component Model `canon_lift` loop restricts candidates to
+the synchronous callee instance. The row still executes and its exact failure is
+checked; it is neither excluded nor treated as a diagnostic equivalence.
+
+This does not imply
 unrestricted explicit-thread conformance: valid non-final or derived
 start-function signatures can be rejected by the runtime's nominal `ref.test`
 validator, as documented in `contracts/intrinsics.md`; the current Wasmtime
@@ -147,11 +156,11 @@ The capacity knob is intentionally not a production capability; the bounded
 reuse test above covers its leak-detection purpose without pretending to
 reproduce Wasmtime's host configuration surface.
 
-The official Deno/Chromium aggregate at the current Component Model pin is
-1,511 commands, 1,506 executed, 1,468 passed, 38 exact xfails, zero
+The official Deno, Chromium, and Firefox aggregate at the current Component Model pin is
+1,622 commands, 1,617 executed, 1,593 passed, 24 exact xfails, zero
 runtime/capability skips, and five unsupported text directives. Seeded runs
 omit the three-command `async-calls-sync` deterministic-profile fixture, giving
-1,508 commands, 1,503 executed, and 1,465 passed with the same 38 xfails and
+1,619 commands, 1,614 executed, and 1,590 passed with the same 24 xfails and
 five unsupported directives.
 
 `just test-wasmtime-guests` builds the two upstream async guest binaries this

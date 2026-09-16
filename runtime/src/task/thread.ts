@@ -17,9 +17,6 @@ import { assert_ } from "../cabi/trap.ts";
 import {
   abortLogicalChildren,
   type BlockRequest,
-  type Cancelled,
-  CANCELLED_FALSE,
-  CANCELLED_TRUE,
   isInstancePoisoned,
   NeedsJspi,
   notifyInstancePoisoned,
@@ -42,6 +39,8 @@ export interface ThreadPark extends SchedulableThread {
 }
 
 export class Thread implements SchedulableThread {
+  /** Real synchronous logical caller, populated only by SynchronousActivation. */
+  parent?: import("./scheduler.ts").CurrentThreadLike;
   /** Physical generator activation used for JSPI awaiting/resumption. */
   physicalOwner: Thread = this;
   /** Persistent logical descendants, including while their stack is unpublished. */
@@ -70,12 +69,6 @@ export class Thread implements SchedulableThread {
 
   /** Slot in `inst.threads`, assigned by `Task.registerThread`. */
   index: number | null = null;
-
-  /**
-   * Cancellability of the current park, cleared on resume. Callback lock
-   * availability is checked separately by `Task.implicitThreadCancellable`.
-   */
-  cancellable = false;
 
   #state: ThreadState = "suspended";
   #body: ThreadBody;
@@ -118,11 +111,11 @@ export class Thread implements SchedulableThread {
   }
 
   /** definitions.py `Thread.stop_waiting_internal`. */
-  #stopWaiting(cancelled: Cancelled): void {
+  #stopWaiting(): void {
     assert_(this.waiting() && this.#readyFunc !== null);
     assert_(
-      cancelled || this.ready(),
-      "stopWaiting on a thread that is neither ready nor cancelled",
+      this.ready(),
+      "stopWaiting on a thread that is not ready",
     );
     this.#readyFunc = null;
     this.#state = "suspended";
@@ -186,34 +179,36 @@ export class Thread implements SchedulableThread {
   }
 
   /** `Thread.resume`: run until the next block or completion. */
-  resume(cancelled: Cancelled = CANCELLED_FALSE): void {
+  resume(): void {
     assert_(
       !this.running() && !this.done(),
       "resume() on a running or finished thread",
     );
-    assert_(
-      this.cancellable || !cancelled,
-      "cancelled resume of a non-cancellable block point",
-    );
-    if (this.waiting()) this.#stopWaiting(cancelled);
-    this.#resumeInternal(cancelled);
+    if (this.waiting()) this.#stopWaiting();
+    this.#resumeInternal(undefined);
   }
 
-  /** Retire a cancellable wait without delivering task cancellation. */
+  /** Wake an INITIAL task's admission wait after cancellation was recorded. */
+  resumeStartupCancellation(): void {
+    assert_(this.waiting(), "startup cancellation of a non-waiting thread");
+    this.#readyFunc = null;
+    this.#state = "suspended";
+    this.#store.stopWaiting(this);
+    this.#resumeInternal(undefined);
+  }
+
+  /** Retire a startup wait without delivering task cancellation. */
   abandonWaiting(): void {
-    assert_(
-      this.waiting() && this.cancellable,
-      "abandon of non-cancellable wait",
-    );
-    this.#stopWaiting(CANCELLED_TRUE);
+    assert_(this.waiting(), "abandon of non-waiting thread");
+    this.#readyFunc = null;
+    this.#state = "suspended";
+    this.#store.stopWaiting(this);
     this.#body.return?.();
     this.#state = "done";
-    this.cancellable = false;
   }
 
   #resumeInternal(sendValue: unknown, failure?: { error: unknown }): void {
     this.#state = "running";
-    this.cancellable = false;
     pushCurrentThread(this);
     let step: IteratorResult<BlockRequest, void>;
     try {
@@ -244,7 +239,6 @@ export class Thread implements SchedulableThread {
       return;
     }
     const req = step.value;
-    this.cancellable = req.cancellable;
     if (req.awaitValue !== undefined) {
       // Promise parks are driver-owned, with eager settlement tracking to
       // order their bookkeeping before later scheduler ticks.
@@ -283,36 +277,19 @@ export class Thread implements SchedulableThread {
    */
   *waitUntil(
     readyFunc: () => boolean,
-    cancellable = false,
-  ): Generator<BlockRequest, Cancelled, Cancelled> {
+  ): Generator<BlockRequest, void, unknown> {
     assert_(this.running(), "waitUntil on a non-running thread");
-    if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
-    // Pending cancellation is itself a wakeup, but the implicit callback
-    // thread cannot receive it while another thread holds exclusivity.
-    const readyOrCancelled = () =>
-      readyFunc() ||
-      (cancellable && this.task.hasPendingCancel() &&
-        (this !== this.task.implicitThread ||
-          this.task.implicitThreadCancellable()));
-    const cancelled = yield { readyFunc: readyOrCancelled, cancellable };
-    // As in Thread.wait_until, pending cancellation wins over a ready event
-    // after the block as well as before it.
-    if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
-    return cancelled;
+    yield { readyFunc };
   }
 
   /** definitions.py `Thread.suspend`. */
-  *suspend(
-    cancellable: boolean,
-  ): Generator<BlockRequest, Cancelled, Cancelled> {
+  *suspend(): Generator<BlockRequest, void, unknown> {
     assert_(this.running(), "suspend on a non-running thread");
-    if (this.task.deliverPendingCancel(cancellable)) return CANCELLED_TRUE;
-    const cancelled = yield { readyFunc: null, cancellable };
-    return cancelled;
+    yield { readyFunc: null };
   }
 
   /** definitions.py `Thread.yield_`: wait with an always-ready predicate. */
-  *yield_(cancellable: boolean): Generator<BlockRequest, Cancelled, Cancelled> {
-    return yield* this.waitUntil(() => true, cancellable);
+  *yield_(): Generator<BlockRequest, void, unknown> {
+    return yield* this.waitUntil(() => true);
   }
 }

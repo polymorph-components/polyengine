@@ -55,7 +55,6 @@ import { MAX_FLAT_RESULTS } from "../cabi/mod.ts";
 import type { CoreValue, FuncType, ValType } from "../cabi/types.ts";
 import {
   type BlockRequest,
-  type Cancelled,
   type ComponentInstanceState,
   currentTask,
   dbgId,
@@ -329,7 +328,7 @@ function mkCalleeTask(input: {
   };
 }): {
   task: Task;
-  body: (t: Thread) => Generator<BlockRequest, void, Cancelled>;
+  body: (t: Thread) => Generator<BlockRequest, void, unknown>;
 } {
   const { prepared, callee, callback, postReturn, ctx, calleeUsesAsyncAbi } =
     input;
@@ -413,7 +412,7 @@ function mkCalleeTask(input: {
 
   const body = function* (
     thread: Thread,
-  ): Generator<BlockRequest, void, Cancelled> {
+  ): Generator<BlockRequest, void, unknown> {
     if (!(yield* task.enterImplicitThread(thread))) return;
     const calleeArgs = task.start();
     traceCopy(`mkCalleeTask callee canBlock=${canBlock} mode=${mode}`);
@@ -554,8 +553,9 @@ export function createSyncStartCall(
       );
       if (refusal !== null) trap(refusal);
     }
+    let thread: Thread;
     try {
-      const thread = spawn(task, body);
+      thread = spawn(task, body);
       thread.resume();
     } catch (e) {
       // A trap poisons the callee instance. A *capability signal* does not —
@@ -584,7 +584,6 @@ export function createSyncStartCall(
           store: prepared.callerInst.store,
           task: currentTask(),
           readyFunc: () => callerResults !== null,
-          cancellable: false,
           produce: () => {
             lenderScope.releaseLenders();
             return shapeResults(callerResults as CoreValue[] | null);
@@ -812,7 +811,6 @@ export function createAsyncStartCall(
           store: prepared.callerInst.store,
           task: currentTask(),
           readyFunc: determinate,
-          cancellable: false,
           // Determining async-start status first finishes the named callee's
           // mandatory entry continuation. It is not itself a synchronous
           // Component Model wait by the caller.
@@ -838,11 +836,11 @@ export function createAsyncStartCall(
 /** Create a thread whose body needs a reference to the thread itself. */
 function spawn(
   task: Task,
-  body: (t: Thread) => Generator<BlockRequest, void, Cancelled>,
+  body: (t: Thread) => Generator<BlockRequest, void, unknown>,
 ): Thread {
   // Forward reference: the generator body only runs once `thread` below
   // is assigned (spawn returns before the body executes).
-  function* threadBody(): Generator<BlockRequest, void, Cancelled> {
+  function* threadBody(): Generator<BlockRequest, void, unknown> {
     yield* body(thread);
   }
   const thread: Thread = new Thread(task, threadBody());

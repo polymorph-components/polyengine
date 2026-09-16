@@ -7,8 +7,8 @@ in `runtime/src/intrinsics/`.
 The pinned `wasmtime-environ` enums define the calling convention:
 `fact::Import` for adapter imports and `component::Trampoline` for host
 trampolines. The shim rejects variants it cannot represent. Component Model
-semantics remain governed by the pinned spec and `definitions.py`, subject to
-[architecture §1](../docs/architecture.md#1-goals)'s named exception.
+semantics remain governed by the pinned spec and `definitions.py`; see
+[architecture §1](../docs/architecture.md#1-goals).
 
 ## Universal semantics
 
@@ -39,6 +39,12 @@ The runtime receives trampolines, context intrinsics, or ordinary core
 functions, memories, and flags globals; it never consumes `fact::Import`
 directly. `modules[].intrinsics` records import names and resolved categories.
 
+Format 6's `enter-sync-call` takes `(calleeAsync, calleeInstance)`; caller
+identity comes from the current logical thread. Wasmtime may omit the
+enter/exit pair for thread-transparent adapters whose callees cannot observe
+thread state. Such omission does not authorize store-wide scheduling across an
+active synchronous call in another component instance.
+
 - **Instance flags:** a mutable i32 `WebAssembly.Global`, initially 1,
   represents `may_leave` as a 0/1 boolean, not a bitmask.
 - **Traps:** each `runtime.trap<N>` is a nullary import. Its plan declaration
@@ -67,7 +73,10 @@ directly. `modules[].intrinsics` records import names and resolved categories.
 - **Destructive removal:** validation follows handle removal, as in the
   reference. If a removed stream/future end fails validation, local unwind
   retires it; a later table walk cannot find it. Successful transfers do not
-  retire their shared state. Peer notification failure must neither replace the
+  retire their shared state. Endpoint identity and pending notifications survive
+  transfer; event delivery uses the destination handle index. Custody checks
+  include slot tenure so a leave-and-return transfer cannot be reclaimed by an
+  earlier owner. Peer notification failure must neither replace the
   original trap nor skip drop observers.
 - **Nested exception barriers:** trap trampolines re-record the pending host
   trap before throwing, preserving its cause through outer barriers.
@@ -90,6 +99,14 @@ explicit-thread family: `thread.index`, `thread.new-indirect`,
 task scheduler and JSPI activation bridge as the implicit thread. Publishing a
 task result does not destroy its remaining explicit threads; the worker owns
 host-call teardown after result delivery.
+
+Task cancellation is recorded as pending. Startup admission and callback
+WAIT/YIELD explicitly observe it; thread and waitable builtins do not consume
+cancellation. A callback observes pending cancellation before releasing its
+exclusive slot or inspecting its next WAIT handle. Unresolved async
+`subtask.cancel` yields before checking resolution again; the synchronous form
+waits for resolution while retaining the claim and lenders. JSPI is required
+when that yield suspends a Wasm frame.
 
 `thread.new-indirect` currently accepts the canonical final `(i32) -> ()` and
 `(i64) -> ()` start-function types. Its native `ref.test` validator rejects
@@ -170,7 +187,9 @@ Tests exercise the same corpus under both modes where applicable.
 - WASI's marked blocking declarations select JSPI even when a particular call
   completes immediately. The plain fast path applies to sync-only plans with no
   marked imports, not to every call that happens not to wait.
-- The async `subtask.cancel` determinacy park is a named non-atomicity
-  divergence. The synchronous form still waits for **resolution**, never merely
-  a STARTED event. Copy-cancel completion superseding is the separate CM-3
-  exception. Both are documented in architecture §6.
+- Async `subtask.cancel` includes the reference's yield when cancellation is
+  unresolved. Its JSPI continuation must settle before the next canonical
+  scheduling decision. The synchronous form waits for **resolution**, never
+  merely a STARTED event. Stream cancellation preserves progress and reports
+  `CANCELLED` unless peer drop takes precedence; future completion retains its
+  transferred payload's `COMPLETED` verdict.

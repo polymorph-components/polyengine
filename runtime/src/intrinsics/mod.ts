@@ -125,6 +125,15 @@ const FACT_TRAP_MESSAGES: Record<number, string> = {
   33: "unaligned pointer",
   46: "reference count overflow",
   49: "uncaught exception propagated out of component",
+  50:
+    "cannot read from stream after being notified that the writable end dropped",
+  51:
+    "cannot write to stream after being notified that the readable end dropped",
+  // Upstream trap_encoding.rs says "stream" here despite naming a future;
+  // use the operation's native meaning rather than copying that typo.
+  52:
+    "cannot write to future after previous write succeeded or readable end dropped",
+  53: "cannot lift stream after being notified that the writable end dropped",
 };
 
 export { UnsupportedFeatureError } from "./errors.ts";
@@ -399,26 +408,23 @@ function createTrampolineBody(
     }
 
     // FACT sync-call borrow brackets (wasmtime-environ `fact.rs`):
-    //   async.enter-sync-call(caller_instance: i32, async: i32,
-    //                         callee_instance: i32) -> ()
+    //   async.enter-sync-call(async: i32, callee_instance: i32) -> ()
     //   async.exit-sync-call() -> ()
     case "enter-sync-call":
-      return (
-        callerInstance?: number,
-        async_?: number,
-        calleeInstance?: number,
-      ) => {
+      return (async_?: number, calleeInstance?: number) => {
+        // wasmtime cc546ee component.rs:104 and fact.rs:730-738. The caller is
+        // the current logical activation, no longer an adapter argument.
+        const caller = maybeCurrentThread();
+        const callerInst = caller?.task.inst;
         // Reentrance is valid. `entryRefusal` enforces per-instance poisoning,
         // a runtime divergence, and reports the original trap.
         if (
-          typeof callerInstance === "number" &&
           typeof calleeInstance === "number"
         ) {
-          const callerInst = ctx.componentInstance(callerInstance >>> 0);
           const calleeInst = ctx.componentInstance(calleeInstance >>> 0);
           const refusal = entryRefusal(
             calleeInst,
-            callerInst,
+            callerInst ?? null,
             "cannot enter component instance",
           );
           if (refusal !== null) trap(refusal);
@@ -430,7 +436,6 @@ function createTrampolineBody(
         // Capture before a possible admission park. The store later calls
         // `produce` without the caller's synchronous bracket, but the nested
         // activation remains a logical child of this canonical caller.
-        const caller = maybeCurrentThread();
         // Normal return must match enter/exit on the same activation's stack;
         // trap unwind releases any scopes whose exit was skipped.
         const enter = () => {
@@ -473,7 +478,6 @@ function createTrampolineBody(
           // CONTRACT: this is the already-running caller's synchronous wait,
           // not a new callee task's `enter_implicit_thread` wait
           // (definitions.py:458-465). It cannot consume caller cancellation.
-          cancellable: false,
           produce: () => {
             const activation = enter();
             if (activation !== undefined) {
@@ -627,7 +631,7 @@ function createTrampolineBody(
       );
     case "thread-yield":
       return createThreadYield(
-        decl as unknown as { cancellable?: boolean },
+        decl,
         ctx.suspensionMode,
         declaredInstance(decl, ctx),
       );

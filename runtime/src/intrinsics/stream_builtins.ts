@@ -98,8 +98,12 @@ export function createStreamNew(
   return () => {
     trapIf(!inst.mayLeave, "stream.new: cannot leave component instance");
     const shared = new SharedStreamImpl(ctx.streamElem(decl.streamTable));
-    const ri = inst.handles.add(new ReadableStreamEnd(shared, shared.t));
-    const wi = inst.handles.add(new WritableStreamEnd(shared, shared.t));
+    const reader = new ReadableStreamEnd(shared, shared.t);
+    const writer = new WritableStreamEnd(shared, shared.t);
+    const ri = inst.handles.add(reader);
+    const wi = inst.handles.add(writer);
+    reader.index = ri;
+    writer.index = wi;
     return packEnds(ri, wi);
   };
 }
@@ -112,8 +116,12 @@ export function createFutureNew(
   return () => {
     trapIf(!inst.mayLeave, "future.new: cannot leave component instance");
     const shared = new SharedFutureImpl(ctx.futureElem(decl.futureTable));
-    const ri = inst.handles.add(new ReadableFutureEnd(shared, shared.t));
-    const wi = inst.handles.add(new WritableFutureEnd(shared, shared.t));
+    const reader = new ReadableFutureEnd(shared, shared.t);
+    const writer = new WritableFutureEnd(shared, shared.t);
+    const ri = inst.handles.add(reader);
+    const wi = inst.handles.add(writer);
+    reader.index = ri;
+    writer.index = wi;
     return packEnds(ri, wi);
   };
 }
@@ -148,6 +156,7 @@ function streamCopy(input: {
   const e = inst.handles.get(i);
   trapIf(!(e instanceof EndT), "stream copy: wrong end type for this handle");
   const end = e as ReadableStreamEnd | WritableStreamEnd;
+  end.index = i;
   trapIf(!valTypeEqual(end.elem, elem), "stream copy: element type mismatch");
   // wasmtime distinguishes the two non-IDLE states in its message, and the
   // suite asserts the exact text: DONE means the other end has gone away (or
@@ -183,11 +192,11 @@ function streamCopy(input: {
   ): EventTuple => {
     reclaim();
     assert_(end.copying(), "stream event on a non-copying end");
-    // CONTRACT: WebAssembly/component-model#719 at head 35e9769957627c2:
+    // CONTRACT: current definitions.py End.copy delivery rules:
     // stream drop is observed when the pending event is consumed, not when it
     // is armed. Preserve all progress accumulated before delivery. This runs
-    // before takeCancelEvent's CM-3 COMPLETED -> CANCELLED remap, so peer drop
-    // has precedence and remains DROPPED.
+    // before the reference's COMPLETED -> CANCELLED remap on cancellation, so
+    // peer drop has precedence and remains DROPPED.
     const delivered = end.shared.dropped ? CopyResult.DROPPED : result;
     end.state = delivered === CopyResult.DROPPED
       ? CopyState.DONE
@@ -201,7 +210,8 @@ function streamCopy(input: {
       delivered >= 0 && delivered < 2 ** 4,
       "stream event: packed result out of 4-bit range",
     );
-    return [eventCode, i, (delivered | (buffer.progress << 4)) >>> 0];
+    assert_(end.index !== null, "stream event without owner index");
+    return [eventCode, end.index, (delivered | (buffer.progress << 4)) >>> 0];
   };
 
   end.state = CopyState.COPYING;
@@ -240,6 +250,7 @@ function futureCopy(input: {
   const e = inst.handles.get(i);
   trapIf(!(e instanceof EndT), "future copy: wrong end type for this handle");
   const end = e as ReadableFutureEnd | WritableFutureEnd;
+  end.index = i;
   trapIf(!valTypeEqual(end.elem, elem), "future copy: element type mismatch");
   // Writable DONE covers either a completed write or a dropped readable end.
   trapIf(
@@ -266,7 +277,7 @@ function futureCopy(input: {
       "future event/progress disagreement",
     );
     assert_(end.copying(), "future event on a non-copying end");
-    // CONTRACT: WebAssembly/component-model#719 at head 35e9769957627c2:
+    // CONTRACT: current definitions.py FutureEnd.copy delivery rules:
     // transferred payload makes COMPLETED final even if the peer later drops;
     // only an undelivered CANCELLED is upgraded when its peer is gone.
     const delivered = result === CopyResult.CANCELLED && end.shared.dropped
@@ -277,7 +288,8 @@ function futureCopy(input: {
         delivered === CopyResult.COMPLETED
       ? CopyState.DONE
       : CopyState.IDLE;
-    return [eventCode, i, delivered];
+    assert_(end.index !== null, "future event without owner index");
+    return [eventCode, end.index, delivered];
   };
 
   end.state = CopyState.COPYING;
@@ -347,7 +359,6 @@ function finishCopy(
           store: inst.store,
           task: currentTask(),
           readyFunc: () => end.hasPendingEvent(),
-          cancellable: false,
           produce: () => {
             end.hasSyncWaiter = false;
             const p = take();
@@ -379,7 +390,7 @@ function finishCopy(
 
 /**
  * `cancel_copy`'s reporting tail, shared by its immediate and blocking exits.
- * Both exits apply the CM-3 completion-superseding exception below.
+ * Both exits apply the current stream completion-superseding rule below.
  */
 function takeCancelEvent(
   end: CopyEnd,
@@ -392,13 +403,9 @@ function takeCancelEvent(
     !end.copying() && code === eventCode && index === i,
     `unexpected event delivered by ${what}`,
   );
-  // CM-3 exception (upstream-component-model-repo-findings.md): adopt the
-  // corpus/wasmtime semantics pending upstream adjudication, rather than
-  // definitions.py `cancel_copy`'s verbatim pending event. An undelivered
-  // stream COMPLETED becomes CANCELLED with the same element count;
-  // DROPPED and future COMPLETED remain unchanged. See
-  // `test/async/big-interleaving-test.wast` and wasmtime's
-  // `futures_and_streams.rs` cancellation handling; docs/architecture.md §1.
+  // Current definitions.py `cancel_copy`: an undelivered stream COMPLETED
+  // becomes CANCELLED with the same element count; DROPPED and future
+  // COMPLETED remain unchanged.
   const isStreamEvent = eventCode === EventCode.STREAM_READ ||
     eventCode === EventCode.STREAM_WRITE;
   if (isStreamEvent && (payload & 0xf) === CopyResult.COMPLETED) {
@@ -410,7 +417,7 @@ function takeCancelEvent(
   return payload;
 }
 
-/** definitions.py `cancel_copy`, with the CM-3 exception in takeCancelEvent. */
+/** Current definitions.py `cancel_copy`. */
 function cancelCopy(input: {
   EndT: EndCtor;
   eventCode: EventCode;
@@ -448,7 +455,6 @@ function cancelCopy(input: {
             store: inst.store,
             task: currentTask(),
             readyFunc: () => end.hasPendingEvent(),
-            cancellable: false,
             produce: () => takeCancelEvent(end, eventCode, i, what),
           }) as unknown as number;
         }
@@ -862,11 +868,13 @@ function transferAsyncEnd(input: {
       end.inWaitableSet(),
       `cannot lift ${what} while it's in a waitable set`,
     );
-    const Ctor = EndT as unknown as new (
-      shared: unknown,
-      elem: ValType | null,
-    ) => CopyEnd;
-    return dstInst.handles.add(new Ctor(end.shared, dstElem));
+    // definitions.py:1411-1425 transfers the endpoint itself, including any
+    // idle-drop notification already attached to that waitable.
+    end.elem = dstElem;
+    end.index = null;
+    const dstIdx = dstInst.handles.add(end);
+    end.index = dstIdx;
+    return dstIdx;
   });
 }
 

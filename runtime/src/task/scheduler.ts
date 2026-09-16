@@ -13,21 +13,15 @@
 import { assert_, trapIf } from "../cabi/trap.ts";
 import type { ComponentInstanceLike } from "../cabi/context.ts";
 
-/** definitions.py `Cancelled`. */
-export const CANCELLED_FALSE = false;
-export const CANCELLED_TRUE = true;
-export type Cancelled = boolean;
-
 /**
  * What a thread body yields when it wants to stop running. Mirrors the
- * reference's `Thread.wait_until` (`ready_func` + `cancellable`); `suspend`
+ * reference's `Thread.wait_until` (`ready_func`); `suspend`
  * is `wait_until` with no ready condition (`ready_func === null`), and
  * `yield_` is `wait_until(() => true)`.
  */
 export interface BlockRequest {
   /** Resumable once this returns true; `null` = only an explicit resume. */
   readyFunc: (() => boolean) | null;
-  cancellable: boolean;
   /** Promise park, separate from scheduler readiness. Settlement resumes the
    * generator with a value or throws the rejection into its unwind path. */
   awaitValue?: Promise<unknown>;
@@ -35,8 +29,7 @@ export interface BlockRequest {
 
 /**
  * A thread body: yields block requests, and receives back either the
- * cancelled flag (for a scheduler block point) or the resolved value of an
- * `awaitValue` request.
+ * resolved value of an `awaitValue` request.
  */
 // deno-lint-ignore no-explicit-any
 export type ThreadBody = Generator<BlockRequest, void, any>;
@@ -798,7 +791,7 @@ export function currentInstance(): any {
 export interface SchedulableThread {
   ready(): boolean;
   waiting(): boolean;
-  resume(cancelled?: Cancelled): void;
+  resume(): void;
   // deno-lint-ignore no-explicit-any
   task: any;
   /** Refresh a dynamic synchronous-lift obligation at a safe service boundary. */
@@ -811,6 +804,8 @@ export interface SchedulableThread {
 export interface RequiredSyncPark extends SchedulableThread {
   abandon(reason: unknown): void;
   waiting(): boolean;
+  /** Instance whose ready threads the enclosing synchronous operation drives. */
+  readonly syncInstance: unknown;
   readonly logicalOwner: CurrentThreadLike;
   readonly owner: CurrentThreadLike;
 }

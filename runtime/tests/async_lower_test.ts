@@ -306,8 +306,10 @@ Deno.test("cancellation discard: deferCancel() opts a host import out of discard
   const [, subtaski] = unpackSubtaskResult(packed);
   const subtask = f.inst.handles.get(subtaski) as Subtask;
 
-  const cancel = createSubtaskCancel({ async: true }, f.inst);
-  const rc = f.asGuest(() => cancel(subtaski)) as number;
+  const cancel = createSubtaskCancel({ async: true }, f.inst, "jspi");
+  const pending = f.asGuest(() => cancel(subtaski)) as Promise<number>;
+  f.store.tick();
+  const rc = await pending;
   assertEq(rc, BLOCKED);
   // The request is recorded, and the subtask is untouched otherwise.
   assertEq(subtask.cancellationRequested, true);
@@ -333,7 +335,7 @@ Deno.test("cancellation discard: deferCancel() opts a host import out of discard
   assertEq(subtask.resolveDelivered(), true);
 });
 
-Deno.test("async lower: a second subtask.cancel traps (deferCancel: already cancelled)", () => {
+Deno.test("async lower: a second subtask.cancel traps (deferCancel: already cancelled)", async () => {
   // definitions.py line 2475: `trap_if(subtask.cancellation_requested)`.
   //
   // Reaching that trap needs a subtask that is still UNRESOLVED after its
@@ -344,8 +346,10 @@ Deno.test("async lower: a second subtask.cancel traps (deferCancel: already canc
   const f = mkFixture(deferCancel(() => new Promise<number>(() => {})));
   const packed = f.asGuest(() => f.call(1, 64)) as number;
   const [, subtaski] = unpackSubtaskResult(packed);
-  const cancel = createSubtaskCancel({ async: true }, f.inst);
-  assertEq(f.asGuest(() => cancel(subtaski)), BLOCKED);
+  const cancel = createSubtaskCancel({ async: true }, f.inst, "jspi");
+  const pending = f.asGuest(() => cancel(subtaski)) as Promise<number>;
+  f.store.tick();
+  assertEq(await pending, BLOCKED);
   let raised: unknown;
   try {
     f.asGuest(() => cancel(subtaski));

@@ -298,6 +298,7 @@ Deno.test({
     const park = {
       owner: hop,
       task: hop.task,
+      boundaryReturned: true,
       ready: () => false,
       waiting: () => true,
       resume() {},
@@ -355,6 +356,7 @@ Deno.test("ordinary service stops when the first tail creates an unqueued hop", 
   const park = {
     owner: hop,
     task: hop.task,
+    boundaryReturned: true,
     ready: () => false,
     waiting: () => true,
     resume() {},
@@ -461,7 +463,7 @@ Deno.test("finite guest work continues past task.return and a fairness yield", a
         (function* () {
           for (let i = 0; i < 20; i++) {
             steps++;
-            yield { readyFunc: () => true, cancellable: false };
+            yield { readyFunc: () => true };
           }
           finished = true;
         })(),

@@ -22,4 +22,4 @@
   (core instance $i (instantiate $M
     (with "" (instance (export "task.return" (func $task-return))))))
   (func (export "f") async (param "x" u32) (result u32)
-    (canon lift (core func $i "f") async (callback (func $i "cb")))))
+    (canon lift (core func $i "f") async (callback (core func $i "cb")))))

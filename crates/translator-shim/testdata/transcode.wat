@@ -16,7 +16,7 @@
     (func (export "take") (param "s" string) (result u32)
       (canon lift (core func $m "take")
         (memory (core memory $m "mem"))
-        (realloc (func $m "realloc"))
+        (realloc (core func $m "realloc"))
         string-encoding=utf8)))
 
   (component $Utf16
@@ -28,7 +28,7 @@
     (core instance $m (instantiate $M))
     (core func $take' (canon lower (func $take)
       (memory (core memory $m "mem"))
-      (realloc (func $m "realloc"))
+      (realloc (core func $m "realloc"))
       string-encoding=utf16))
     (core module $D
       (import "" "take" (func $take (param i32 i32) (result i32)))

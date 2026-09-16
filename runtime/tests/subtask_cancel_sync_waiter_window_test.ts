@@ -31,11 +31,6 @@ import {
   withActivation,
 } from "../src/task/mod.ts";
 import type { SuspensionPoint } from "../src/jspi/mod.ts";
-import {
-  blockCurrentActivation,
-  enterWasm,
-  suspendingImport,
-} from "../src/jspi/mod.ts";
 import type { FuncType } from "../src/cabi/types.ts";
 import {
   createAsyncStartCall,
@@ -44,12 +39,6 @@ import {
   START_FLAG_ASYNC_CALLEE,
 } from "../src/intrinsics/fact_calls.ts";
 import { newStats } from "../src/exec/boundary.ts";
-
-const FACT_GUEST = await WebAssembly.compile(
-  await Deno.readFile(
-    new URL("./subtask_cancel_async_fact.wasm", import.meta.url),
-  ),
-);
 
 const FT: FuncType = { params: [], results: [], async: true };
 const OPTS: TaskOptions = {
@@ -88,18 +77,18 @@ Deno.test(
     const wset = new WaitableSet();
     const seti = inst.handles.add(wset);
     asGuest(() => createWaitableJoin(inst)(subtaski, seti));
-    assertEq(wset.poll(callerTask, false), [EventCode.NONE, 0, 0]);
+    assertEq(wset.poll(callerTask), [EventCode.NONE, 0, 0]);
     const lender = { numLends: 0 };
     subtask.addLender(lender);
     subtask.resolve(SubtaskState.CANCELLED_BEFORE_RETURNED, []);
     subtask.setSubtaskPendingEvent(subtaski);
     assertEq(
-      wset.poll(callerTask, false),
+      wset.poll(callerTask),
       [EventCode.SUBTASK, subtaski, SubtaskState.CANCELLED_BEFORE_RETURNED],
     );
     assertEq(subtask.resolveDelivered(), true);
     assertEq(lender.numLends, 0);
-    assertEq(wset.poll(callerTask, false), [EventCode.NONE, 0, 0]);
+    assertEq(wset.poll(callerTask), [EventCode.NONE, 0, 0]);
   },
 );
 
@@ -205,34 +194,8 @@ function startFactSubtask(
   };
 }
 
-async function instantiateCancellingGuest(
-  store: Store,
-): Promise<() => unknown> {
-  const block = suspendingImport(
-    () => {
-      const task = currentTask() as Task;
-      return blockCurrentActivation({
-        store,
-        task,
-        readyFunc: () => false,
-        cancellable: true,
-        produce: () => 1,
-      });
-    },
-    "jspi",
-  );
-  const instance = await WebAssembly.instantiate(FACT_GUEST, {
-    host: {
-      block,
-      "task-cancel": () => (currentTask() as Task).cancel(),
-    },
-    // TypeScript's WebAssembly import union has not caught up with JSPI.
-  } as unknown as WebAssembly.Imports);
-  return enterWasm(instance.exports.run as () => unknown, "jspi");
-}
-
 for (const progressBeforeCancel of [true, false]) {
-  Deno.test(`sync subtask.cancel waits past STARTED progress ${progressBeforeCancel ? "before" : "during"} its park`, async () => {
+  Deno.test(`sync subtask.cancel holds claim and lenders past STARTED (${progressBeforeCancel})`, async () => {
     const f = startFactSubtask();
     if (!progressBeforeCancel) f.st.getPendingEvent();
     const lender = { numLends: 0 };
@@ -241,10 +204,18 @@ for (const progressBeforeCancel of [true, false]) {
       createSubtaskCancel({ async: false }, f.caller, "jspi")(f.i)
     ) as unknown as Promise<number>;
     assertEq(pending instanceof Promise, true);
-    assertEq(f.cancelled(), true);
     assertEq(f.st.hasSyncWaiter, true);
     if (!progressBeforeCancel) f.st.setSubtaskPendingEvent(f.i);
-    assertEq(f.store.tick(), false, "STARTED is not resolution");
+    assertEq(
+      f.store.tick(),
+      true,
+      "pending cancellation callback is serviceable",
+    );
+    assertEq(f.cancelled(), true);
+    assertEq(f.st.state, SubtaskState.STARTED);
+    assertEq(f.st.resolved(), false, "STARTED progress is not resolution");
+    assertEq(f.st.hasSyncWaiter, true);
+    assertEq(lender.numLends, 1);
     const joinSet = new WaitableSet();
     const joinSeti = f.caller.handles.add(joinSet);
     assertTrap(() =>
@@ -252,7 +223,6 @@ for (const progressBeforeCancel of [true, false]) {
     );
     assertEq(lender.numLends, 1);
 
-    // A normal callback event lets the cooperatively cancelled callee resolve.
     f.resolveOnCallback();
     const signal = new Subtask();
     signal.join(f.set);
@@ -264,115 +234,6 @@ for (const progressBeforeCancel of [true, false]) {
     assertEq(await pending, SubtaskState.CANCELLED_BEFORE_RETURNED);
     assertEq(f.st.resolveDelivered(), true);
     assertEq(f.st.hasSyncWaiter, false);
-    assertEq(f.st.hasPendingEvent(), false);
     assertEq(lender.numLends, 0);
-    f.asGuest(() => createWaitableJoin(f.caller)(f.i, joinSeti));
-    assertEq(f.st.inWaitableSet(), true);
   });
 }
-
-Deno.test(
-  "#345 FACT/JSPI: terminal event cannot be stolen before async cancel consumes it",
-  async () => {
-    const store = new Store();
-    const guest = await instantiateCancellingGuest(store);
-    const f = startFactSubtask(guest, true, store);
-    f.st.getPendingEvent();
-    const lender = { numLends: 0 };
-    f.st.addLender(lender);
-    const pending = f.asGuest(() =>
-      createSubtaskCancel({ async: true }, f.caller, "jspi")(f.i)
-    ) as unknown as Promise<number>;
-    assertEq(pending instanceof Promise, true);
-    assertEq(f.cancelled(), false);
-    assertEq(f.st.resolved(), false);
-    assertEq(f.st.hasSyncWaiter, true);
-
-    const joinSet = new WaitableSet();
-    const joinSeti = f.caller.handles.add(joinSet);
-    assertTrap(() =>
-      f.asGuest(() => createWaitableJoin(f.caller)(f.i, joinSeti))
-    );
-    assertEq(
-      joinSet.poll(new Task(FT, OPTS, f.caller, () => [], () => {}), false),
-      [EventCode.NONE, 0, 0],
-    );
-
-    // Let the engine run the resumed guest continuation. It calls task.cancel,
-    // and FACT publishes the terminal event before cancel's park is resumed.
-    await Promise.resolve();
-    await Promise.resolve();
-    assertEq(f.st.resolved(), true);
-    assertEq(f.st.hasPendingEvent(), true);
-    assertEq(f.st.hasSyncWaiter, true);
-
-    assertTrap(() =>
-      f.asGuest(() => createWaitableJoin(f.caller)(f.i, joinSeti))
-    );
-    assertEq(
-      joinSet.poll(new Task(FT, OPTS, f.caller, () => [], () => {}), false),
-      [
-        EventCode.NONE,
-        0,
-        0,
-      ],
-    );
-    const point = f.store.waiting.find((w) => w.task !== f.st.calleeTask) as
-      | SuspensionPoint<number>
-      | undefined;
-    if (point === undefined) throw new Error("missing async cancel park");
-    point.resume();
-    assertEq(await pending, SubtaskState.CANCELLED_BEFORE_RETURNED);
-    assertEq(f.st.hasPendingEvent(), false);
-    assertEq(f.st.resolveDelivered(), true);
-    assertEq(f.st.hasSyncWaiter, false);
-    assertEq(lender.numLends, 0);
-    assertEq(f.store.waiting.length, 0);
-    assertTrap(() =>
-      f.asGuest(() =>
-        createSubtaskCancel({ async: true }, f.caller, "jspi")(f.i)
-      )
-    );
-  },
-);
-
-Deno.test(
-  "#345 FACT/JSPI: unresolved async cancel returns BLOCKED, then join/poll resolves",
-  async () => {
-    const f = startFactSubtask();
-    f.st.getPendingEvent();
-    const lender = { numLends: 0 };
-    f.st.addLender(lender);
-    assertEq(
-      await f.asGuest(() =>
-        createSubtaskCancel({ async: true }, f.caller, "jspi")(f.i)
-      ),
-      BLOCKED,
-    );
-    assertEq(f.cancelled(), true);
-    assertEq(f.st.hasSyncWaiter, false);
-    const joinSet = new WaitableSet();
-    const seti = f.caller.handles.add(joinSet);
-    f.asGuest(() => createWaitableJoin(f.caller)(f.i, seti));
-    f.resolveOnCallback();
-    const signal = new Subtask();
-    signal.join(f.set);
-    signal.setSubtaskPendingEvent(1);
-    assertEq(f.store.tick(), true);
-    assertEq(
-      joinSet.poll(new Task(FT, OPTS, f.caller, () => [], () => {}), false),
-      [EventCode.SUBTASK, f.i, SubtaskState.CANCELLED_BEFORE_RETURNED],
-    );
-    assertEq(f.st.resolveDelivered(), true);
-    assertEq(lender.numLends, 0);
-    assertEq(
-      joinSet.poll(new Task(FT, OPTS, f.caller, () => [], () => {}), false),
-      [
-        EventCode.NONE,
-        0,
-        0,
-      ],
-    );
-    assertEq(f.store.waiting.length, 0);
-  },
-);

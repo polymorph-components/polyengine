@@ -177,22 +177,12 @@ Deno.test("#106 SITE 2: abandon discharges numWaiting; waitable-set.drop stays l
   assertEq(await settled, "rejected: store teardown");
 });
 
-Deno.test("#106 SITE 2: cancelled resume decrements exactly once (produce runs, hook is sole owner)", async () => {
-  const t = parkOnWait(true);
-  // Deliver cancellation exactly as Task.requestCancellation does — the
-  // produce(cancelled=true) leg (cancel_bracket_race_test.ts's machinery).
-  t.task.requestCancellation(null);
-  await (t.parked as Promise<unknown>);
-  assertEq(t.wset.numWaiting, 0); // 0, not -1: the decrement is not doubled
-  t.drop(t.seti);
-});
-
 Deno.test("#106 SITE 2: produce-throw still discharges numWaiting", async () => {
   const t = parkOnWait(false);
   const settled = rejected(t.parked as Promise<unknown>);
   // resume with no pending event: `produce` calls `getPendingEvent()` on an
   // empty set and throws — the produce-throw settle leg.
-  t.point.resume(false);
+  t.point.resume();
   assertEq(t.wset.numWaiting, 0);
   t.drop(t.seti);
   assert((await settled).startsWith("rejected:"), "the park rejected");
@@ -339,7 +329,7 @@ Deno.test("#106 host-import park: success path releases exactly once (hook obser
 
   resolve(undefined);
   await Promise.resolve(); // the recorded-outcome microtask
-  point.resume(false); // produce: onResolve + deliverResolve, then the hook
+  point.resume(); // produce: onResolve + deliverResolve, then the hook
   await parked;
 
   // deliverResolve ran inside produce; the onSettled backstop saw
@@ -365,7 +355,7 @@ Deno.test("#106 host-import park: rejection (produce-throw) — poisoning trap, 
 
   reject(new Error("host bug"));
   await Promise.resolve();
-  point.resume(false); // produce throws `done.error` — the trap path
+  point.resume(); // produce throws `done.error` — the trap path
 
   // This settle poisons the caller (the trap-unwind/lender-release obligation
   // owes no release here — the analysis lives at the site); the hook unwinds anyway as harmless

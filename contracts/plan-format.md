@@ -6,9 +6,18 @@ binary. This document is the interface between `crates/translator-shim`
 (producer) and `runtime/` (consumer); see also
 [descriptor-ir.md](descriptor-ir.md) and [intrinsics.md](intrinsics.md).
 
-Current `formatVersion`: **5**. Loaders require strict equality. Schema changes
+Current `formatVersion`: **6**. Loaders require strict equality. Schema changes
 bump the version and update producer and consumer together; editorial changes to
 this document do not change the wire format.
+
+Format 6 versions the changed FACT `enter-sync-call` core signature:
+`(calleeAsync, calleeInstance)`, replacing format 5's
+`(callerInstance, calleeAsync, calleeInstance)`. Re-translate old deploy-time
+envelopes with the matching translator; do not rewrite only the version number.
+Old runtimes reject new plans and new runtimes reject old plans before any
+initializer runs. The `cancellable` fields remain false-only wire slots:
+the producer emits `false`, the loader rejects `true`, and execution no longer
+uses them. Removed nonzero builtin immediates are validation errors.
 
 ## Decisions (with rationale)
 
@@ -44,10 +53,10 @@ with that version can produce different adapters.
 
 ```jsonc
 {
-  "formatVersion": 5,
+  "formatVersion": 6,
   "producer": {
     "shimVersion": "…", // crates/translator-shim crate version
-    "wasmtimeEnviron": "49.0.0-dev+4675ee1", // crate version + pinned git rev
+    "wasmtimeEnviron": "50.0.0-dev+cc546ee", // crate version + pinned git rev
     "features": ["cm-async", "…"] // wasmparser feature set used
     // (incl. cm-fixed-length-lists, cm-map,
     //  cm-implements, cm-threading) —
@@ -346,7 +355,7 @@ nondeterminism as a bug.
   module metadata; missing providers must not satisfy a type-mismatch assertion.
   Cover matching, mismatching, unused, and omitted imports, and verify rejection
   before start-function side effects. This is a follow-up design constraint,
-  not an optional field or a change to formatVersion 5; the schema and its
+   not an optional field or a change to formatVersion 6; the schema and its
   version transition must be reviewed together with the implementation.
 - `values` section (the component-level value-definition feature): out of scope
   (wasmtime parity, docs/architecture.md §7).

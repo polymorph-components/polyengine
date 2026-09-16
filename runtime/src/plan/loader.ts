@@ -68,7 +68,7 @@ export class TranslateError extends Error {
  * from being interpreted with different wire semantics.
  * @internal
  */
-export const SUPPORTED_FORMAT_VERSION = 5;
+export const SUPPORTED_FORMAT_VERSION = 6;
 
 /**
  * A types-table entry after conversion.
@@ -521,6 +521,28 @@ function validateTrampoline(t: unknown, where: string): void {
   const tr = t as Record<string, unknown>;
   expectString(tr, "kind", where);
   expectNumber(tr, "index", where);
+  if (
+    typeof tr.kind === "string" &&
+    [
+      "thread-suspend",
+      "thread-yield",
+      "thread-suspend-then-resume",
+      "thread-yield-then-resume",
+      "thread-suspend-then-promote",
+      "thread-yield-then-promote",
+    ].includes(tr.kind)
+  ) {
+    expectNumber(tr, "instance", where);
+    expectBoolean(tr, "cancellable", where);
+    // CONTRACT: `.cancellable` is a false-only legacy wire slot (contracts/
+    // plan-format.md); see the same rule on canonical options below.
+    expect(
+      tr.cancellable === false,
+      where,
+      `.cancellable=true is unsupported by this runtime`,
+    );
+    return;
+  }
   switch (tr.kind) {
     case "lower-import":
       expectNumber(tr, "lowered", where);
@@ -569,6 +591,15 @@ function validateCanonicalOptions(o: unknown, where: string): void {
   expectNumberOrNull(co, "callback", where);
   expectBoolean(co, "async", where);
   expectBoolean(co, "cancellable", where);
+  // CONTRACT: `.cancellable` is a false-only legacy wire slot (contracts/
+  // plan-format.md); the merged Component Model reference removed builtin
+  // cancellability. Accept false plans only; executing true would resurrect
+  // semantics no longer specified.
+  expect(
+    co.cancellable === false,
+    where,
+    `.cancellable=true is unsupported by this runtime`,
+  );
   expect(isRecord(co.coreType), where, `.coreType must be an object`);
   const ct = co.coreType as Record<string, unknown>;
   expectArray(ct, "params", `${where}.coreType`);

@@ -6,6 +6,7 @@ use translator_shim::plan::{
     ValTypeJson, FORMAT_VERSION,
 };
 use translator_shim::{to_envelope_json, translate, Phase, Translation};
+use wasmtime_environ::wasmparser::{Parser, Payload, TypeRef};
 
 fn build(name: &str) -> Vec<u8> {
     let path = format!("{}/testdata/{name}.wat", env!("CARGO_MANIFEST_DIR"));
@@ -70,6 +71,84 @@ fn trivial() {
     }
 }
 
+/// The Wasmtime 50 frontend changed FACT's enter-sync-call core ABI from
+/// three arguments to two. Format 6 prevents old loaders from instantiating
+/// adapters whose intrinsic arguments they would decode incorrectly.
+#[test]
+fn producer_format_tracks_enter_sync_call_abi() {
+    assert_eq!(FORMAT_VERSION, 6);
+    assert_eq!(translate(&build("trivial")).unwrap().plan.format_version, 6);
+}
+
+#[test]
+fn enter_sync_call_adapter_import_has_two_arguments() {
+    let bytes = wat::parse_str(
+        r#"(component
+          (component $a
+            (core func $get (canon context.get i32 0))
+            (core module $m
+              (import "" "get" (func $get (result i32)))
+              (func (export "f") (result i32) call $get))
+            (core instance $i (instantiate $m
+              (with "" (instance (export "get" (func $get))))))
+            (func (export "f") (result u32) (canon lift (core func $i "f"))))
+          (component $b
+            (import "f" (func $f (result u32)))
+            (core func $f' (canon lower (func $f)))
+            (core module $m
+              (import "" "f" (func $f (result i32)))
+              (func (export "g") (result i32) call $f))
+            (core instance $i (instantiate $m
+              (with "" (instance (export "f" (func $f'))))))
+            (func (export "g") (result u32) (canon lift (core func $i "g"))))
+          (instance $a (instantiate $a))
+          (instance $b (instantiate $b (with "f" (func $a "f"))))
+          (export "g" (func $b "g")))"#,
+    )
+    .unwrap();
+    let translated = translate(&bytes).unwrap();
+    let adapter = translated
+        .adapters
+        .iter()
+        .find(|adapter| {
+            translated.plan.modules.iter().any(|module| {
+                matches!(module, ModuleEntry::Adapter { file, intrinsics, .. }
+                    if file == &adapter.file
+                        && intrinsics.iter().any(|i| i.name == "enter-sync-call"))
+            })
+        })
+        .expect("context-sensitive adapter must bracket its callee");
+    let mut types = None;
+    for payload in Parser::new(0).parse_all(&adapter.wasm) {
+        match payload.unwrap() {
+            Payload::TypeSection(section) => {
+                types = Some(
+                    section
+                        .into_iter_err_on_gc_types()
+                        .map(Result::unwrap)
+                        .collect::<Vec<_>>(),
+                );
+            }
+            Payload::ImportSection(imports) => {
+                for import in imports.into_imports() {
+                    let import = import.unwrap();
+                    if import.module == "async" && import.name == "enter-sync-call" {
+                        let TypeRef::Func(index) = import.ty else {
+                            panic!("enter-sync-call must be a function")
+                        };
+                        let ty = &types.as_ref().unwrap()[index as usize];
+                        assert_eq!(ty.params().len(), 2);
+                        assert!(ty.results().is_empty());
+                        return;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    panic!("enter-sync-call import missing");
+}
+
 /// (b) Cross-instance call between two inline component instances: FACT must
 /// generate at least one fused adapter module, instantiated with
 /// `instance: null` and carrying a categorized intrinsics manifest.
@@ -100,8 +179,9 @@ fn linked_generates_fact_adapter() {
     assert_eq!(adapter_inits.len(), t.adapters.len());
 
     // Manifest categories cover the fixture's intrinsic surface
-    // (intrinsics.md §A): callee core-def, instance flags, trap +
-    // enter/exit-sync-call trampolines. (`task-may-block` was a
+    // (intrinsics.md §A): callee core-def, instance flags, and trap.
+    // The 50.0.0-dev frontend's thread-transparency analysis intentionally
+    // elides enter/exit-sync-call for this synchronous adapter. (`task-may-block` was a
     // `CoreDef::TaskMayBlock` category; upstream removed that variant at the
     // pinned wasmtime-environ rev, see root Cargo.toml.)
     let manifests: Vec<String> = adapter_entries(&t)
@@ -117,8 +197,6 @@ fn linked_generates_fact_adapter() {
         "core-def",
         "instance-flags",
         "trampoline:trap",
-        "trampoline:enter-sync-call",
-        "trampoline:exit-sync-call",
     ] {
         assert!(
             manifests.iter().any(|c| c == expected),
@@ -563,6 +641,36 @@ fn verdict_phase_validation() {
         let e = translate(&bytes).unwrap_err();
         assert_eq!(e.phase, Phase::Validation, "{e}");
         assert!(!e.message.is_empty());
+    }
+}
+
+/// The post-cancellable encoding keeps a reserved byte at each affected
+/// opcode, and the merged spec requires that byte to be zero
+/// (third_party/component-model/test/binary/binary.wast:1185-1282).
+#[test]
+fn rejects_all_eight_nonzero_removed_cancellable_bytes() {
+    let memory_prefix: &[u8] = &[
+        0, 97, 115, 109, 13, 0, 1, 0, 1, 22, 0, 97, 115, 109, 1, 0, 0, 0, 5, 3, 1, 0, 1,
+        7, 7, 1, 3, 109, 101, 109, 2, 0, 2, 4, 1, 0, 0, 0, 6, 9, 1, 0, 2, 1, 0, 3,
+        109, 101, 109, 8, 4, 1,
+    ];
+    let mut cases = vec![];
+    for opcode in [0x20, 0x21] {
+        let mut bytes = memory_prefix.to_vec();
+        bytes.extend([opcode, 1, 0]);
+        cases.push(bytes);
+    }
+    for opcode in [0x29, 0x0c, 0x2a, 0x2b, 0x2c, 0x2d] {
+        cases.push(vec![0, 97, 115, 109, 13, 0, 1, 0, 8, 3, 1, opcode, 1]);
+    }
+
+    for bytes in cases {
+        let error = translate(&bytes).expect_err("nonzero reserved byte was accepted");
+        assert_eq!(error.phase, Phase::Validation, "{error}");
+        assert!(
+            error.message.contains("zero byte") || error.message.contains("reserved"),
+            "{error}"
+        );
     }
 }
 

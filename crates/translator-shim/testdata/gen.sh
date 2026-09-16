@@ -3,7 +3,7 @@
 #
 # Requires wasm-tools (spike used 1.247.0). Note `wasm-tools parse` only
 # converts text to binary; validation is done by the translator itself
-# (wasmparser 0.258 via the pinned wasmtime-environ git rev, see root
+# (wasmparser 0.259 via the pinned wasmtime-environ git rev, see root
 # Cargo.toml) and, as a cross-check, by native wasmtime 47:
 #
 #   wasmtime compile testdata/trivial.wasm
@@ -11,7 +11,7 @@
 #
 # (wasm-tools 1.247's own `validate --features component-model,cm-async` also
 # passes, but its validator predates the async-function-type requirement that
-# wasmparser 0.258 enforces, so it is not the authority here.)
+# wasmparser 0.259 enforces, so it is not the authority here.)
 #
 # Fixtures whose syntax is newer than the installed CLI (e.g. `relend-borrow`,
 # which uses `(dtor (core func ...))`) are generated from the pinned `wat`

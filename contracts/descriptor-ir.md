@@ -44,8 +44,9 @@ plan-format.md): `stringEncoding` (`utf8` | `utf16` | `latin1+utf16`), nullable
 `memory`, `realloc`, `postReturn`, `callback`, plus `async`, `cancellable`, and
 the expected flat `coreType` (`{params, results}` of `i32|i64|f32|f64`). This
 mirrors `wasmtime_environ::component::CanonicalOptions` minus runtime-irrelevant
-fields; `data_model` is fixed to linear memory (the GC data model is rejected by
-the shim).
+fields, except the retained `cancellable` wire slot is always `false` and has no
+execution meaning. `data_model` is fixed to linear memory (the GC data model is
+rejected by the shim).
 
 ## Flattening
 

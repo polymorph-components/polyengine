@@ -541,22 +541,18 @@ Deno.test({
   },
 });
 
-// test/binary/binary.wast:1433 — a component exporting one of its own
+// test/binary/binary.wast:1533 — a component exporting one of its own
 // embedded core modules (the `module` export kind, contracts/plan-format.md
 // schema notes; polyengine#13). The
 // export surfaces as the already-compiled `WebAssembly.Module`, and it is
 // the *embedded* module: instantiating it works and its export list matches
-// the wast source (an empty module). The artifact index is 116, not the 115
-// its wast position might suggest: CM#698 (dff1181, "fix some spec and test
-// typos") added 12 lines earlier in binary.wast, moving this component to
-// wast line 1433 and its testgen-assigned positional artifact index to 116
-// (verified:
-// `git -C third_party/component-model show 2f13265:test/binary/binary.wast`).
+// the wast source (an empty module). Locate it by the current source command;
+// the preceding malformed binary cases make positional artifact names move.
 Deno.test({
-  name: "suite binary.116: a core-module export surfaces as WebAssembly.Module",
+  name: "suite binary.124: a core-module export surfaces as WebAssembly.Module",
   ignore: !ready,
   fn: async () => {
-    const c = await instantiate("binary", "binary.116.wasm");
+    const c = await instantiate("binary", "binary.124.wasm");
     const m = c.exports["m"];
     assertEq(
       m instanceof WebAssembly.Module,
